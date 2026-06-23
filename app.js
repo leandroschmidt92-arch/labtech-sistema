@@ -2689,8 +2689,8 @@ async function confirmarInicio(){
   if(maqAEntrada){
     const [maqAId] = maqAEntrada;
     try {
-      await dbDelete('/maquinas_a/' + maqAId);
-      delete _maquinasA[maqAId];
+      const {error:_eMA} = await _supa.from('maquinas_a').delete().eq('id', maqAId);
+      if(!_eMA) delete _maquinasA[maqAId];
     } catch(e){ console.warn('[SELB] Erro ao remover de Máquinas A:', e); }
   }
 
@@ -4514,15 +4514,20 @@ let _garantiaCache    = {};   // cache local { id: {...} }
 let _garantiaFilter   = '';   // filtro de status atual
 let _garantiaListener = null; // referência ao listener Firebase
 
-// ── Listener Firebase ────────────────────────────────────────────────────────
-function startGarantiaListener(){
-  if(!_db || _garantiaListener) return;
-  _garantiaListener = _db.ref('/garantia').on('value', snap => {
-    _garantiaCache = snap.val() || {};
-    if(document.getElementById('view-garantia')?.classList.contains('active')){
-      renderGarantiaView();
-    }
-  });
+// ── Listener Supabase para garantia ─────────────────────────────────────────
+async function startGarantiaListener(){
+  const { data } = await _supa.from('garantia').select('*');
+  _garantiaCache = {};
+  (data || []).forEach(r => { _garantiaCache[r.id] = r.raw || r; });
+  if(document.getElementById('view-garantia')?.classList.contains('active')) renderGarantiaView();
+  _supa.channel('garantia')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'garantia' }, async () => {
+      const { data: d } = await _supa.from('garantia').select('*');
+      _garantiaCache = {};
+      (d || []).forEach(r => { _garantiaCache[r.id] = r.raw || r; });
+      if(document.getElementById('view-garantia')?.classList.contains('active')) renderGarantiaView();
+    })
+    .subscribe();
 }
 
 // ── Visibilidade dos controles admin ────────────────────────────────────────
@@ -4705,11 +4710,14 @@ async function salvarGarantia(){
 
   try {
     if(id){
-      // Editar
-      await _db.ref('/garantia/'+id).update({ nome, codigo, motivo, status, quantidade, registradoPor });
+      const payload = { nome, codigo, motivo, status, quantidade, registrado_por: registradoPor, raw: { nome, codigo, motivo, status, quantidade, registradoPor } };
+      const { error } = await _supa.from('garantia').update(payload).eq('id', id);
+      if(error) throw error;
     } else {
-      // Novo
-      await _db.ref('/garantia').push({ nome, codigo, motivo, status, quantidade, registradoPor, registradoEm: Date.now() });
+      const registradoEm = Date.now();
+      const payload = { nome, codigo, motivo, status, quantidade, registrado_por: registradoPor, registrado_em: registradoEm, raw: { nome, codigo, motivo, status, quantidade, registradoPor, registradoEm } };
+      const { error } = await _supa.from('garantia').insert(payload);
+      if(error) throw error;
     }
     closeModal('modal-garantia');
   } catch(e){
@@ -4722,7 +4730,8 @@ async function salvarGarantia(){
 async function confirmarRemoverGarantia(id, nome){
   if(!confirm(`Remover o registro da peça "${nome}"?\n\nEsta ação não pode ser desfeita.`)) return;
   try {
-    await _db.ref('/garantia/'+id).remove();
+    const { error } = await _supa.from('garantia').delete().eq('id', id);
+    if(error) throw error;
   } catch(e){
     alert('Erro ao remover registro.');
     console.error('Garantia remove error:', e);
@@ -4985,16 +4994,20 @@ let _maquinasPerdidas = {}; // cache local { id: {...} }
 let _maquinaPerdidaliberandoId = null; // id da máquina sendo liberada pelo admin
 let _maquinaPerdidaliberandoUid = null; // uid do usuário que tentou iniciar
 
-// ── Listener Firebase para /maquinas_perdidas ──────────────────────────────
-function startMaquinasPerdidasListener(){
-  if(!_db) return;
-  _db.ref('/maquinas_perdidas').on('value', snap => {
-    _maquinasPerdidas = snap.val() || {};
-    // Atualiza view se estiver ativa
-    if(document.getElementById('view-perdidas')?.classList.contains('active')){
-      renderPerdidasView();
-    }
-  });
+// ── Listener Supabase para maquinas_perdidas ──────────────────────────────
+async function startMaquinasPerdidasListener(){
+  const { data } = await _supa.from('maquinas_perdidas').select('*');
+  _maquinasPerdidas = {};
+  (data || []).forEach(r => { _maquinasPerdidas[r.id] = r.raw || r; });
+  if(document.getElementById('view-perdidas')?.classList.contains('active')) renderPerdidasView();
+  _supa.channel('maquinas_perdidas')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'maquinas_perdidas' }, async () => {
+      const { data: d } = await _supa.from('maquinas_perdidas').select('*');
+      _maquinasPerdidas = {};
+      (d || []).forEach(r => { _maquinasPerdidas[r.id] = r.raw || r; });
+      if(document.getElementById('view-perdidas')?.classList.contains('active')) renderPerdidasView();
+    })
+    .subscribe();
 }
 
 // ── Abre modal para registrar nova máquina perdida (somente admin) ─────────
@@ -5049,7 +5062,9 @@ async function salvarMaquinaPerdida(){
   };
 
   try {
-    await dbSet('/maquinas_perdidas/' + id, registro);
+    const payload = { id, selb, equipamento: equip||'—', setor: setor||'—', observacao: obs||'', registrado_por: currentUser.name||'Admin', registrado_em: Date.now(), status: 'perdida', raw: registro };
+    const { error } = await _supa.from('maquinas_perdidas').upsert(payload, { onConflict: 'id' });
+    if(error) throw error;
     _maquinasPerdidas[id] = registro;
     closeModal('modal-add-perdida');
     renderPerdidasView();
@@ -5137,7 +5152,8 @@ async function admRemoverPerdida(id){
   if(!currentUser || !currentUser.isAdmin){ alert('Apenas admins podem liberar máquinas.'); return; }
   if(!confirm('Confirma que a máquina foi encontrada? Ela sairá da lista de perdidas.')) return;
   try {
-    await dbPatch('/maquinas_perdidas/' + id, { status: 'encontrada' });
+    const { error } = await _supa.from('maquinas_perdidas').update({ status: 'encontrada', raw: {...(_maquinasPerdidas[id]||{}), status:'encontrada'} }).eq('id', id);
+    if(error) throw error;
     if(_maquinasPerdidas[id]) _maquinasPerdidas[id].status = 'encontrada';
     renderPerdidasView();
   } catch(e){ alert('Erro ao atualizar: ' + e.message); }
@@ -5148,7 +5164,8 @@ async function admExcluirPerdida(id, selb){
   if(!currentUser || !currentUser.isAdmin){ return; }
   if(!confirm('Excluir permanentemente o registro de "' + selb + '"?')) return;
   try {
-    await dbDelete('/maquinas_perdidas/' + id);
+    const { error } = await _supa.from('maquinas_perdidas').delete().eq('id', id);
+    if(error) throw error;
     delete _maquinasPerdidas[id];
     renderPerdidasView();
   } catch(e){ alert('Erro ao excluir: ' + e.message); }
@@ -5210,11 +5227,11 @@ function verificarMaquinaPerdida(selb, uid){
 async function admLiberarMaquinaEncontrada(){
   if(!currentUser || !currentUser.isAdmin || !_maquinaPerdidaliberandoId){ return; }
   try {
-    await dbPatch('/maquinas_perdidas/' + _maquinaPerdidaliberandoId, { status: 'encontrada' });
+    const { error } = await _supa.from('maquinas_perdidas').update({ status: 'encontrada', raw: {...(_maquinasPerdidas[_maquinaPerdidaliberandoId]||{}), status:'encontrada'} }).eq('id', _maquinaPerdidaliberandoId);
+    if(error) throw error;
     if(_maquinasPerdidas[_maquinaPerdidaliberandoId])
       _maquinasPerdidas[_maquinaPerdidaliberandoId].status = 'encontrada';
     closeModal('modal-maquina-encontrada');
-    // Continua para abrir o modal de SELB normalmente
     if(_maquinaPerdidaliberandoUid) openSelb(_maquinaPerdidaliberandoUid);
     _maquinaPerdidaliberandoId  = null;
     _maquinaPerdidaliberandoUid = null;
@@ -5655,8 +5672,8 @@ async function confirmarEdicaoStatus(){
       status: 'ativa'
     };
     try {
-      await dbPatch('/maquinas_a/' + newId, registro);
-      _maquinasA[newId] = registro;
+      const {error:_eMAe} = await _supa.from('maquinas_a').upsert({id: newId, selb: novoSelb, equipamento: registro.equipamento, setor: registro.setor, observacao: registro.observacao, registrado_por: registro.registradoPor, registrado_em: Date.now(), status: 'ativa', raw: registro}, {onConflict:'id'});
+      if(!_eMAe) _maquinasA[newId] = registro;
       logMovimentacao = 'Enviado para Máquinas A via Edição de Status';
       // Remove o SELB de todos os bolsões do FluxoLAB ao entrar em Máquinas A
       if (typeof fluxolabRemoveSelbGlobal === 'function') {
@@ -10745,16 +10762,26 @@ async function renderPecasSubView(){
   }).join('');
 }
 
-// ── Listener Firebase para /maquinas_a ───────────────────────────────────
-function startMaquinasAListener(){
-  if(!_db) return;
-  _db.ref('/maquinas_a').on('value', snap => {
-    _maquinasA = snap.val() || {};
-    if(document.getElementById('view-maquinas-a')?.classList.contains('active')){
-      const subMaAtivo = document.getElementById('subview-maquinas-a').style.display !== 'none';
-      if(subMaAtivo) renderMaquinasAView();
-    }
-  });
+// ── Listener Supabase para maquinas_a ───────────────────────────────────
+async function startMaquinasAListener(){
+  const { data } = await _supa.from('maquinas_a').select('*');
+  _maquinasA = {};
+  (data || []).forEach(r => { _maquinasA[r.id] = r.raw || r; });
+  if(document.getElementById('view-maquinas-a')?.classList.contains('active')){
+    const subMaAtivo = document.getElementById('subview-maquinas-a').style.display !== 'none';
+    if(subMaAtivo) renderMaquinasAView();
+  }
+  _supa.channel('maquinas_a')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'maquinas_a' }, async () => {
+      const { data: d } = await _supa.from('maquinas_a').select('*');
+      _maquinasA = {};
+      (d || []).forEach(r => { _maquinasA[r.id] = r.raw || r; });
+      if(document.getElementById('view-maquinas-a')?.classList.contains('active')){
+        const subMaAtivo = document.getElementById('subview-maquinas-a').style.display !== 'none';
+        if(subMaAtivo) renderMaquinasAView();
+      }
+    })
+    .subscribe();
 }
 
 // ── Abre modal para registrar Máquina A (somente admin) ──────────────────
@@ -10854,7 +10881,9 @@ async function salvarMaquinaA(){
   };
 
   try {
-    await dbSet('/maquinas_a/' + id, registro);
+    const payload = { id, selb, equipamento: equip||'—', setor: setor||'—', observacao: obs||'', registrado_por: currentUser.name||'Admin', registrado_em: Date.now(), status: 'ativa', raw: registro };
+    const { error } = await _supa.from('maquinas_a').upsert(payload, { onConflict: 'id' });
+    if(error) throw error;
     _maquinasA[id] = registro;
 
     // Remove o SELB de todos os bolsões do FluxoLAB
@@ -10862,7 +10891,6 @@ async function salvarMaquinaA(){
       fluxolabRemoveSelbGlobal(selb).catch(e => console.warn('[MáquinasA] Erro ao remover do FluxoLAB:', e));
     }
 
-    // Limpa os campos de preview antes de fechar
     const prev = document.getElementById('ma-equip-preview');
     const nf   = document.getElementById('ma-equip-notfound');
     if (prev) prev.style.display = 'none';
@@ -10962,7 +10990,8 @@ async function admRemoverMaquinaA(id, selb){
   if(!currentUser || !currentUser.isAdmin){ return; }
   if(!confirm('Remover o SELB "' + selb + '" da lista de Máquinas A?\n\nEsta ação é permanente.')) return;
   try {
-    await dbDelete('/maquinas_a/' + id);
+    const { error } = await _supa.from('maquinas_a').delete().eq('id', id);
+    if(error) throw error;
     delete _maquinasA[id];
     renderMaquinasAView();
   } catch(e){ alert('Erro ao remover: ' + e.message); }
@@ -10993,7 +11022,9 @@ async function salvarEdicaoMaquinaA(){
 
   try {
     const patch = { equipamento: equip || '—', setor: setor || '—', observacao: obs || '' };
-    await dbPatch('/maquinas_a/' + id, patch);
+    const raw = { ...(_maquinasA[id] || {}), ...patch };
+    const { error } = await _supa.from('maquinas_a').update({ ...patch, raw }).eq('id', id);
+    if(error) throw error;
     Object.assign(_maquinasA[id], patch);
     closeModal('modal-edit-maquina-a');
     renderMaquinasAView();
@@ -11033,7 +11064,7 @@ async function admMoverParaPecas(id, selb){
     };
     await dbPush('/history/' + dk, rec);
     // Remove de Máquinas A
-    await dbDelete('/maquinas_a/' + id);
+    await _supa.from('maquinas_a').delete().eq('id', id);
     delete _maquinasA[id];
     history.unshift({...rec, _docId: 'mv_'+Date.now(), _dateKey: dk});
     renderMaquinasAView();
@@ -11076,8 +11107,8 @@ async function admMoverParaMaquinaA(docId, dateKey, selb, equip, setor){
       registradoEm: new Date().toISOString(),
       status: 'ativa'
     };
-    await dbSet('/maquinas_a/' + newId, registro);
-    _maquinasA[newId] = registro;
+    const {error:_eMAm} = await _supa.from('maquinas_a').upsert({id: newId, selb, equipamento: equip||'—', setor: setor||'—', observacao: registro.observacao, registrado_por: registro.registradoPor, registrado_em: Date.now(), status:'ativa', raw: registro}, {onConflict:'id'});
+    if(!_eMAm) _maquinasA[newId] = registro;
 
     // Remove o SELB de todos os bolsões do FluxoLAB
     if (typeof fluxolabRemoveSelbGlobal === 'function') {
@@ -20953,8 +20984,8 @@ async function biparSalvarTudo(){
       status: 'ativa'
     };
     try {
-      await dbSet('/maquinas_a/' + id, registro);
-      _maquinasA[id] = registro;
+      const {error:_eMAp} = await _supa.from('maquinas_a').upsert({id, selb: item.selb, equipamento: item.equipamento||'—', setor:'—', observacao: registro.observacao, registrado_por: registro.registradoPor, registrado_em: Date.now(), status:'ativa', raw: registro}, {onConflict:'id'});
+      if(!_eMAp) _maquinasA[id] = registro;
       if(typeof fluxolabRemoveSelbGlobal === 'function'){
         fluxolabRemoveSelbGlobal(item.selb).catch(()=>{});
       }
