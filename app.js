@@ -3611,7 +3611,7 @@ function _tocarAlertaPeca(){
 
 let _pecasIdsConhecidos = null; // null = primeira carga, não toca
 
-function startSolicitacoesPecasListener(){
+async function startSolicitacoesPecasListener(){
   if(!_db) return;
   _db.ref('/solicitacoes_pecas').on('value', snap => {
     const novo = snap.val() || {};
