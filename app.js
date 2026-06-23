@@ -274,6 +274,12 @@ firebase.initializeApp(_fbConfig);
 const _db = firebase.database();
 window._db = _db; // exposto globalmente para os patches de integração
 
+// ── Supabase client ──────────────────────────────────────────────────
+const _SB_URL = 'https://wpawjyqjrzzleojzejuw.supabase.co';
+const _SB_KEY = 'sb_publishable__E3zdLreHCt3sQ0GYPe3vA_I8DLW5PLdpuVL7xfvFVA'; // publishable key
+const _supa   = window.supabase.createClient(_SB_URL, _SB_KEY);
+// ────────────────────────────────────────────────────────────────────
+
 // publishNewVersion removida por segurança
 
 let _connected = false;
@@ -1667,7 +1673,7 @@ function setView(v,btn){
   if(v==='qualidade') { qualFilter=''; resetStabs('qual-tabs',0); _initQualDateSelect(); _qualRecords=_consultaRecords.length?_consultaRecords:history; _qualDateKey=new Date().toDateString().replace(/ /g,'_'); renderQualidade(); }
   if(v==='pecas')       { renderPecasView(); }
   if(v==='solicitacoes'){ _initSolicitacoesFilters(); renderSolicitacoesDoDia(); }
-  if(v==='garantia')    { _garantiaFilter=''; resetStabs('garantia-tabs',0); renderGarantiaView(); }
+  if(v==='garantia')    { _garantiaFilter=''; resetStabs('garantia-tabs',0); setGarantiaSubTab('registro'); renderGarantiaView(); }
   if(v==='maquinas-a') { renderMaquinasAView(); }
   if(v==='perdidas')   { renderPerdidasView(); }
   if(v==='relatorios'){ relFilter=''; resetStabs('rel-tabs',0); hideRelRefreshBadge();
@@ -3627,15 +3633,23 @@ function startSolicitacoesPecasListener(){
     if(document.getElementById('subview-pecas-a')?.style.display !== 'none') _renderSolicitacoesPanel('pecas-a-solicitacoes-panel','');
     if(document.getElementById('view-solicitacoes')?.classList.contains('active')) renderSolicitacoesDoDia();
   });
-  // Listener separado para a config de peças
-  _db.ref('/config_pecas').on('value', snap => {
-    _configPecas = snap.val() || {};
-    renderConfigPecasAdmin();
-    // Se o modal de solicitar está aberto, atualiza o grid
-    if(!document.getElementById('modal-solicitar-peca').classList.contains('hidden')){
-      renderPecasGrid();
-    }
-  });
+  // Listener Supabase Realtime para config_pecas
+  _supa.channel('config_pecas')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'config_pecas' }, async () => {
+      await _reloadConfigPecas();
+    })
+    .subscribe();
+  await _reloadConfigPecas();
+}
+
+async function _reloadConfigPecas() {
+  const { data } = await _supa.from('config_pecas').select('*').order('ordem');
+  _configPecas = {};
+  (data || []).forEach(p => { _configPecas[p.id] = { nome: p.nome, emoji: p.emoji, ordem: p.ordem }; });
+  renderConfigPecasAdmin();
+  if (!document.getElementById('modal-solicitar-peca').classList.contains('hidden')) {
+    renderPecasGrid();
+  }
 }
 
 // ── Retorna lista ordenada de peças (config ou padrão) ───────────────────────
@@ -4407,25 +4421,26 @@ async function salvarConfigPeca(){
   errEl.textContent='';
 
   try {
-    if(id){
-      // Editar existente
-      await _db.ref('/config_pecas/'+id).update({ nome, emoji });
+    if (id) {
+      const { error } = await _supa.from('config_pecas').update({ nome, emoji, raw: { nome, emoji } }).eq('id', id);
+      if (error) throw error;
     } else {
-      // Nova peça — ordem = maior atual + 1
-      const maxOrdem = Object.values(_configPecas).reduce((m,p)=>Math.max(m,p.ordem||0),0);
-      await _db.ref('/config_pecas').push({ nome, emoji, ordem: maxOrdem+1 });
+      const maxOrdem = Object.values(_configPecas).reduce((m, p) => Math.max(m, p.ordem || 0), 0);
+      const { error } = await _supa.from('config_pecas').insert({ nome, emoji, ordem: maxOrdem + 1, raw: { nome, emoji, ordem: maxOrdem + 1 } });
+      if (error) throw error;
     }
     closeModal('modal-config-peca');
-  } catch(e){
-    errEl.textContent='Erro ao salvar. Tente novamente.';
+  } catch(e) {
+    errEl.textContent = 'Erro ao salvar. Tente novamente.';
   }
 }
 
 async function confirmarRemoverPeca(id, nome){
   if(!confirm(`Remover a peça "${nome}"?\n\nEla deixará de aparecer para os operadores solicitarem.`)) return;
   try {
-    await _db.ref('/config_pecas/'+id).remove();
-  } catch(e){ alert('Erro ao remover peça.'); }
+    const { error } = await _supa.from('config_pecas').delete().eq('id', id);
+    if (error) throw error;
+  } catch(e) { alert('Erro ao remover peça.'); }
 }
 
 // ── LOGS DE PEÇAS ──
@@ -4470,21 +4485,23 @@ async function abrirModalLogsPecas() {
 async function moverPeca(id, direcao){
   const pecas = getListaPecas().filter(p=>!p.id.startsWith('pad_'));
   // Se ainda estiver usando padrão, inicializa no Firebase primeiro
-  if(!Object.keys(_configPecas).length){
-    const batch = {};
-    PECAS_PADRAO.forEach((p,i)=>{ const key=_db.ref('/config_pecas').push().key; batch[key]={nome:p.nome,emoji:p.emoji,ordem:i+1}; });
-    await _db.ref('/config_pecas').set(batch).catch(()=>{});
+  if (!Object.keys(_configPecas).length) {
+    for (let i = 0; i < PECAS_PADRAO.length; i++) {
+      const p = PECAS_PADRAO[i];
+      await _supa.from('config_pecas').insert({ nome: p.nome, emoji: p.emoji, ordem: i + 1, raw: p });
+    }
+    await _reloadConfigPecas();
     return;
   }
-  const idx = pecas.findIndex(p=>p.id===id);
-  if(idx===-1) return;
+  const idx = pecas.findIndex(p => p.id === id);
+  if (idx === -1) return;
   const swapIdx = idx + direcao;
-  if(swapIdx<0||swapIdx>=pecas.length) return;
+  if (swapIdx < 0 || swapIdx >= pecas.length) return;
   const a = pecas[idx], b = pecas[swapIdx];
-  const ordemA = _configPecas[a.id]?.ordem ?? idx+1;
-  const ordemB = _configPecas[b.id]?.ordem ?? swapIdx+1;
-  await _db.ref('/config_pecas/'+a.id).update({ordem:ordemB}).catch(()=>{});
-  await _db.ref('/config_pecas/'+b.id).update({ordem:ordemA}).catch(()=>{});
+  const ordemA = _configPecas[a.id]?.ordem ?? idx + 1;
+  const ordemB = _configPecas[b.id]?.ordem ?? swapIdx + 1;
+  await _supa.from('config_pecas').update({ ordem: ordemB }).eq('id', a.id);
+  await _supa.from('config_pecas').update({ ordem: ordemA }).eq('id', b.id);
 }
 
 // ════════════════════════════════════════════
@@ -4709,6 +4726,253 @@ async function confirmarRemoverGarantia(id, nome){
   } catch(e){
     alert('Erro ao remover registro.');
     console.error('Garantia remove error:', e);
+  }
+}
+
+// ── Alterna entre as sub-abas "Registro de Garantia" e "Devolução" ───────────
+function setGarantiaSubTab(tab){
+  const vReg = document.getElementById('garview-registro');
+  const vDev = document.getElementById('garview-devolucao');
+  if(vReg) vReg.style.display = tab === 'registro'  ? 'block' : 'none';
+  if(vDev) vDev.style.display = tab === 'devolucao' ? 'block' : 'none';
+
+  const bReg = document.getElementById('gartab-registro');
+  const bDev = document.getElementById('gartab-devolucao');
+  [bReg, bDev].forEach(b => { if(b) b.classList.remove('a-all'); });
+  if(tab === 'registro'  && bReg) bReg.classList.add('a-all');
+  if(tab === 'devolucao' && bDev) bDev.classList.add('a-all');
+
+  if(tab === 'devolucao') renderDevolucaoView();
+}
+
+// ════════════════════════════════════════════
+// DEVOLUÇÃO DE PEÇAS
+// Armazenado em /devolucoes/{id} no Firebase
+// Campos: nome, codigo, motivo, quantidade, selb, registradoPor, registradoEm (ts)
+// Registro somente interno no LabTech — NÃO altera o estoque do Pietro.
+// ════════════════════════════════════════════
+
+let _devolucaoCache    = {};   // cache local { id: {...} }
+let _devolucaoListener = null; // referência ao listener Firebase
+
+// ── Listener Firebase ────────────────────────────────────────────────────────
+function startDevolucaoListener(){
+  if(!_db || _devolucaoListener) return;
+  _devolucaoListener = _db.ref('/devolucoes').on('value', snap => {
+    _devolucaoCache = snap.val() || {};
+    const aba = document.getElementById('garview-devolucao');
+    if(aba && aba.style.display !== 'none'){
+      renderDevolucaoView();
+    }
+  });
+}
+
+// ── Render principal ─────────────────────────────────────────────────────────
+function renderDevolucaoView(){
+  _renderDevolucaoKpi();
+  _renderDevolucaoTabela();
+}
+
+function _renderDevolucaoKpi(){
+  const kpiEl = document.getElementById('devolucao-kpi');
+  if(!kpiEl) return;
+  const all   = Object.values(_devolucaoCache);
+  const total = all.length;
+  const totalQtd = all.reduce((s,r)=>s+(parseInt(r.quantidade,10)||1), 0);
+
+  kpiEl.innerHTML = `
+    <div class="sum-card">
+      <div class="slbl">Total de registros</div>
+      <div class="sval" style="color:#22d3ee">${total}</div>
+    </div>
+    <div class="sum-card">
+      <div class="slbl">Total de peças devolvidas</div>
+      <div class="sval" style="color:#22d3ee">${totalQtd}</div>
+    </div>
+  `;
+}
+
+function _renderDevolucaoTabela(){
+  const tbody = document.getElementById('devolucao-body');
+  if(!tbody) return;
+  const q = (document.getElementById('devolucao-search')?.value || '').toUpperCase();
+  const isAdmin = currentUser && currentUser.isAdmin;
+
+  let registros = Object.entries(_devolucaoCache)
+    .map(([id, r]) => ({ id, ...r }))
+    .sort((a, b) => (b.registradoEm || 0) - (a.registradoEm || 0));
+
+  if(q){
+    registros = registros.filter(r =>
+      (r.nome     || '').toUpperCase().includes(q) ||
+      (r.codigo   || '').toUpperCase().includes(q) ||
+      (r.selb     || '').toUpperCase().includes(q) ||
+      (r.motivo   || '').toUpperCase().includes(q) ||
+      (r.registradoPor || '').toUpperCase().includes(q)
+    );
+  }
+
+  if(!registros.length){
+    tbody.innerHTML = `<tr><td colspan="9" class="empty" style="text-align:center;padding:28px;color:var(--muted)">
+      ${q ? 'Nenhum registro encontrado para este filtro.' : 'Nenhuma devolução registrada ainda.'}
+    </td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = registros.map((r, i) => {
+    const dt  = r.registradoEm ? new Date(r.registradoEm).toLocaleString('pt-BR') : '—';
+    const cod = r.codigo ? `<span style="font-family:var(--mono);font-size:11px;background:var(--bg3);padding:2px 7px;border-radius:5px;border:1px solid var(--border)">${r.codigo}</span>` : '<span style="color:var(--muted)">—</span>';
+    const selb = r.selb ? `<span style="font-family:var(--mono);font-size:11px;color:#e879f9">${r.selb}</span>` : '<span style="color:var(--muted)">—</span>';
+    return `
+      <tr>
+        <td style="color:var(--muted);font-size:11px;font-family:var(--mono)">${i + 1}</td>
+        <td style="font-weight:600;color:var(--text);max-width:180px">${r.nome || '—'}</td>
+        <td>${cod}</td>
+        <td style="text-align:center"><span style="background:rgba(34,211,238,.15);color:#22d3ee;border-radius:7px;font-family:var(--mono);font-size:12px;font-weight:700;padding:2px 10px">${r.quantidade || 1}</span></td>
+        <td>${selb}</td>
+        <td style="max-width:220px;font-size:12px;color:var(--muted);white-space:pre-wrap;word-break:break-word">${r.motivo || '—'}</td>
+        <td style="font-size:12px">${r.registradoPor || '—'}</td>
+        <td style="font-family:var(--mono);font-size:11px;color:var(--muted);white-space:nowrap">${dt}</td>
+        <td>
+          ${isAdmin ? `
+          <div style="display:flex;gap:5px;flex-wrap:wrap">
+            <button onclick="abrirModalEditarDevolucao('${r.id}')"
+              style="background:rgba(79,142,247,.1);border:1px solid rgba(79,142,247,.3);border-radius:7px;color:var(--accent);font-family:var(--font);font-size:11px;font-weight:600;padding:5px 10px;cursor:pointer">✏️</button>
+            <button onclick="confirmarRemoverDevolucao('${r.id}','${(r.nome||'').replace(/'/g,"\\'")}')"
+              style="background:rgba(242,87,87,.1);border:1px solid rgba(242,87,87,.3);border-radius:7px;color:var(--danger);font-family:var(--font);font-size:11px;font-weight:600;padding:5px 10px;cursor:pointer">🗑️</button>
+          </div>` : '—'}
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function mdAlterarQtd(delta){
+  const inp = document.getElementById('md-quantidade');
+  if(!inp) return;
+  let v = parseInt(inp.value) || 1;
+  v = Math.max(1, Math.min(999, v + delta));
+  inp.value = v;
+}
+
+// ── Consulta o nome da peça no sistema do Pietro a partir do código bipado ──
+// Confirmado no painel do Supabase do Pietro: tabela "parts", colunas "code" (chave
+// primária) e "descricao" (nome/descrição da peça). Colunas extras: marca, modelo_pattern.
+const PIETRO_PECAS_TABELA      = 'parts';     // tabela no Supabase do Pietro
+const PIETRO_PECAS_COL_CODIGO  = 'code';      // coluna com o código bipado (chave primária)
+const PIETRO_PECAS_COL_NOME    = 'descricao'; // coluna com o nome/descrição da peça
+
+async function _pietroBuscarNomePeca(codigo){
+  // Reaproveita a mesma URL/chave já usadas em outras integrações com o Pietro neste arquivo.
+  // Usa "ilike" (case-insensitive) em vez de "eq", pois o código pode estar salvo em
+  // minúsculas no banco do Pietro (a tela de Estoque dele mostra os códigos assim),
+  // mesmo que aqui no LabTech o campo seja digitado/bipado em maiúsculas.
+  const codigoLimpo = String(codigo || '').trim();
+  const url = PIETRO_URL + '/rest/v1/' + PIETRO_PECAS_TABELA +
+    '?' + PIETRO_PECAS_COL_CODIGO + '=ilike.' + encodeURIComponent(codigoLimpo) +
+    '&select=*&limit=1';
+  const res = await fetch(url, { headers: _pietroHeaders() });
+  if(!res.ok) throw new Error('HTTP ' + res.status);
+  const rows = await res.json();
+  if(!rows || !rows.length) return null;
+  return rows[0][PIETRO_PECAS_COL_NOME] || null;
+}
+
+async function buscarNomePecaDevolucao(){
+  const codigo = document.getElementById('md-codigo').value.trim().toUpperCase();
+  const statusEl = document.getElementById('md-busca-status');
+  const btn = document.getElementById('md-btn-buscar');
+  if(!codigo){
+    statusEl.innerHTML = '<span style="color:var(--warn)">Digite ou bipe um código antes de buscar.</span>';
+    return;
+  }
+  statusEl.innerHTML = '<span style="color:var(--muted)">🔎 Buscando peça "' + codigo + '" no sistema do Pietro...</span>';
+  if(btn) btn.disabled = true;
+  try{
+    const nome = await _pietroBuscarNomePeca(codigo);
+    if(nome){
+      document.getElementById('md-nome').value = nome;
+      statusEl.innerHTML = '<span style="color:var(--accent2)">✓ Peça encontrada: ' + nome + '</span>';
+    } else {
+      statusEl.innerHTML = '<span style="color:var(--warn)">⚠ Código não encontrado no Pietro. Preencha o nome manualmente.</span>';
+      document.getElementById('md-nome').focus();
+    }
+  } catch(e){
+    console.error('[Devolução] erro ao buscar peça no Pietro:', e);
+    statusEl.innerHTML = '<span style="color:var(--danger)">✕ Não foi possível consultar o Pietro agora. Preencha o nome manualmente.</span>';
+    document.getElementById('md-nome').focus();
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
+// ── Abrir modais ─────────────────────────────────────────────────────────────
+function abrirModalNovaDevolucao(){
+  document.getElementById('md-title').textContent  = '↩️ Registrar Devolução de Peça';
+  document.getElementById('md-id').value           = '';
+  document.getElementById('md-codigo').value       = '';
+  document.getElementById('md-nome').value         = '';
+  document.getElementById('md-selb').value         = '';
+  document.getElementById('md-motivo').value       = '';
+  document.getElementById('md-quantidade').value   = '1';
+  document.getElementById('md-err').textContent    = '';
+  document.getElementById('md-busca-status').innerHTML = '';
+  document.getElementById('modal-devolucao').classList.remove('hidden');
+  setTimeout(() => document.getElementById('md-codigo').focus(), 80);
+}
+
+function abrirModalEditarDevolucao(id){
+  const r = _devolucaoCache[id];
+  if(!r){ alert('Registro não encontrado.'); return; }
+  document.getElementById('md-title').textContent  = '✏️ Editar Devolução';
+  document.getElementById('md-id').value           = id;
+  document.getElementById('md-codigo').value       = r.codigo     || '';
+  document.getElementById('md-nome').value         = r.nome       || '';
+  document.getElementById('md-selb').value         = r.selb       || '';
+  document.getElementById('md-motivo').value       = r.motivo     || '';
+  document.getElementById('md-quantidade').value   = r.quantidade || 1;
+  document.getElementById('md-err').textContent    = '';
+  document.getElementById('md-busca-status').innerHTML = '';
+  document.getElementById('modal-devolucao').classList.remove('hidden');
+}
+
+// ── Salvar (criar ou editar) — registro 100% interno, não chama o Pietro ────
+async function salvarDevolucao(){
+  const id         = document.getElementById('md-id').value.trim();
+  const codigo     = document.getElementById('md-codigo').value.trim();
+  const nome       = document.getElementById('md-nome').value.trim();
+  const selb       = document.getElementById('md-selb').value.trim();
+  const motivo     = document.getElementById('md-motivo').value.trim();
+  const quantidade = Math.max(1, parseInt(document.getElementById('md-quantidade').value) || 1);
+  const errEl      = document.getElementById('md-err');
+
+  if(!codigo){ errEl.textContent = 'Informe o código da peça.'; document.getElementById('md-codigo').focus(); return; }
+  if(!nome)  { errEl.textContent = 'Informe o nome da peça.';   document.getElementById('md-nome').focus();   return; }
+  errEl.textContent = '';
+
+  const registradoPor = currentUser?.name || 'Admin';
+
+  try {
+    if(id){
+      await _db.ref('/devolucoes/'+id).update({ nome, codigo, selb, motivo, quantidade, registradoPor });
+    } else {
+      await _db.ref('/devolucoes').push({ nome, codigo, selb, motivo, quantidade, registradoPor, registradoEm: Date.now() });
+    }
+    closeModal('modal-devolucao');
+  } catch(e){
+    errEl.textContent = 'Erro ao salvar. Tente novamente.';
+    console.error('Devolução save error:', e);
+  }
+}
+
+// ── Remover ──────────────────────────────────────────────────────────────────
+async function confirmarRemoverDevolucao(id, nome){
+  if(!confirm(`Remover o registro de devolução da peça "${nome}"?\n\nEsta ação não pode ser desfeita.`)) return;
+  try {
+    await _db.ref('/devolucoes/'+id).remove();
+  } catch(e){
+    alert('Erro ao remover registro.');
+    console.error('Devolução remove error:', e);
   }
 }
 
@@ -8959,16 +9223,20 @@ let _equipUnitizadores = {}; // { 'SELB-001': 'GAIOLA-01', ... }
 let editingEquipKey = null;
 
 async function loadEquipamentos(){
-  const [data, series, skus, unitizadores] = await Promise.all([
-    dbGet('/equipamentos'),
-    dbGet('/equipamentos_series'),
-    dbGet('/equipamentos_skus'),
-    dbGet('/equipamentos_unitizadores')
+  const [r1, r2, r3, r4] = await Promise.all([
+    _supa.from('equipamentos').select('id, raw'),
+    _supa.from('equipamentos_series').select('id, raw'),
+    _supa.from('equipamentos_skus').select('id, raw'),
+    _supa.from('equipamentos_unitizadores').select('id, raw'),
   ]);
-  equipamentos = data   || {};
-  _equipSeries = series || {};
-  _equipSkus   = skus   || {};
-  _equipUnitizadores = unitizadores || {};
+  equipamentos = {};
+  (r1.data || []).forEach(e => { equipamentos[e.id] = (e.raw && e.raw.nome) ? e.raw.nome : e.id; });
+  _equipSeries = {};
+  (r2.data || []).forEach(e => { _equipSeries[e.id] = e.raw; });
+  _equipSkus = {};
+  (r3.data || []).forEach(e => { _equipSkus[e.id] = e.raw; });
+  _equipUnitizadores = {};
+  (r4.data || []).forEach(e => { _equipUnitizadores[e.id] = e.raw; });
 }
 
 // Helper de normalização global para busca tolerante de SELBs
@@ -9138,28 +9406,32 @@ async function importEquipFile(input){
     }
 
     // Replace all (fresh import from system spreadsheet)
-    await dbDelete('/equipamentos');
-    await dbPatch('/equipamentos', batch);
+    await _supa.from('equipamentos').delete().neq('id', '___never___');
+    const eqRows = Object.entries(batch).map(([id, nome]) => ({ id, nome: String(nome), raw: { nome: String(nome) } }));
+    await _supa.from('equipamentos').upsert(eqRows);
     equipamentos = {...batch};
 
     // Salva séries separadamente (não apaga se não encontrou a coluna)
     if(Object.keys(seriesBatch).length > 0){
-      await dbDelete('/equipamentos_series');
-      await dbPatch('/equipamentos_series', seriesBatch);
+      await _supa.from('equipamentos_series').delete().neq('id', '___never___');
+      const srRows = Object.entries(seriesBatch).map(([id, v]) => ({ id, raw: typeof v === 'object' ? v : { serie: v } }));
+      await _supa.from('equipamentos_series').upsert(srRows);
       _equipSeries = {...seriesBatch};
     }
 
     // Salva skus separadamente (não apaga se não encontrou a coluna)
     if(Object.keys(skusBatch).length > 0){
-      await dbDelete('/equipamentos_skus');
-      await dbPatch('/equipamentos_skus', skusBatch);
+      await _supa.from('equipamentos_skus').delete().neq('id', '___never___');
+      const skRows = Object.entries(skusBatch).map(([id, v]) => ({ id, raw: typeof v === 'object' ? v : { sku: v } }));
+      await _supa.from('equipamentos_skus').upsert(skRows);
       _equipSkus = {...skusBatch};
     }
 
     // Salva unitizadores separadamente
     if(Object.keys(unitizadoresBatch).length > 0){
-      await dbDelete('/equipamentos_unitizadores');
-      await dbPatch('/equipamentos_unitizadores', unitizadoresBatch);
+      await _supa.from('equipamentos_unitizadores').delete().neq('id', '___never___');
+      const unRows = Object.entries(unitizadoresBatch).map(([id, v]) => ({ id, raw: typeof v === 'object' ? v : { unitizador: v } }));
+      await _supa.from('equipamentos_unitizadores').upsert(unRows);
       _equipUnitizadores = {...unitizadoresBatch};
     }
 
@@ -9317,39 +9589,39 @@ async function saveEquipamento(){
   if(!nome){ err.textContent='Informe o nome do equipamento.'; return; }
   // If key changed, remove old
   if(editingEquipKey && editingEquipKey !== selb){
-    await dbDelete('/equipamentos/'+editingEquipKey);
+    await _supa.from('equipamentos').delete().eq('id', editingEquipKey);
     delete equipamentos[editingEquipKey];
-    await dbDelete('/equipamentos_series/'+editingEquipKey);
+    await _supa.from('equipamentos_series').delete().eq('id', editingEquipKey);
     delete _equipSeries[editingEquipKey];
-    await dbDelete('/equipamentos_skus/'+editingEquipKey);
+    await _supa.from('equipamentos_skus').delete().eq('id', editingEquipKey);
     delete _equipSkus[editingEquipKey];
-    await dbDelete('/equipamentos_unitizadores/'+editingEquipKey);
+    await _supa.from('equipamentos_unitizadores').delete().eq('id', editingEquipKey);
     delete _equipUnitizadores[editingEquipKey];
   }
-  await dbPatch('/equipamentos', {[selb]: nome});
+  await _supa.from('equipamentos').upsert({ id: selb, nome, raw: { nome } }, { onConflict: 'id' });
   equipamentos[selb] = nome;
-  
+
   if(serie){
-    await dbPatch('/equipamentos_series', {[selb]: serie});
+    await _supa.from('equipamentos_series').upsert({ id: selb, raw: { serie } }, { onConflict: 'id' });
     _equipSeries[selb] = serie;
   } else {
-    await dbDelete('/equipamentos_series/'+selb);
+    await _supa.from('equipamentos_series').delete().eq('id', selb);
     delete _equipSeries[selb];
   }
 
   if(sku){
-    await dbPatch('/equipamentos_skus', {[selb]: sku});
+    await _supa.from('equipamentos_skus').upsert({ id: selb, raw: { sku } }, { onConflict: 'id' });
     _equipSkus[selb] = sku;
   } else {
-    await dbDelete('/equipamentos_skus/'+selb);
+    await _supa.from('equipamentos_skus').delete().eq('id', selb);
     delete _equipSkus[selb];
   }
 
   if(unitizador){
-    await dbPatch('/equipamentos_unitizadores', {[selb]: unitizador});
+    await _supa.from('equipamentos_unitizadores').upsert({ id: selb, raw: { unitizador } }, { onConflict: 'id' });
     _equipUnitizadores[selb] = unitizador;
   } else {
-    await dbDelete('/equipamentos_unitizadores/'+selb);
+    await _supa.from('equipamentos_unitizadores').delete().eq('id', selb);
     delete _equipUnitizadores[selb];
   }
   
@@ -9359,23 +9631,23 @@ async function saveEquipamento(){
 
 async function deleteEquip(selb){
   if(!confirm('Remover o equipamento "'+selb+'" — '+equipamentos[selb]+'?')) return;
-  await dbDelete('/equipamentos/'+selb);
+  await _supa.from('equipamentos').delete().eq('id', selb);
   delete equipamentos[selb];
-  await dbDelete('/equipamentos_series/'+selb);
+  await _supa.from('equipamentos_series').delete().eq('id', selb);
   delete _equipSeries[selb];
-  await dbDelete('/equipamentos_skus/'+selb);
+  await _supa.from('equipamentos_skus').delete().eq('id', selb);
   delete _equipSkus[selb];
-  await dbDelete('/equipamentos_unitizadores/'+selb);
+  await _supa.from('equipamentos_unitizadores').delete().eq('id', selb);
   delete _equipUnitizadores[selb];
   renderEquipTable();
 }
 
 async function clearEquipamentos(){
   if(!confirm('Isso vai remover TODOS os equipamentos cadastrados. Confirmar?')) return;
-  await dbDelete('/equipamentos');
-  await dbDelete('/equipamentos_series');
-  await dbDelete('/equipamentos_skus');
-  await dbDelete('/equipamentos_unitizadores');
+  await _supa.from('equipamentos').delete().neq('id', '___never___');
+  await _supa.from('equipamentos_series').delete().neq('id', '___never___');
+  await _supa.from('equipamentos_skus').delete().neq('id', '___never___');
+  await _supa.from('equipamentos_unitizadores').delete().neq('id', '___never___');
   equipamentos = {};
   _equipSeries = {};
   _equipSkus = {};
@@ -11135,6 +11407,7 @@ const ALERT_SECTORS = new Set(['COMPLEXA','MONTAGEM','LIMPEZA']);
     startMaquinasAListener();
     startSolicitacoesPecasListener();
     startGarantiaListener();
+    startDevolucaoListener();
     // Painel de alertas "sem SELB em andamento" desativado
     const _pnl = document.getElementById('selb-alert-panel');
     if(_pnl) _pnl.innerHTML = '';
@@ -13848,35 +14121,36 @@ function getSectorTipo(nome){
 
 async function loadSetores() {
   try {
-    const data = await dbGet('/setores');
-    if (data && Array.isArray(data) && data.length > 0) {
-      // Merge: fixos + salvos, sem duplicatas, tudo maiúsculo
-      const merged = [...new Set([...SETORES_FIXOS, ...data.map(s => s.toUpperCase())])];
-      _setores = merged;
+    const { data: rows } = await _supa.from('setores').select('id, nome, raw');
+    if (rows && rows.length > 0) {
+      const nomes = rows.map(r => (r.nome || r.id).toUpperCase());
+      _setores = [...new Set([...SETORES_FIXOS, ...nomes])];
     } else {
       _setores = [...SETORES_FIXOS];
     }
-  } catch(e) {
-    _setores = [...SETORES_FIXOS];
-  }
-  // Carrega tipos salvos
+  } catch(e) { _setores = [...SETORES_FIXOS]; }
+
   try {
-    const tipos = await dbGet('/setores_tipos');
-    _setoresTipos = (tipos && typeof tipos === 'object') ? tipos : {};
-  } catch(e){ _setoresTipos = {}; }
+    const { data: tiposRows } = await _supa.from('setores_tipos').select('id, raw');
+    _setoresTipos = {};
+    (tiposRows || []).forEach(r => {
+      if (r.raw && typeof r.raw === 'object') Object.assign(_setoresTipos, r.raw);
+    });
+  } catch(e) { _setoresTipos = {}; }
+
   _renderMuSectorOpts();
   _renderAdmTabs();
-  // Re-merge permissões com a lista completa de setores (inclui dinâmicos como PCP)
-  if (typeof _applySectorTabPermsRaw  === 'function') _applySectorTabPermsRaw();
-  if (typeof _applyRelSubTabPermsRaw  === 'function') _applyRelSubTabPermsRaw();
+  if (typeof _applySectorTabPermsRaw === 'function') _applySectorTabPermsRaw();
+  if (typeof _applyRelSubTabPermsRaw === 'function') _applyRelSubTabPermsRaw();
 }
 
-async function _saveSetoresTipos(){
-  await dbSet('/setores_tipos', _setoresTipos);
+async function _saveSetoresTipos() {
+  await _supa.from('setores_tipos').upsert({ id: 'tipos', raw: _setoresTipos }, { onConflict: 'id' });
 }
 
 async function _saveSetores() {
-  await dbSet('/setores', _setores);
+  const rows = _setores.map(nome => ({ id: nome, nome, raw: { nome } }));
+  await _supa.from('setores').upsert(rows, { onConflict: 'id' });
 }
 
 // ── Popula <select id="mu-sector"> ────────────────────────────
