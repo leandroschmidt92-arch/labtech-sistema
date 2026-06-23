@@ -1,8 +1,6 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-<!-- ── Tema: aplicar antes do render para evitar flash ── -->
-<script>(function(){try{var t=localStorage.getItem('labtech-theme');if(t==='light'){document.documentElement.setAttribute('data-theme','light');}}catch(e){}})()</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sistema de Controle – LabTech</title>
@@ -412,7 +410,6 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
         <div class="avatar av-mont" id="u-avatar">??</div>
         <span id="u-name">—</span>
       </div>
-      <button id="theme-toggle-btn" title="Alternar tema claro/escuro" onclick="toggleTheme()" aria-label="Alternar tema">🌙</button>
       <button class="logout-btn" onclick="logout()">Sair</button>
     </div>
   </div>
@@ -2116,6 +2113,23 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
   <div class="view" id="view-garantia">
 
     <!-- Header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <div>
+        <h2 style="font-size:18px;font-weight:600;color:var(--purple)">🛡️ Garantia</h2>
+        <p style="font-size:12px;color:var(--muted);margin-top:3px">Registro de peças em garantia e devolução de peças ao estoque</p>
+      </div>
+    </div>
+
+    <!-- Sub-abas: Registro de Garantia / Devolução -->
+    <div class="stabs" id="garantia-subtabs" style="margin-bottom:18px">
+      <button class="stab a-all" id="gartab-registro" onclick="setGarantiaSubTab('registro')">🛡️ Registro de Garantia</button>
+      <button class="stab" id="gartab-devolucao" onclick="setGarantiaSubTab('devolucao')">↩️ Devolução</button>
+    </div>
+
+    <!-- ═══ SUB-ABA: REGISTRO DE GARANTIA (conteúdo original) ═══ -->
+    <div id="garview-registro">
+
+    <!-- Header -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
       <div>
         <h2 style="font-size:18px;font-weight:600;color:var(--purple)">🛡️ Registro de Garantia</h2>
@@ -2164,6 +2178,115 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           </thead>
           <tbody id="garantia-body"></tbody>
         </table>
+      </div>
+    </div>
+    </div><!-- /garview-registro -->
+
+    <!-- ═══ SUB-ABA: DEVOLUÇÃO ═══ -->
+    <div id="garview-devolucao" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
+        <div>
+          <h2 style="font-size:18px;font-weight:600;color:#22d3ee">↩️ Devolução de Peças</h2>
+          <p style="font-size:12px;color:var(--muted);margin-top:3px">Bipe o código da peça para consultar o nome automaticamente — registro interno, não altera o estoque do Pietro</p>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <div class="search-bar" style="margin:0">
+            <input class="sinp" id="devolucao-search" placeholder="BUSCAR NOME, CÓDIGO OU SELB..."
+              oninput="renderDevolucaoView()" style="width:300px">
+          </div>
+          <button onclick="renderDevolucaoView()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--muted);font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">🔄 Atualizar</button>
+          <button onclick="abrirModalNovaDevolucao()"
+            style="background:rgba(34,211,238,.15);border:1px solid rgba(34,211,238,.4);border-radius:9px;color:#22d3ee;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">
+            + Registrar Devolução
+          </button>
+        </div>
+      </div>
+
+      <!-- KPI cards -->
+      <div id="devolucao-kpi" style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:20px"></div>
+
+      <!-- Tabela -->
+      <div style="background:var(--bg2);border:1px solid rgba(34,211,238,.25);border-radius:14px;padding:20px">
+        <div style="overflow-x:auto">
+          <table class="rtbl">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Nome da Peça</th>
+                <th>Código</th>
+                <th>Qtd</th>
+                <th>SELB de Origem</th>
+                <th>Motivo</th>
+                <th>Registrado por</th>
+                <th>Data / Hora</th>
+                <th style="width:120px">Ações</th>
+              </tr>
+            </thead>
+            <tbody id="devolucao-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div><!-- /garview-devolucao -->
+
+  </div>
+
+  <!-- ═══ MODAL: REGISTRAR DEVOLUÇÃO ═══ -->
+  <div class="modal-overlay hidden" id="modal-devolucao" onclick="if(event.target===this)closeModal('modal-devolucao')">
+    <div class="modal" style="max-width:480px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
+        <div>
+          <h2 id="md-title" style="font-size:16px;color:#22d3ee">↩️ Registrar Devolução de Peça</h2>
+          <div class="msub" style="margin-bottom:0">Bipe o código — o nome é buscado automaticamente</div>
+        </div>
+        <button onclick="closeModal('modal-devolucao')" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;line-height:1;padding:2px 6px">×</button>
+      </div>
+
+      <div style="height:16px"></div>
+
+      <label class="flbl">Código da Peça *</label>
+      <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:0">
+        <input class="inp" id="md-codigo" placeholder="Bipe ou digite o código..." maxlength="80"
+          oninput="this.value=this.value.toUpperCase()" onkeydown="if(event.key==='Enter'){event.preventDefault();buscarNomePecaDevolucao();}"
+          style="margin-bottom:0;text-transform:uppercase;flex:1">
+        <button type="button" onclick="buscarNomePecaDevolucao()" id="md-btn-buscar"
+          style="background:rgba(34,211,238,.15);border:1px solid rgba(34,211,238,.4);border-radius:8px;color:#22d3ee;font-family:var(--font);font-size:12px;font-weight:600;padding:0 16px;height:38px;cursor:pointer;white-space:nowrap">
+          🔎 Buscar
+        </button>
+      </div>
+      <div id="md-busca-status" style="font-size:11px;margin-top:6px;min-height:14px"></div>
+
+      <div style="height:10px"></div>
+
+      <label class="flbl">Nome da Peça *</label>
+      <input class="inp" id="md-nome" placeholder="Preenchido automaticamente ao buscar o código" maxlength="120">
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div>
+          <label class="flbl">Quantidade *</label>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:0">
+            <button type="button" onclick="mdAlterarQtd(-1)" style="width:32px;height:38px;background:var(--bg4);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-size:18px;font-weight:700;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:all .1s" onmouseover="this.style.background='#22d3ee';this.style.color='#000'" onmouseout="this.style.background='var(--bg4)';this.style.color='var(--text)'">&#8722;</button>
+            <input class="inp" id="md-quantidade" type="number" min="1" max="999" value="1" style="margin-bottom:0;text-align:center;font-family:var(--mono);font-weight:700;font-size:16px;color:#22d3ee;background:var(--bg3);border:2px solid rgba(34,211,238,.6);-webkit-text-fill-color:#22d3ee;width:70px;min-width:70px;padding-left:6px;padding-right:6px">
+            <button type="button" onclick="mdAlterarQtd(1)" style="width:32px;height:38px;background:var(--bg4);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-size:18px;font-weight:700;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:all .1s" onmouseover="this.style.background='#22d3ee';this.style.color='#000'" onmouseout="this.style.background='var(--bg4)';this.style.color='var(--text)'">+</button>
+          </div>
+        </div>
+        <div>
+          <label class="flbl">SELB de Origem</label>
+          <input class="inp" id="md-selb" placeholder="Ex: A1B2C" maxlength="20"
+            oninput="this.value=this.value.toUpperCase()" style="margin-bottom:0;text-transform:uppercase">
+        </div>
+      </div>
+
+      <div style="height:12px"></div>
+
+      <label class="flbl">Motivo da Devolução</label>
+      <textarea class="inp" id="md-motivo" placeholder="Descreva o motivo da devolução (opcional)..." rows="3"
+        style="resize:vertical;letter-spacing:0;font-family:var(--font);font-size:13px"></textarea>
+
+      <input type="hidden" id="md-id">
+      <div class="merr" id="md-err"></div>
+      <div class="mbtns">
+        <button class="btn bg" style="flex:0.5" onclick="closeModal('modal-devolucao')">Cancelar</button>
+        <button class="btn" style="background:rgba(34,211,238,.2);border:1px solid rgba(34,211,238,.5);color:#22d3ee" onclick="salvarDevolucao()">↩️ Salvar Devolução</button>
       </div>
     </div>
   </div>
@@ -3259,7 +3382,8 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.19.1/umd/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-<script src="app.js?v=4"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="app.js?v=5"></script>
 
 
 <!-- ═══ ALERTA FIXO: SELB EM ANDAMENTO (Complexa / Montagem / Limpeza) ═══ -->
@@ -4518,33 +4642,6 @@ function pedPrintLabels() {
   // Fecha com a tecla ESC
   document.addEventListener('keydown', function(e){
     if(e.key === 'Escape') window.fecharInfoRelatorio();
-  });
-})();
-</script>
-
-<!-- ── TOGGLE DE TEMA CLARO/ESCURO ── -->
-<script>
-(function(){
-  var DARK_ICON  = '🌙';
-  var LIGHT_ICON = '☀️';
-
-  function applyTheme(theme) {
-    document.documentElement.setAttribute('data-theme', theme);
-    var btn = document.getElementById('theme-toggle-btn');
-    if (btn) btn.textContent = theme === 'light' ? LIGHT_ICON : DARK_ICON;
-    try { localStorage.setItem('labtech-theme', theme); } catch(e) {}
-  }
-
-  window.toggleTheme = function() {
-    var current = document.documentElement.getAttribute('data-theme');
-    applyTheme(current === 'light' ? 'dark' : 'light');
-  };
-
-  // Inicializar ícone ao carregar a página
-  document.addEventListener('DOMContentLoaded', function(){
-    var saved = 'dark';
-    try { saved = localStorage.getItem('labtech-theme') || 'dark'; } catch(e){}
-    applyTheme(saved);
   });
 })();
 </script>
