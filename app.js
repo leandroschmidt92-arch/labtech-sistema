@@ -600,24 +600,23 @@ function startRealtimeSync(){
   }, err => console.warn('Users listener error:', err));
 
   // ── Listener de Celebrações Globais ────────────────────────────────────────
-  if(window._celebrationListener) _db.ref('/meta/latestCelebration').off('value', window._celebrationListener);
-  window._celebrationListener = _db.ref('/meta/latestCelebration').on('value', snap => {
-    const data = snap.val();
-    if(!data || !data.timestamp) return;
-    
-    // Evita disparar celebrações antigas no carregamento inicial
-    const now = Date.now();
-    if(now - data.timestamp > 30000) return; // ignora se tiver mais de 30s
-    
-    // Evita disparar a mesma celebração múltiplas vezes localmente
-    if(window._lastCelebrationTs === data.timestamp) return;
-    window._lastCelebrationTs = data.timestamp;
-
-    // Dispara o efeito visual e sonoro em todas as telas
-    if(typeof playCelebration === 'function'){
-      playCelebration(data.uid);
-    }
-  });
+  // Celebration listener via Supabase Realtime
+  _supa.channel('app_config_celebration')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'app_config', filter: 'key=eq.latestCelebration' }, async (payload) => {
+      const data = payload.new?.value;
+      if(!data || !data.timestamp) return;
+      // Evita disparar celebrações antigas no carregamento inicial
+      const now = Date.now();
+      if(now - data.timestamp > 30000) return; // ignora se tiver mais de 30s
+      // Evita disparar a mesma celebração múltiplas vezes localmente
+      if(window._lastCelebrationTs === data.timestamp) return;
+      window._lastCelebrationTs = data.timestamp;
+      // Dispara o efeito visual e sonoro em todas as telas
+      if(typeof playCelebration === 'function'){
+        playCelebration(data.uid);
+      }
+    })
+    .subscribe();
 }
 
 // ════════════════════════════════════════
@@ -786,7 +785,7 @@ async function checkDayReset(){
   const lastDay = localStorage.getItem('sb_last_day');
   if(lastDay !== today){
     localStorage.setItem('sb_last_day', today);
-    dbSet('/meta/lastResetDay', today).catch(()=>{});
+    _supa.from('app_config').upsert({ key: 'lastResetDay', value: today }, { onConflict: 'key' }).catch(()=>{});
 
     // Busca registros 'running' do dia anterior no Firebase e mantém no history[]
     // para que os cards continuem visíveis até o operador finalizar o SELB.
@@ -877,9 +876,9 @@ function bootApp(){
   loadSetores().catch(()=>{});
 
   // Carrega SELBs excluídos do cálculo de média (persistidos no Firebase)
-  dbGet('/config/modelo_selbs_excluidos').then(d=>{
-    if(d && typeof d === 'object'){
-      Object.keys(d).forEach(docId => { if(d[docId]===true) _selbsExcluidos.add(docId); });
+  _supa.from('app_config').select('value').eq('key', 'selbsExcluidos').single().then(({data}) => {
+    if(data && data.value && typeof data.value === 'object'){
+      Object.keys(data.value).forEach(docId => { if(data.value[docId]===true) _selbsExcluidos.add(docId); });
     }
   }).catch(()=>{});
 
@@ -2230,14 +2229,12 @@ async function listarBackups(){
   const list = document.getElementById('backup-list');
   list.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:10px">Carregando backups...</div>';
   try {
-    const data = await dbGet('/backups');
-    if(!data){
-      list.innerHTML='<div class="empty">Nenhum backup encontrado no Firebase.</div>';
+    const { data } = await _supa.from('backups').select('*').order('date_key', { ascending: false });
+    if(!data || !data.length){
+      list.innerHTML='<div class="empty">Nenhum backup encontrado.</div>';
       return;
     }
-    const backups = Object.entries(data)
-      .map(([dk, b]) => ({dk, ...b}))
-      .sort((a,b) => new Date(b.savedAt) - new Date(a.savedAt));
+    const backups = data.map(b => ({ dk: b.date_key, ...( b.payload || {} ), savedAt: b.saved_at, motivo: b.motivo, dateKey: b.date_key }));
 
     list.innerHTML = backups.map(b => {
       const date  = b.dateKey ? b.dateKey.replace(/_/g,' ') : b.dk;
@@ -2266,7 +2263,8 @@ async function restaurarBackupFirebase(dateKey){
   closeModal('modal-backups');
   showLoader('Restaurando backup...');
   try {
-    const backup = await dbGet('/backups/'+dateKey);
+    const { data: _bkRow } = await _supa.from('backups').select('payload').eq('date_key', dateKey).single();
+    const backup = _bkRow && _bkRow.payload;
     if(!backup || !backup.history) throw new Error('Backup inválido ou vazio.');
     await dbSet('/history/'+dateKey, backup.history);
     if(backup.userCounters){
@@ -2274,7 +2272,7 @@ async function restaurarBackupFirebase(dateKey){
         await dbPatch('/users/'+uid, {totalDia: c.totalDia||0, repDia: c.repDia||0}).catch(()=>{});
       }
     }
-    await dbSet('/meta/lastResetDay', dateKey.replace(/_/g,' ')).catch(()=>{});
+    await _supa.from('app_config').upsert({ key: 'lastResetDay', value: dateKey.replace(/_/g,' ') }, { onConflict: 'key' }).catch(()=>{});
     hideLoader();
     alert('✅ Backup restaurado!\nDia: '+dateKey.replace(/_/g,' ')+'\n\nA página será recarregada.');
     setTimeout(()=>location.reload(), 1500);
@@ -2301,7 +2299,7 @@ async function importarBackupArquivo(input){
         await dbPatch('/users/'+uid, {totalDia:udata.totalDia||0, repDia:udata.repDia||0}).catch(()=>{});
       }
     }
-    await dbSet('/meta/lastResetDay', backup.dateKey.replace(/_/g,' ')).catch(()=>{});
+    await _supa.from('app_config').upsert({ key: 'lastResetDay', value: backup.dateKey.replace(/_/g,' ') }, { onConflict: 'key' }).catch(()=>{});
     hideLoader();
     input.value='';
     alert('✅ Backup restaurado!\nA página será recarregada.');
@@ -2420,7 +2418,8 @@ async function resetConfig(){
     await loadEquipamentos();
     // Recarrega SELBs excluídos da média
     _selbsExcluidos.clear();
-    const excl = await dbGet('/config/modelo_selbs_excluidos').catch(()=>null);
+    const { data: _exclData } = await _supa.from('app_config').select('value').eq('key','selbsExcluidos').single().catch(()=>({data:null}));
+    const excl = _exclData?.value;
     if(excl && typeof excl === 'object'){
       Object.keys(excl).forEach(docId => { if(excl[docId]===true) _selbsExcluidos.add(docId); });
     }
@@ -2947,11 +2946,7 @@ async function confirmarFin(){
   if(res === 'ok' && newTotal >= meta && prevTotal < meta && !jaDisparou){
     localStorage.setItem(bipKey, '1');
     // Dispara celebração global via Firebase
-    dbSet('/meta/latestCelebration', {
-      uid: actionUid,
-      name: u.name,
-      timestamp: Date.now()
-    }).catch(()=>{});
+    _supa.from('app_config').upsert({ key: 'latestCelebration', value: { uid: actionUid, name: u.name, timestamp: Date.now() } }, { onConflict: 'key' }).catch(()=>{});
   }
 
   renderCard(actionUid); closeModal('modal-finish'); updateSummary();
@@ -4447,7 +4442,7 @@ function registrarLogPecas(selb, equip, msg) {
     usuario: currentUser ? currentUser.name : 'Sistema',
     data: new Date().toLocaleDateString('pt-BR') + ' ' + new Date().toLocaleTimeString('pt-BR')
   };
-  dbPush('/logs_pecas', log).catch(e => console.error("Erro log pecas:", e));
+  _supa.from('logs_pecas').insert({ ts: log.ts || Date.now(), raw: log }).catch(e => console.error('Erro log pecas:', e));
 }
 
 async function abrirModalLogsPecas() {
@@ -4457,12 +4452,12 @@ async function abrirModalLogsPecas() {
   document.getElementById('modal-logs-pecas').classList.remove('hidden');
   
   try {
-    const data = await dbGet('/logs_pecas');
-    if(!data) {
+    const { data } = await _supa.from('logs_pecas').select('ts, raw').order('ts', { ascending: false }).limit(100);
+    if(!data || !data.length) {
       tbody.innerHTML = '<tr><td colspan="4" class="empty">Nenhum registro encontrado.</td></tr>';
       return;
     }
-    const list = Object.values(data).sort((a,b) => b.ts - a.ts).slice(0, 100); // últimos 100
+    const list = data.map(r => ({ ...(r.raw||{}), ts: r.ts }));
     tbody.innerHTML = list.map(l => `
       <tr>
         <td style="font-size:11px;color:var(--muted);white-space:nowrap">${l.data || new Date(l.ts).toLocaleString('pt-BR')}</td>
@@ -8357,7 +8352,7 @@ function _renderModalSelbsBody(regs){
 
 function excluirSelb(docId){
   _selbsExcluidos.add(docId);
-  dbPatch('/config/modelo_selbs_excluidos', {[docId]: true}).catch(()=>{});
+  _supa.from('app_config').upsert({ key: 'selbsExcluidos', value: Object.fromEntries([..._selbsExcluidos].map(k=>[k,true])) }, { onConflict: 'key' }).catch(()=>{});
   _atualizarPainelExcluidos();
   if(window._mmsRegsCache) _renderModalSelbsBody(window._mmsRegsCache);
   renderModeloRel();
@@ -8365,7 +8360,7 @@ function excluirSelb(docId){
 
 function restaurarSelb(docId){
   _selbsExcluidos.delete(docId);
-  dbDelete('/config/modelo_selbs_excluidos/'+docId).catch(()=>{});
+  _supa.from('app_config').upsert({ key: 'selbsExcluidos', value: Object.fromEntries([..._selbsExcluidos].map(k=>[k,true])) }, { onConflict: 'key' }).catch(()=>{});
   _atualizarPainelExcluidos();
   if(window._mmsRegsCache) _renderModalSelbsBody(window._mmsRegsCache);
   renderModeloRel();
@@ -8373,7 +8368,7 @@ function restaurarSelb(docId){
 
 function limparTodosExcluidos(){
   _selbsExcluidos.clear();
-  dbDelete('/config/modelo_selbs_excluidos').catch(()=>{});
+  _supa.from('app_config').upsert({ key: 'selbsExcluidos', value: {} }, { onConflict: 'key' }).catch(()=>{});
   _atualizarPainelExcluidos();
   if(window._mmsRegsCache) _renderModalSelbsBody(window._mmsRegsCache);
   renderModeloRel();
@@ -9690,7 +9685,7 @@ async function fazerBackupFirebase(dateKey, motivo){
         Object.entries(usersData||{}).map(([uid,u]) => [uid, {totalDia:u.totalDia||0, repDia:u.repDia||0}])
       )
     };
-    await dbSet('/backups/'+dateKey, backup);
+    await _supa.from('backups').upsert({ date_key: dateKey, saved_at: new Date().toISOString(), motivo: backup.motivo||null, payload: backup }, { onConflict: 'date_key' });
     // backup salvo
   } catch(e){
     console.warn('Backup automático falhou:', e.message);
@@ -9804,7 +9799,7 @@ async function confirmarZerarDia(){
     });
 
     // 3. Grava data do reset no Firebase para evitar reset duplo na virada do dia
-    await dbSet('/meta/lastResetDay', new Date().toDateString()).catch(()=>{});
+    await _supa.from('app_config').upsert({ key: 'lastResetDay', value: new Date().toDateString() }, { onConflict: 'key' }).catch(()=>{});
     localStorage.setItem('sb_last_day', new Date().toDateString());
     _autoBackupDone = true;
 
@@ -11393,7 +11388,7 @@ const ALERT_SECTORS = new Set(['COMPLEXA','MONTAGEM','LIMPEZA']);
     if(btn){ btn.disabled = true; btn.textContent = '…'; }
     const ts = Date.now();
     _dismissed.set(uid, ts);
-    try { await dbPatch('/alerts/dismissed', { [uid]: ts }); } catch(e){}
+    try { const _cur = (await _supa.from('app_config').select('value').eq('key','alertsDismissed').single()).data?.value || {}; await _supa.from('app_config').upsert({ key: 'alertsDismissed', value: {..._cur, [uid]: ts} }, { onConflict: 'key' }); } catch(e){}
     const card = document.querySelector(`#selb-alert-panel [data-uid="${uid}"]`);
     if(card) dismissCardAnim(card);
   };
@@ -11402,9 +11397,10 @@ const ALERT_SECTORS = new Set(['COMPLEXA','MONTAGEM','LIMPEZA']);
   let _alertsListener = null;
   function startAlertsListener(){
     if(_alertsListener) return;
-    _alertsListener = _db.ref('/alerts/dismissed').on('value', snap => {
-      if(!snap.exists()) return;
-      const data = snap.val();
+    _supa.channel('app_config_alerts')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_config', filter: 'key=eq.alertsDismissed' }, async (payload) => {
+        const data = payload.new?.value;
+        if(!data) return;
       Object.entries(data).forEach(([uid, ts]) => {
         // Só aplica se for mais recente que o que já temos
         if(ts > (_dismissed.get(uid) || 0)){
@@ -12529,8 +12525,8 @@ function qualRenderTotaisModelo(){
   // Restaura do Firebase se memória estiver zerada (ex: após recarregar a página)
   if (Object.keys(window.__qualChecklistAcumulado).length === 0) {
     const _todayChk = new Date().toISOString().slice(0,10);
-    _db.ref('/qual_checklist_dia/' + _todayChk + '/acumulado').once('value').then(snap => {
-      const saved = snap.val();
+_supa.from('qual_checklist_dia').select('acumulado').eq('date_key', _todayChk).single().then(({data}) => {
+      const saved = data && data.acumulado;
       if (saved && typeof saved === 'object') {
         window.__qualChecklistAcumulado = saved;
         window.__qualChecklist = Object.fromEntries(Object.entries(saved).map(([k,v])=>[k,String(v)]));
@@ -12613,7 +12609,7 @@ function qualRenderTotaisModelo(){
       window.__qualChecklist[modelo] = String(novoTotal);
       // Persiste no Firebase por dia
       const _todayChk = new Date().toISOString().slice(0,10);
-      _db.ref('/qual_checklist_dia/' + _todayChk + '/acumulado').set(window.__qualChecklistAcumulado).catch(()=>{});
+      _supa.from('qual_checklist_dia').upsert({ date_key: _todayChk, acumulado: window.__qualChecklistAcumulado }, { onConflict: 'date_key' }).catch(()=>{});
       overlay.remove();
       // Limpa o input e volta ao estado neutro (pronto para próxima entrada)
       inp.value = '';
@@ -12833,8 +12829,8 @@ function qualLoadChecklistCount(){
   // busca direto do Firebase e atualiza o card quando retornar.
   if(!window.__qualChecklistAcumulado || Object.keys(window.__qualChecklistAcumulado).length === 0){
     const _today = new Date().toISOString().slice(0,10);
-    _db.ref('/qual_checklist_dia/' + _today + '/acumulado').once('value').then(snap => {
-      const saved = snap.val();
+_supa.from('qual_checklist_dia').select('acumulado').eq('date_key', _today).single().then(({data}) => {
+      const saved = data && data.acumulado;
       if(saved && typeof saved === 'object' && Object.keys(saved).length > 0){
         window.__qualChecklistAcumulado = saved;
         window.__qualChecklist = Object.fromEntries(
@@ -12851,7 +12847,7 @@ function qualIncrementChecklist(qty){
   // O card so e atualizado via qualSyncChecklistCardFromTotais() (campos da tabela).
   if(!qty || qty <= 0) return;
   const today = new Date().toISOString().slice(0,10);
-  _db.ref('/qual_checklist_dia/' + today + '/ultima_impressao').set(Date.now()).catch(() => {});
+  _supa.from('qual_checklist_dia').upsert({ date_key: today, ultima_impressao: Date.now() }, { onConflict: 'date_key' }).catch(() => {});
 }
 
 function qualPrintLabels(){
@@ -13915,12 +13911,15 @@ function _applySectorTabPermsRaw(){
 }
 
 // Carrega do Firebase em tempo real
-(function loadSectorTabPerms(){
+(async function loadSectorTabPerms(){
   try{
-    _db.ref('/config/sectorTabPerms').on('value', snap => {
-      _sectorTabPermsRaw = snap.val();
-      _applySectorTabPermsRaw();
-    });
+    const { data } = await _supa.from('app_config').select('value').eq('key','sectorTabPerms').single();
+    if(data){ _sectorTabPermsRaw = data.value; _applySectorTabPermsRaw(); }
+    _supa.channel('sectorTabPerms')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_config', filter: 'key=eq.sectorTabPerms' }, async (payload) => {
+        _sectorTabPermsRaw = payload.new?.value;
+        _applySectorTabPermsRaw();
+      }).subscribe();
   }catch(e){ console.warn('Falha ao carregar permissões de abas:', e); }
 })();
 
@@ -13978,21 +13977,15 @@ function saveSectorTabPerms(){
   document.querySelectorAll('.sec-perm-cb').forEach(cb => {
     out[cb.dataset.sector][cb.dataset.tab] = cb.checked;
   });
-  _db.ref('/config/sectorTabPerms').set(out)
-    .then(()=> {
-      if(typeof toast === 'function') toast('Permissões salvas com sucesso');
-      else alert('Permissões salvas');
-    })
+  _supa.from('app_config').upsert({ key: 'sectorTabPerms', value: out }, { onConflict: 'key' })
+    .then(()=> { if(typeof toast === 'function') toast('Permissões salvas com sucesso'); else alert('Permissões salvas'); })
     .catch(e => alert('Erro ao salvar: ' + e.message));
 }
 
 function resetSectorPerms(){
   if(!confirm('Restaurar as permissões padrão de todos os setores?')) return;
-  _db.ref('/config/sectorTabPerms').remove()
-    .then(()=> {
-      if(typeof toast === 'function') toast('Permissões restauradas');
-      else alert('Permissões restauradas ao padrão');
-    });
+  _supa.from('app_config').delete().eq('key','sectorTabPerms')
+    .then(()=> { if(typeof toast === 'function') toast('Permissões restauradas'); else alert('Permissões restauradas ao padrão'); });
 }
 
 
@@ -14044,12 +14037,15 @@ function _applyRelSubTabPermsRaw(){
   renderRelSubTabPermsUI();
 }
 
-(function loadRelSubTabPerms(){
+(async function loadRelSubTabPerms(){
   try{
-    _db.ref('/config/relSubTabPerms').on('value', snap => {
-      _relSubTabPermsRaw = snap.val();
-      _applyRelSubTabPermsRaw();
-    });
+    const { data } = await _supa.from('app_config').select('value').eq('key','relSubTabPerms').single();
+    if(data){ _relSubTabPermsRaw = data.value; _applyRelSubTabPermsRaw(); }
+    _supa.channel('relSubTabPerms')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_config', filter: 'key=eq.relSubTabPerms' }, async (payload) => {
+        _relSubTabPermsRaw = payload.new?.value;
+        _applyRelSubTabPermsRaw();
+      }).subscribe();
   }catch(e){ console.warn('Falha ao carregar permissões de sub-abas:', e); }
 })();
 
@@ -14106,21 +14102,15 @@ function saveRelSubTabPerms(){
   document.querySelectorAll('.rel-perm-cb').forEach(cb => {
     out[cb.dataset.sector][cb.dataset.tab] = cb.checked;
   });
-  _db.ref('/config/relSubTabPerms').set(out)
-    .then(()=> {
-      if(typeof toast === 'function') toast('Permissões de Relatórios salvas');
-      else alert('Permissões salvas');
-    })
+  _supa.from('app_config').upsert({ key: 'relSubTabPerms', value: out }, { onConflict: 'key' })
+    .then(()=> { if(typeof toast === 'function') toast('Permissões de Relatórios salvas'); else alert('Permissões salvas'); })
     .catch(e => alert('Erro ao salvar: ' + e.message));
 }
 
 function resetRelSubTabPerms(){
   if(!confirm('Restaurar as permissões padrão das sub-abas de Relatórios?')) return;
-  _db.ref('/config/relSubTabPerms').remove()
-    .then(()=> {
-      if(typeof toast === 'function') toast('Permissões de Relatórios restauradas');
-      else alert('Permissões restauradas ao padrão');
-    });
+  _supa.from('app_config').delete().eq('key','relSubTabPerms')
+    .then(()=> { if(typeof toast === 'function') toast('Permissões de Relatórios restauradas'); else alert('Permissões restauradas ao padrão'); });
 }
 
 
