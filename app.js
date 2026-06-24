@@ -3548,7 +3548,7 @@ async function liberarPeca(docId, dateKey){
     if(selb && _solicitacoesPecas){
       const promises = Object.entries(_solicitacoesPecas)
         .filter(([,p]) => (p.selb||'').toUpperCase() === selb.toUpperCase())
-        .map(([id]) => _db.ref('/solicitacoes_pecas/'+id).remove().catch(()=>{}));
+        .map(([id]) => _supa.from('solicitacoes_pecas').delete().eq('id', id).catch(()=>{}));
       await Promise.all(promises);
     }
     
@@ -3612,27 +3612,28 @@ function _tocarAlertaPeca(){
 let _pecasIdsConhecidos = null; // null = primeira carga, não toca
 
 async function startSolicitacoesPecasListener(){
-  if(!_db) return;
-  _db.ref('/solicitacoes_pecas').on('value', snap => {
-    const novo = snap.val() || {};
-
-    // Detectar novas solicitações (apenas para admin, após primeira carga)
+  // Carrega dados iniciais do Supabase
+  async function _reloadSolicitacoes(){
+    const { data } = await _supa.from('solicitacoes_pecas').select('*').order('ts', { ascending: false });
+    const novo = {};
+    (data || []).forEach(r => { novo[r.id] = r.raw || r; });
     if(currentUser && currentUser.isAdmin && _pecasIdsConhecidos !== null){
       const idsNovos = Object.keys(novo).filter(id => !_pecasIdsConhecidos.has(id));
       if(idsNovos.length > 0) _tocarAlertaPeca();
     }
-    // Atualizar conjunto de IDs conhecidos
     _pecasIdsConhecidos = new Set(Object.keys(novo));
-
     _solicitacoesPecas = novo;
     atualizarNotifPecasAdmin();
     atualizarBadgeTopbarPecas();
     if(currentUser && !currentUser.isAdmin) atualizarOpPecaPendente(currentUser.id);
-    // Atualiza painéis de alerta nas views de peças
     if(document.getElementById('view-pecas')?.classList.contains('active')) _renderSolicitacoesPanel('pecas-solicitacoes-panel','');
     if(document.getElementById('subview-pecas-a')?.style.display !== 'none') _renderSolicitacoesPanel('pecas-a-solicitacoes-panel','');
     if(document.getElementById('view-solicitacoes')?.classList.contains('active')) renderSolicitacoesDoDia();
-  });
+  }
+  await _reloadSolicitacoes();
+  _supa.channel('solicitacoes_pecas')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'solicitacoes_pecas' }, _reloadSolicitacoes)
+    .subscribe();
   // Listener Supabase Realtime para config_pecas
   _supa.channel('config_pecas')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'config_pecas' }, async () => {
@@ -3957,7 +3958,9 @@ async function confirmarCadastroSelb(){
       ts: Date.now(),
       lida: false
     };
-    await _db.ref('/solicitacoes_pecas').push(solicitacao);
+    const _solObj = { selb: solicitacao.selb, equipamento: solicitacao.equipamento||null, peca: solicitacao.peca||null, quantidade: solicitacao.quantidade||null, obs: solicitacao.obs||null, uid: solicitacao.uid||null, nome: solicitacao.nome||null, setor: solicitacao.setor||null, ts: solicitacao.ts||Date.now(), lida: false, raw: solicitacao };
+    const { error: _eCS } = await _supa.from('solicitacoes_pecas').insert(_solObj);
+    if(_eCS) throw _eCS;
     document.getElementById('modal-cadastrar-selb')?.remove();
     if(typeof mostrarToastPeca === 'function'){
       mostrarToastPeca('Solicitação de cadastro do SELB ' + selb + ' enviada!');
@@ -3993,15 +3996,9 @@ async function confirmarSolicitarPeca(){
 
   try {
     const promises = _mspLista.map(it => {
-      const solicitacao = {
-        selb, equipamento: equipName, peca: it.peca,
-        quantidade: it.quantidade,
-        obs: it.obs || '', uid, nome: u.name,
-        setor: u.sector, ts: now, lida: false
-      };
-      return _db.ref('/solicitacoes_pecas').push(solicitacao);
+      const sol = { selb, equipamento: equipName, peca: it.peca, quantidade: it.quantidade, obs: it.obs||'', uid, nome: u.name, setor: u.sector, ts: now, lida: false };
+      return _supa.from('solicitacoes_pecas').insert({ ...sol, raw: sol });
     });
-
     await Promise.all(promises);
     closeModal('modal-solicitar-peca');
     atualizarOpPecaPendente(uid);
@@ -4277,10 +4274,7 @@ function atualizarNotifPecasAdmin(){
 }
 
 async function marcarPecaLida(id){
-  try { await _db.ref('/solicitacoes_pecas/'+id).update({lida:true}); } catch(e){}
-}
-async function marcarPecaLida(id){
-  try { await _db.ref('/solicitacoes_pecas/'+id).update({lida:true}); } catch(e){}
+  try { await _supa.from('solicitacoes_pecas').update({ lida: true, raw: {...(_solicitacoesPecas[id]||{}), lida:true} }).eq('id', id); } catch(e){}
 }
 
 // ── Marca/desmarca peça como "já solicitada" via checkbox na tabela ──────────
@@ -4299,7 +4293,7 @@ async function marcarPecaSolicitada(id, checked, checkboxEl){
     }
   }
   try {
-    await _db.ref('/solicitacoes_pecas/'+id).update({ lida: checked });
+    await _supa.from('solicitacoes_pecas').update({ lida: checked, raw: {...(_solicitacoesPecas[id]||{}), lida:checked} }).eq('id', id);
   } catch(e){
     // Reverte visual em caso de erro
     if(checkboxEl){
@@ -4314,7 +4308,7 @@ async function marcarPecaSolicitada(id, checked, checkboxEl){
 async function entregarPeca(id, selb){
   if(!confirm('Confirmar entrega da peça para o SELB ' + selb + '?\n\nO registro será mantido no histórico.')) return;
   try {
-    await _db.ref('/solicitacoes_pecas/'+id).update({ lida: true, entregueTs: Date.now() });
+    await _supa.from('solicitacoes_pecas').update({ lida: true, raw: {...(_solicitacoesPecas[id]||{}), lida:true, entregueTs:Date.now()} }).eq('id', id);
   } catch(e){
     alert('Erro ao confirmar entrega.');
     console.error('entregarPeca error:', e);
@@ -4323,7 +4317,7 @@ async function entregarPeca(id, selb){
 async function removerSolicitacaoPeca(id, selb){
   if(!confirm('Tem certeza que deseja EXCLUIR permanentemente esta solicitação do SELB ' + selb + '?\n\nEsta ação não pode ser desfeita e removerá o registro do histórico.')) return;
   try {
-    await _db.ref('/solicitacoes_pecas/'+id).remove();
+    await _supa.from('solicitacoes_pecas').delete().eq('id', id);
   } catch(e){
     alert('Erro ao excluir solicitação.');
     console.error('removerSolicitacaoPeca error:', e);
@@ -4331,7 +4325,7 @@ async function removerSolicitacaoPeca(id, selb){
 }
 async function marcarTodasPecasLidas(){
   const pendentes=Object.entries(_solicitacoesPecas).filter(([,p])=>!p.lida);
-  for(const [id] of pendentes) await _db.ref('/solicitacoes_pecas/'+id).update({lida:true}).catch(()=>{});
+  for(const [id] of pendentes) await _supa.from('solicitacoes_pecas').update({ lida: true, raw: {...(_solicitacoesPecas[id]||{}), lida:true} }).eq('id', id).catch(()=>{});
 }
 
 function atualizarBadgeTopbarPecas(){
@@ -11703,25 +11697,33 @@ async function confirmarScrapDireto(){
 let _qualRegistros = {};  // cache local
 
 // ── Carrega registros do Firebase e monta o listener em tempo real ──
-function _initQualListener(){
-  if(!_db) return;
-  _db.ref('/qualidade_registros').on('value', snap => {
-    _qualRegistros = snap.val() || {};
+async function _initQualListener(){
+  async function _reloadQualReg(){
+    const { data } = await _supa.from('qualidade_registros').select('*');
+    _qualRegistros = {};
+    (data||[]).forEach(r => { _qualRegistros[r.id] = r.raw || r; });
     _fluxolabScheduleSyncLiberados();
     const view = document.getElementById('view-gaiola-lab');
     if(view && view.classList.contains('active')) renderQualRegistros();
-  });
-  // Listener para LIBERADAS (inseridos manualmente)
-  window._qualLiberadas = window._qualLiberadas || {};
-  _db.ref('/qualidade_liberadas').on('value', snap => {
-    window._qualLiberadas = snap.val() || {};
+  }
+  async function _reloadQualLib(){
+    const { data } = await _supa.from('qualidade_liberadas').select('*');
+    window._qualLiberadas = {};
+    (data||[]).forEach(r => { window._qualLiberadas[r.id] = r.raw || r; });
     _fluxolabScheduleSyncLiberados();
     const view = document.getElementById('view-gaiola-lab');
     if(view && view.classList.contains('active')) renderQualRegistros();
-    // Atualiza painel de listagem se estiver aberto
     const libPanel = document.getElementById('qual-lib-panel-overlay');
     if(libPanel && libPanel.style.display !== 'none' && typeof _qualRenderLiberadasList === 'function') _qualRenderLiberadasList();
-  });
+  }
+  window._qualLiberadas = window._qualLiberadas || {};
+  await Promise.all([_reloadQualReg(), _reloadQualLib()]);
+  _supa.channel('qualidade_registros')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'qualidade_registros' }, _reloadQualReg)
+    .subscribe();
+  _supa.channel('qualidade_liberadas')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'qualidade_liberadas' }, _reloadQualLib)
+    .subscribe();
 }
 
 // Chama o listener quando o app inicializar (após bootApp)
@@ -11876,7 +11878,9 @@ async function salvarQualRegistro(){
   try {
     const btn = document.querySelector('#view-gaiola-lab .bp');
     if(btn){ btn.disabled = true; btn.textContent = 'Salvando...'; }
-    await dbPush('/qualidade_registros', registro);
+    const _qrObj = { selb: registro.selb||null, equipamento: registro.equipamento||null, serie: registro.serie||null, sku: registro.sku||null, contador_pb: registro.contador_pb??null, contador_color: registro.contador_color??null, obs: registro.obs||null, responsavel: registro.responsavel||null, uid: registro.uid||null, ts: registro.ts||Date.now(), date_key: registro.dateKey||null, raw: registro };
+    const { error: _eQR } = await _supa.from('qualidade_registros').insert(_qrObj);
+    if(_eQR) throw _eQR;
 
     // FluxoLAB: ao incluir registro na Qualidade, move o SELB de QUALIDADE → LIBERADAS.
     // O SELB sai de LIBERADAS definitivamente quando a etiqueta for marcada como concluída.
@@ -11908,7 +11912,7 @@ async function excluirQualRegistro(id){
   if(!currentUser || !currentUser.isAdmin){ alert('Apenas administradores podem remover registros.'); return; }
   if(!confirm('Excluir este registro de qualidade?')) return;
   try {
-    await _db.ref('/qualidade_registros/' + id).remove();
+    await _supa.from('qualidade_registros').delete().eq('id', id);
   } catch(e){ alert('Erro ao excluir: ' + e.message); }
 }
 
@@ -11924,11 +11928,9 @@ async function toggleChamadoAberto(id, novoValor){
       ? 'Deseja realmente ABRIR chamado para este registro?'
       : 'Deseja realmente FECHAR o chamado deste registro?';
     if(!confirm(msg)) return;
-    await _db.ref('/qualidade_registros/' + id).update({
-      chamado_aberto: abrir,
-      chamado_aberto_ts: novoValor ? Date.now() : null,
-      chamado_aberto_by: novoValor && currentUser ? currentUser.name : null,
-    });
+    const _patch = { chamado_aberto: abrir, chamado_aberto_ts: novoValor ? Date.now() : null, chamado_aberto_by: novoValor && currentUser ? currentUser.name : null };
+    const _rawTCA = { ...(_qualRegistros[id]||{}), ..._patch };
+    await _supa.from('qualidade_registros').update({ raw: _rawTCA }).eq('id', id);
   } catch(e){ alert('Erro ao atualizar chamado: ' + e.message); }
 }
 
@@ -11964,17 +11966,15 @@ window.toggleEtiquetaImpressaManual = async function(regId, checked, el){
       if(el) el.checked = !checked;
       return;
     }
-    await _db.ref('/qualidade_registros/' + regId).update(
-      checked
-        ? { etiqueta_impressa: true, etiqueta_impressa_ts: Date.now(), etiqueta_impressa_by: currentUser.name || null }
-        : { etiqueta_impressa: false, etiqueta_impressa_ts: null, etiqueta_revertida_ts: Date.now(), etiqueta_revertida_by: currentUser.name || null }
-    );
+    const _etPatch = checked
+      ? { etiqueta_impressa: true, etiqueta_impressa_ts: Date.now(), etiqueta_impressa_by: currentUser.name || null }
+      : { etiqueta_impressa: false, etiqueta_impressa_ts: null, etiqueta_revertida_ts: Date.now(), etiqueta_revertida_by: currentUser.name || null };
+    const _etRaw = { ...(_qualRegistros[regId]||{}), ..._etPatch };
+    await _supa.from('qualidade_registros').update({ raw: _etRaw }).eq('id', regId);
 
     // ── FluxoLAB: SELB sai de LIBERADAS apenas quando etiqueta é marcada como concluída ──
     if(checked){
-      // Busca o registro para obter o SELB
-      const reg = Object.values(_qualRegistros || {}).find(r => r._id === regId || r._key === regId)
-               || await _db.ref('/qualidade_registros/' + regId).once('value').then(s => s.val()).catch(() => null);
+      const reg = _qualRegistros[regId] || null;
       const selbToRelease = reg ? (reg.selb || '') : '';
       if(selbToRelease){
         fluxolabRemoveSelbGlobal(selbToRelease).then(() => {
@@ -11997,16 +11997,12 @@ async function reverterEtiquetaImpressa(id){
       return;
     }
     if(!confirm('Reverter o status de etiqueta IMPRESSA deste registro?\n\nEle voltará a aparecer como pendente de impressão.')) return;
-    await _db.ref('/qualidade_registros/' + id).update({
-      etiqueta_impressa: false,
-      etiqueta_impressa_ts: null,
-      etiqueta_revertida_ts: Date.now(),
-      etiqueta_revertida_by: currentUser ? currentUser.name : null,
-    });
+    const _revPatch = { etiqueta_impressa: false, etiqueta_impressa_ts: null, etiqueta_revertida_ts: Date.now(), etiqueta_revertida_by: currentUser ? currentUser.name : null };
+    const _revRaw = { ...(_qualRegistros[id]||{}), ..._revPatch };
+    await _supa.from('qualidade_registros').update({ raw: _revRaw }).eq('id', id);
 
     // ── FluxoLAB: ao reverter, devolve SELB para bolsão LIBERADAS ──
-    const reg = Object.values(_qualRegistros || {}).find(r => r._id === id || r._key === id)
-             || await _db.ref('/qualidade_registros/' + id).once('value').then(s => s.val()).catch(() => null);
+    const reg = _qualRegistros[id] || null;
     const selbToReturn = reg ? (reg.selb || '') : '';
     if(selbToReturn){
       const selfKey = selbToReturn.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -12346,7 +12342,7 @@ window.qualExcluirRegistro = function(id, selb, equipamento){
     btn.disabled = true;
     btn.textContent = 'Excluindo...';
     try {
-      await _db.ref('/qualidade_registros/' + id).remove();
+      await _supa.from('qualidade_registros').delete().eq('id', id);
       ov.remove();
     } catch(e) {
       btn.disabled = false;
@@ -13799,7 +13795,9 @@ async function scannerSaveRecord(){
 
   try {
     if(submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Registrando...'; }
-    await dbPush('/qualidade_registros', registro);
+    const _qrSc = { selb: registro.selb||null, equipamento: registro.equipamento||null, serie: registro.serie||null, sku: registro.sku||null, contador_pb: registro.contador_pb??null, contador_color: registro.contador_color??null, obs: registro.obs||null, responsavel: registro.responsavel||null, uid: registro.uid||null, ts: registro.ts||Date.now(), date_key: registro.dateKey||null, raw: registro };
+    const { error: _eQRS } = await _supa.from('qualidade_registros').insert(_qrSc);
+    if(_eQRS) throw _eQRS;
 
     // FluxoLAB: registrar via scanner também move SELB de QUALIDADE → LIBERADAS
     if(selb){
@@ -16808,7 +16806,7 @@ function _fluxolabBuildChecklistIndex(){
     if(!key) return;
     if(!confirm('Remover este registro de liberação?')) return;
     try {
-      await _db.ref('/qualidade_liberadas/' + key).remove();
+      await _supa.from('qualidade_liberadas').delete().eq('id', key);
       _qualRenderLiberadasList();
       if(typeof renderQualRegistros === 'function') renderQualRegistros();
     } catch(e){
@@ -16877,13 +16875,9 @@ function _fluxolabBuildChecklistIndex(){
     const ts = Date.now();
     const user = (typeof currentUser !== 'undefined' && currentUser && (currentUser.name || currentUser.email)) || 'sistema';
     try {
-      const ref = _db.ref('/qualidade_liberadas');
-      const updates = {};
-      novos.forEach(n => {
-        const key = ref.push().key;
-        updates[key] = { selb: n.selb, equipamento: n.nome, data: data, ts: ts, user: user };
-      });
-      await ref.update(updates);
+        const inserts = novos.map(n => ({ selb: n.selb, equipamento: n.nome, data: data, ts: ts, user: user, raw: { selb: n.selb, equipamento: n.nome, data, ts, user } }));
+      const { error: _eQL } = await _supa.from('qualidade_liberadas').insert(inserts);
+      if(_eQL) throw _eQL;
       if(typeof fluxolabFinalizarSelb === 'function'){
         for(const n of novos){
           fluxolabFinalizarSelb(n.selb, 'QUALIDADE', 'ok').catch(e =>
@@ -17918,8 +17912,8 @@ window.entregarPecaComCodigo = async function(id, selb) {
   // Lê o registro ANTES de qualquer escrita para aplicar guardas
   var recAtual = null;
   try{
-    var preSnap = await window._db.ref('/solicitacoes_pecas/' + id).once('value');
-    recAtual = preSnap.val() || {};
+    const { data: _spRec } = await _supa.from('solicitacoes_pecas').select('raw').eq('id', id).single();
+    recAtual = (_spRec && _spRec.raw) || _solicitacoesPecas[id] || {};
   }catch(e){
     window._labPopup('Erro ao ler solicitação', String(e.message||e), 'erro');
     return;
@@ -17979,11 +17973,7 @@ window.entregarPecaComCodigo = async function(id, selb) {
   try {
     // Caso sem codigo: confirma entrega manual (marca como lida, sem Supabase)
     if (!codigo) {
-      await window._db.ref('/solicitacoes_pecas/' + id).update({
-        lida:       true,
-        entregueTs: Date.now(),
-        codigoBipe: null
-      });
+      await _supa.from('solicitacoes_pecas').update({ lida: true, raw: {...(_solicitacoesPecas[id]||{}), lida:true, entregueTs:Date.now(), codigoBipe:null} }).eq('id', id);
       if (inputEl) {
         inputEl.style.borderColor = 'rgba(61,214,140,.8)';
         inputEl.value = 'entregue';
@@ -18037,14 +18027,7 @@ window.entregarPecaComCodigo = async function(id, selb) {
     } else {
       // SUCESSO — agora sim marca como lida e salva o codigo bipado
       console.log('[LabTech] Supabase OK:', data);
-      try {
-        await window._db.ref('/solicitacoes_pecas/' + id).update({
-          lida:       true,
-          entregueTs: Date.now(),
-          codigoBipe: codigo
-        });
-      } catch(_){}
-      try { await window._db.ref('/solicitacoes_pecas/' + id + '/_supabaseBaixa').set({ ok: true, ts: Date.now(), payload: payload, resposta: data || null }); } catch(_) {}
+      try { await _supa.from('solicitacoes_pecas').update({ lida: true, raw: {...(_solicitacoesPecas[id]||{}), lida:true, entregueTs:Date.now(), codigoBipe:codigo, _supabaseBaixa:{ok:true,ts:Date.now(),payload,resposta:data||null}} }).eq('id', id); } catch(_){}
       if (inputEl) {
         inputEl.style.borderColor = 'rgba(61,214,140,.8)';
         inputEl.value = codigo;
@@ -18102,7 +18085,7 @@ window.entregarPeca = async function(id, selb){
   // Fallback original sem campo de bipe
   if(!confirm('Confirmar entrega da peça para o SELB ' + selb + '?\n\nO registro será mantido no histórico.')) return;
   try {
-    await window._db.ref('/solicitacoes_pecas/' + id).update({ lida: true, entregueTs: Date.now() });
+    await _supa.from('solicitacoes_pecas').update({ lida: true, raw: {...(_solicitacoesPecas[id]||{}), lida:true, entregueTs:Date.now()} }).eq('id', id);
   } catch(e){
     alert('Erro ao confirmar entrega.');
     console.error('entregarPeca error:', e);
@@ -18830,9 +18813,7 @@ window.renderSolicitacoesDoDia = function(){
     // Ignora entregas pré-boot (com janela de 10 min)
     const DEZ_MINUTOS = 10 * 60 * 1000;
     if(Number(rec.entregueTs) < (_bootTs - DEZ_MINUTOS)) {
-      try{ await window._db.ref('/solicitacoes_pecas/'+id+'/_supabaseBaixa').set({
-        ok:false, skip:true, motivo:'pré-boot', ts: Date.now()
-      }); }catch(_){}
+      try{ await _supa.from('solicitacoes_pecas').update({ raw: {...(_solicitacoesPecas[id]||{}), _supabaseBaixa:{ok:false,skip:true,motivo:'pré-boot',ts:Date.now()}} }).eq('id', id); }catch(_){}
       return;
     }
 
@@ -18853,28 +18834,16 @@ window.renderSolicitacoesDoDia = function(){
       if(data && data.success === false) {
         log('Supabase retornou success: false', data);
         showToast('❌ Erro no Supabase: ' + (data.error || 'Peça não encontrada ou saldo insuficiente.'), true);
-        try{
-          await window._db.ref('/solicitacoes_pecas/'+id+'/_supabaseBaixa').set({
-            ok: false, ts: Date.now(), payload, resposta: data
-          });
-        }catch(_){}
+        try{ await _supa.from('solicitacoes_pecas').update({ raw: {...(_solicitacoesPecas[id]||{}), _supabaseBaixa:{ok:false,ts:Date.now(),payload,resposta:data}} }).eq('id', id); }catch(_){}
       } else {
         log('Baixa OK', data);
         showToast('✅ Baixa realizada no Supabase com sucesso!', false);
-        try{
-          await window._db.ref('/solicitacoes_pecas/'+id+'/_supabaseBaixa').set({
-            ok: true, ts: Date.now(), payload, resposta: data || null
-          });
-        }catch(_){}
+        try{ await _supa.from('solicitacoes_pecas').update({ raw: {...(_solicitacoesPecas[id]||{}), _supabaseBaixa:{ok:true,ts:Date.now(),payload,resposta:data||null}} }).eq('id', id); }catch(_){}
       }
     }catch(err){
       console.error('[Supabase-Integração] Falha na baixa', id, err);
       showToast('❌ Falha na conexão com Supabase: ' + String(err.message || err), true);
-      try{
-        await window._db.ref('/solicitacoes_pecas/'+id+'/_supabaseBaixa').set({
-          ok: false, ts: Date.now(), payload, erro: String(err && err.message || err)
-        });
-      }catch(_){}
+      try{ await _supa.from('solicitacoes_pecas').update({ raw: {...(_solicitacoesPecas[id]||{}), _supabaseBaixa:{ok:false,ts:Date.now(),payload,erro:String(err&&err.message||err)}} }).eq('id', id); }catch(_){}
     }finally{
       _emAndamento.delete(id);
     }
@@ -18897,10 +18866,10 @@ window.renderSolicitacoesDoDia = function(){
   // ── Função de teste / reprocessamento manual ──────────────────────────
   window.baixarNoSupabaseManual = async function(idOuPayload){
     if(typeof idOuPayload === 'string'){
-      const snap = await window._db.ref('/solicitacoes_pecas/'+idOuPayload).once('value');
-      const rec = snap.val();
+      const { data: _bsmRec } = await _supa.from('solicitacoes_pecas').select('raw').eq('id', idOuPayload).single();
+      const rec = (_bsmRec && _bsmRec.raw) || null;
       if(!rec) return console.warn('Solicitação não encontrada:', idOuPayload);
-      if(rec._supabaseBaixa) await window._db.ref('/solicitacoes_pecas/'+idOuPayload+'/_supabaseBaixa').remove();
+      if(rec._supabaseBaixa) await _supa.from('solicitacoes_pecas').update({ raw: {...rec, _supabaseBaixa:null} }).eq('id', idOuPayload);
       _ultimoProcessamento.delete(idOuPayload);
       return processarSolicitacao(idOuPayload, rec);
     }
@@ -19116,17 +19085,16 @@ window.renderSolicitacoesDoDia = function(){
           return;
         }
 
-        await _db.ref('/qualidade_registros/' + regId).update(
-          checked
-            ? { etiqueta_impressa: true,  etiqueta_impressa_ts: Date.now(), etiqueta_impressa_by: currentUser.name || null }
-            : { etiqueta_impressa: false, etiqueta_impressa_ts: null, etiqueta_revertida_ts: Date.now(), etiqueta_revertida_by: currentUser.name || null }
-        );
+        const _pcpPatch = checked
+          ? { etiqueta_impressa: true, etiqueta_impressa_ts: Date.now(), etiqueta_impressa_by: currentUser.name || null }
+          : { etiqueta_impressa: false, etiqueta_impressa_ts: null, etiqueta_revertida_ts: Date.now(), etiqueta_revertida_by: currentUser.name || null };
+        const _pcpRaw = { ...(_qualRegistros[regId]||{}), ..._pcpPatch };
+        await _supa.from('qualidade_registros').update({ raw: _pcpRaw }).eq('id', regId);
 
         // ── FluxoLAB: SELB sai de LIBERADAS quando etiqueta marcada como concluída ──
         if (checked) {
           try {
-            const reg = Object.values(_qualRegistros || {}).find(r => r._id === regId || r._key === regId)
-                     || await _db.ref('/qualidade_registros/' + regId).once('value').then(s => s.val()).catch(() => null);
+            const reg = _qualRegistros[regId] || null;
             if (reg && reg.selb) {
               const selb = String(reg.selb).toUpperCase().trim();
               const bolsaoRef = _db.ref('/fluxolab/LIBERADAS');
