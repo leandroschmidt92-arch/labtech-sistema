@@ -11,9 +11,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <style>
@@ -2959,6 +2957,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.19.1/umd/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="firebase-compat-shim.js"></script>
 <script src="app.js?v=5"></script>
 
 <!-- ═══ ALERTA FIXO: SELB EM ANDAMENTO (Complexa / Montagem / Limpeza) ═══ -->
@@ -3403,8 +3402,8 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
   /* ── Firebase listener ── */
   function _connect(tries) {
     tries = tries||0;
-    if (typeof firebase!=='undefined' && firebase.database) {
-      _fbRef = firebase.database().ref(FB_PATH);
+    if (typeof window._db !== 'undefined') {
+      _fbRef = window._db.ref(FB_PATH);
       _fbRef.on('value', function(snap){ _apply(snap.val()); });
     } else if (tries<80) {
       setTimeout(function(){ _connect(tries+1); }, 250);

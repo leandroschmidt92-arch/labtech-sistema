@@ -258,27 +258,18 @@ function _fluxolabRenderLog() {
 }
 
 // ════════════════════════════════════════
-// FIREBASE — SDK compat (funciona em file://, HTTP e HTTPS)
+// SUPABASE — substitui o antigo Firebase Realtime Database
 // ════════════════════════════════════════
-const _fbConfig = (function(){
-  const _a = ['AIzaSyAVeYLHd','mBEjYUitYI-f7','FCykV80XynguY'].join('');
-  const _b = ['sistema-selbe','tti.firebase','app.com'].join('');
-  const _c = ['https://sistema-s','elbetti-default-r','tdb.firebaseio.com'].join('');
-  const _d = ['sistema','-selbetti'].join('');
-  const _e = ['sistema-selbe','tti.firebase','storage.app'].join('');
-  const _f = ['38596','3162','199'].join('');
-  const _g = ['1:38596316219','9:web:004f8a758','8beabcc090112'].join('');
-  return { apiKey:_a, authDomain:_b, databaseURL:_c, projectId:_d, storageBucket:_e, messagingSenderId:_f, appId:_g };
-})();
-firebase.initializeApp(_fbConfig);
-const _db = firebase.database();
-window._db = _db; // exposto globalmente para os patches de integração
-
-// ── Supabase client ──────────────────────────────────────────────────
 const _SB_URL = 'https://wpawjyqjrzzleojzejuw.supabase.co';
 const _SB_KEY = 'sb_publishable__E3zdLreHCt3sQ0GYPe3vA_I8DLW5PLdpuVL7xfvFVA'; // publishable key
 const _supa   = window.supabase.createClient(_SB_URL, _SB_KEY);
-// ────────────────────────────────────────────────────────────────────
+
+// Shim de compatibilidade: mantém a mesma API que o resto do app já usa
+// (_db.ref(path).push/set/update/remove/on('value')/once('value')/child())
+// mas tudo é lido e gravado no Supabase.
+const _db = createFirebaseCompatShim(_supa);
+window._db = _db; // exposto globalmente para os patches de integração
+
 
 // publishNewVersion removida por segurança
 
@@ -981,18 +972,19 @@ document.addEventListener('DOMContentLoaded', function(){
   bootApp();
   liveClock();
 
-  // ── Firebase Auth state listener ──────────────────────────────────────────
-  firebase.auth().onAuthStateChanged(function(firebaseUser){
-    if(firebaseUser && !currentUser){
+  // ── Supabase Auth state listener ──────────────────────────────────────────
+  _supa.auth.onAuthStateChange(function(_event, session){
+    const sbUser = session && session.user;
+    if(sbUser && !currentUser){
       document.getElementById('al-user').value = '';
       document.getElementById('al-pass').value = '';
       document.getElementById('al-error').textContent = '';
       if(_bootReady){
         // Boot already done — login immediately
-        loginAs({id: firebaseUser.uid, name: 'Laboratório', sector: 'admin', isAdmin: true});
+        loginAs({id: sbUser.id, name:'Laboratório', sector:'admin', isAdmin: true});
       } else {
         // Boot still running — queue the login for when boot finishes
-        _pendingFirebaseUser = firebaseUser;
+        _pendingFirebaseUser = sbUser;
       }
     }
   });
@@ -1271,12 +1263,13 @@ async function adminLogin(){
   errEl.textContent = '';
 
   try {
-    await firebase.auth().signInWithEmailAndPassword(email, p);
-    // onAuthStateChanged will call loginAs after successful sign-in
+    const { error } = await _supa.auth.signInWithPassword({ email, password: p });
+    if (error) throw error;
+    // onAuthStateChange chamará loginAs após login bem-sucedido
   } catch(err) {
-    const msg = err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found'
+    const msg = err.message && err.message.toLowerCase().includes('invalid')
       ? 'Usuário ou senha incorretos.'
-      : err.code === 'auth/too-many-requests'
+      : err.message && err.message.toLowerCase().includes('rate')
       ? 'Muitas tentativas. Tente novamente mais tarde.'
       : 'Erro: ' + err.message;
     errEl.textContent = msg;
@@ -1387,7 +1380,7 @@ function loginAs(u){
   document.getElementById('admin-cred').classList.remove('open');
 }
 function logout(){
-  firebase.auth().signOut().catch(()=>{});
+  _supa.auth.signOut().catch(()=>{});
   currentUser=null; pv=''; updPD();
   _consultaDateKey = null;
   _consultaRecords = [];
@@ -11661,7 +11654,7 @@ async function confirmarScrapDireto(){
       _direto: true
     };
 
-    const key = firebase.database().ref('/history/'+dateKey).push().key;
+    const key = window._db.ref('/history/'+dateKey).push().key;
     await dbUpdateHistory(key, dateKey, rec);
 
     // ── FluxoLAB: remove SELB de todos os bolsões ao registrar SCRAP ──
@@ -17377,12 +17370,12 @@ function _fluxolabBuildChecklistIndex(){
       }
     }catch(_){}
 
-    if(typeof firebase === 'undefined' || !firebase.database){
-      renderResultado(selb, [], localAtual, 'Firebase indisponível');
+    if(typeof window._db === 'undefined'){
+      renderResultado(selb, [], localAtual, 'Banco indisponível');
       return;
     }
 
-    firebase.database().ref('/fluxolab_log')
+    window._db.ref('/fluxolab_log')
       .orderByChild('selb').equalTo(selb)
       .once('value')
       .then(function(snap){
@@ -19773,7 +19766,7 @@ window._copiarSelb = function (selb, btn) {
 
   // ── Espera o app principal carregar ──────────────────────────────
   function whenReady(cb){
-    if(typeof firebase !== 'undefined' && firebase.database &&
+    if(typeof window._db !== 'undefined' &&
        typeof users !== 'undefined' && typeof loginAs === 'function'){
       cb();
     } else {
@@ -19817,7 +19810,7 @@ window._copiarSelb = function (selb, btn) {
 
   // ── Firebase: leitura dos descritores cadastrados ────────────────
   function subscribeDescriptors(){
-    const ref = firebase.database().ref('faceAuth');
+    const ref = window._db.ref('faceAuth');
     ref.on('value', snap => {
       const val = snap.val() || {};
       descriptors = {};
@@ -19840,7 +19833,7 @@ window._copiarSelb = function (selb, btn) {
   }
 
   async function saveDescriptor(user, descriptor){
-    await firebase.database().ref('faceAuth/'+user.id).set({
+    await window._db.ref('faceAuth/'+user.id).set({
       name: user.name,
       pin:  user.pin || '',
       descriptor: Array.from(descriptor),
@@ -19849,7 +19842,7 @@ window._copiarSelb = function (selb, btn) {
   }
 
   async function deleteDescriptor(uid){
-    await firebase.database().ref('faceAuth/'+uid).remove();
+    await window._db.ref('faceAuth/'+uid).remove();
   }
 
   // ── Câmera ───────────────────────────────────────────────────────
@@ -20587,8 +20580,8 @@ window._copiarSelb = function (selb, btn) {
   /* ── Firebase listener ── */
   function _connect(tries) {
     tries = tries||0;
-    if (typeof firebase!=='undefined' && firebase.database) {
-      _fbRef = firebase.database().ref(FB_PATH);
+    if (typeof window._db !== 'undefined') {
+      _fbRef = window._db.ref(FB_PATH);
       _fbRef.on('value', function(snap){ _apply(snap.val()); });
       if (!_checkInterval) _checkInterval = setInterval(_checkRecurring, 10000); // checa a cada 10s
     } else if (tries<80) {
