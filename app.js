@@ -261,7 +261,7 @@ function _fluxolabRenderLog() {
 // SUPABASE — substitui o antigo Firebase Realtime Database
 // ════════════════════════════════════════
 const _SB_URL = 'https://wpawjyqjrzzleojzejuw.supabase.co';
-const _SB_KEY = 'sb_publishable__E3zdLreHCt3sQ0GYPe3vA_I8DLW5PLdpuVL7xfvFVA'; // publishable key
+const _SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwYXdqeXFqcnp6bGVvanplanV3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE4OTI1ODMsImV4cCI6MjA5NzQ2ODU4M30.7HRgwO-KiV5ZTCzOA2DPkFgARrcMUYoQrSGrZirIoss'; // anon public key
 const _supa   = window.supabase.createClient(_SB_URL, _SB_KEY);
 
 // Shim de compatibilidade: mantém a mesma API que o resto do app já usa
@@ -976,9 +976,12 @@ document.addEventListener('DOMContentLoaded', function(){
   _supa.auth.onAuthStateChange(function(_event, session){
     const sbUser = session && session.user;
     if(sbUser && !currentUser){
-      document.getElementById('al-user').value = '';
-      document.getElementById('al-pass').value = '';
-      document.getElementById('al-error').textContent = '';
+      const elUser = document.getElementById('al-user');
+      const elPass = document.getElementById('al-pass');
+      const elErr  = document.getElementById('al-error');
+      if(elUser) elUser.value = '';
+      if(elPass) elPass.value = '';
+      if(elErr)  elErr.textContent = '';
       if(_bootReady){
         // Boot already done — login immediately
         loginAs({id: sbUser.id, name:'Laboratório', sector:'admin', isAdmin: true});
@@ -1249,33 +1252,36 @@ function pinEnter(){
   pv=''; updPD();
 }
 async function adminLogin(){
-  const emailRaw = document.getElementById('al-user').value.trim();
-  const p        = document.getElementById('al-pass').value;
-  const errEl    = document.getElementById('al-error');
-  const btn      = document.querySelector('.al-btn');
+  const elUser = document.getElementById('al-user');
+  const elPass = document.getElementById('al-pass');
+  const errEl  = document.getElementById('al-error');
+  const btn    = document.querySelector('.al-btn');
 
-  if(!emailRaw || !p){ errEl.textContent='Preencha e-mail e senha.'; return; }
+  if(!elUser || !elPass) return;
+  const emailRaw = elUser.value.trim();
+  const p        = elPass.value;
 
-  const email = emailRaw;
+  if(!emailRaw || !p){ if(errEl) errEl.textContent='Preencha e-mail e senha.'; return; }
 
-  btn.textContent = 'Entrando…';
-  btn.disabled = true;
-  errEl.textContent = '';
+  if(btn) { btn.textContent = 'Entrando…'; btn.disabled = true; }
+  if(errEl) errEl.textContent = '';
 
   try {
-    const { error } = await _supa.auth.signInWithPassword({ email, password: p });
+    const { error } = await _supa.auth.signInWithPassword({ email: emailRaw, password: p });
     if (error) throw error;
     // onAuthStateChange chamará loginAs após login bem-sucedido
   } catch(err) {
+    console.error('[Supabase Auth Error]', err);
     const msg = err.message && err.message.toLowerCase().includes('invalid')
       ? 'Usuário ou senha incorretos.'
+      : err.message && err.message.toLowerCase().includes('email')
+      ? 'E-mail não confirmado. Verifique sua caixa de entrada.'
       : err.message && err.message.toLowerCase().includes('rate')
       ? 'Muitas tentativas. Tente novamente mais tarde.'
-      : 'Erro: ' + err.message;
-    errEl.textContent = msg;
+      : err.message || 'Erro ao realizar login.';
+    if(errEl) errEl.textContent = msg;
   } finally {
-    btn.textContent = 'Entrar como Admin';
-    btn.disabled = false;
+    if(btn) { btn.textContent = 'Entrar como Admin'; btn.disabled = false; }
   }
 }
 
