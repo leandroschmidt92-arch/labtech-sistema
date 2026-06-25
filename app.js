@@ -9246,11 +9246,11 @@ async function loadEquipamentos(){
   equipamentos = {};
   (r1.data || []).forEach(e => { equipamentos[e.id] = (e.raw && e.raw.nome) ? e.raw.nome : e.id; });
   _equipSeries = {};
-  (r2.data || []).forEach(e => { _equipSeries[e.id] = e.raw; });
+  (r2.data || []).forEach(e => { _equipSeries[e.id] = (e.raw && e.raw.serie) ? e.raw.serie : e.raw; });
   _equipSkus = {};
-  (r3.data || []).forEach(e => { _equipSkus[e.id] = e.raw; });
+  (r3.data || []).forEach(e => { _equipSkus[e.id] = (e.raw && e.raw.sku) ? e.raw.sku : e.raw; });
   _equipUnitizadores = {};
-  (r4.data || []).forEach(e => { _equipUnitizadores[e.id] = e.raw; });
+  (r4.data || []).forEach(e => { _equipUnitizadores[e.id] = (e.raw && e.raw.unitizador) ? e.raw.unitizador : e.raw; });
 }
 
 // Helper de normalização global para busca tolerante de SELBs
