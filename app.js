@@ -64,6 +64,10 @@
     appLayer.removeAttribute('aria-hidden');
     appLayer.inert = false;
   }
+  // Expõe globalmente para que loginAs/logout possam chamar direto,
+  // sem depender do hook por polling abaixo (que tem uma corrida).
+  window.lockAppFocus = lockAppFocus;
+  window.unlockAppFocus = unlockAppFocus;
 
   // Bloqueia Tab e Enter enquanto a tela de login estiver visível
   document.addEventListener('keydown', function(e){
@@ -1324,6 +1328,11 @@ function loginAs(u){
   _consultaDateKey = new Date().toDateString().replace(/ /g,'_');
   document.getElementById('layer-login').classList.add('hidden');
   document.getElementById('layer-app').classList.add('visible');
+  // Garante o desbloqueio de foco/clique do app, sem depender do hook por
+  // polling (que pode perder a corrida se loginAs for chamado muito rápido,
+  // ex: login automático de sessão salva no boot — causava tela travada
+  // que aceitava nada de clique mas o relógio continuava rodando).
+  if(typeof unlockAppFocus === 'function') unlockAppFocus();
 
   if(isDesMem){
     // Abre direto na tela de Relatórios no sub-tab SCRAP
