@@ -1742,13 +1742,15 @@ function getAvgModeloCard(equipName, sector){
     )
     .map(h => {
       const s = calcDuracaoLiquida(h);
-      // Para MONTAGEM e LIMPEZA: registros > 150min entram com cap de 150min
+      // Para MONTAGEM e LIMPEZA: registros > 150min entram com cap de 150min,
+      // exceto acima de 6h, que são descartados (outlier extremo) — igual ao relatório.
+      if(isMontLimp && s > 6 * 3600) return -1; // marca para descarte abaixo
       if(isMontLimp && s > _MONT_LIMP_MAX) return _MONT_LIMP_MAX;
       return s;
     })
     .filter(s => {
       if(!s || s <= 0) return false;
-      if(isMontLimp) return s > _MONT_LIMP_MIN; // exclui abaixo de 15min; acima de 150min já foi capado
+      if(isMontLimp) return s > _MONT_LIMP_MIN; // exclui abaixo de 15min; acima de 150min já foi capado/descartado
       return true;
     });
   if(!tempos.length) return '—';
@@ -3062,11 +3064,11 @@ function updateTpb(uid, sec){
   const isMontLimp = u && (u.sector === 'MONTAGEM' || u.sector === 'LIMPEZA');
   const recs = history.filter(h => {
     if(h.equipamento !== mn || h.status !== 'ok' || !h.duracao) return false;
-    if(isMontLimp){ const sc2 = calcDuracaoLiquida(h); return sc2 > 300 && sc2 < 9000; }
+    if(isMontLimp){ return calcDuracaoParaMedia(h) > 0; }
     return true;
   });
   if(!recs.length) return;
-  const avgSec = calcAverage(recs, calcDuracaoLiquida);
+  const avgSec = calcAverage(recs, calcDuracaoParaMedia);
   if(avgSec <= 0) return;
   const ratio = sec / avgSec;
   const over  = ratio >= 1;
@@ -4311,18 +4313,20 @@ async function marcarPecaSolicitada(id, checked, checkboxEl){
 async function entregarPeca(id, selb){
   if(!confirm('Confirmar entrega da peça para o SELB ' + selb + '?\n\nO registro será mantido no histórico.')) return;
   try {
-    await _supa.from('solicitacoes_pecas').update({ lida: true, raw: {...(_solicitacoesPecas[id]||{}), lida:true, entregueTs:Date.now()} }).eq('id', id);
+    const { error } = await _supa.from('solicitacoes_pecas').update({ lida: true, raw: {...(_solicitacoesPecas[id]||{}), lida:true, entregueTs:Date.now()} }).eq('id', id);
+    if(error) throw error;
   } catch(e){
-    alert('Erro ao confirmar entrega.');
+    alert('Erro ao confirmar entrega: ' + (e.message || 'sem permissão (verifique a policy RLS de UPDATE na tabela solicitacoes_pecas)'));
     console.error('entregarPeca error:', e);
   }
 }
 async function removerSolicitacaoPeca(id, selb){
   if(!confirm('Tem certeza que deseja EXCLUIR permanentemente esta solicitação do SELB ' + selb + '?\n\nEsta ação não pode ser desfeita e removerá o registro do histórico.')) return;
   try {
-    await _supa.from('solicitacoes_pecas').delete().eq('id', id);
+    const { error } = await _supa.from('solicitacoes_pecas').delete().eq('id', id);
+    if(error) throw error;
   } catch(e){
-    alert('Erro ao excluir solicitação.');
+    alert('Erro ao excluir solicitação: ' + (e.message || 'sem permissão (verifique a policy RLS de DELETE na tabela solicitacoes_pecas)'));
     console.error('removerSolicitacaoPeca error:', e);
   }
 }
@@ -6770,7 +6774,7 @@ function renderUsuarioRel(){
     const totalProfs  = profs.length;
     const totalRecs   = allRecs.length;
     const totalModels = globalModelMap.size;
-    const allSecs     = allRecs.map(h => calcDuracaoLiquida(h)).filter(s=>s>0);
+    const allSecs     = allRecs.map(h => calcDuracaoParaMedia(h)).filter(s=>s>0);
     const avgGeral    = calcAverage(allSecs);
     const mkKpi = (lbl, val, color) =>
       `<div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px 16px">
