@@ -4325,6 +4325,15 @@ async function removerSolicitacaoPeca(id, selb){
   try {
     const { error } = await _supa.from('solicitacoes_pecas').delete().eq('id', id);
     if(error) throw error;
+    // ── Atualiza cache local imediatamente, sem esperar o Realtime ──
+    if(_solicitacoesPecas && _solicitacoesPecas[id]) delete _solicitacoesPecas[id];
+    atualizarBadgeTopbarPecas();
+    atualizarNotifPecasAdmin();
+    if(currentUser && !currentUser.isAdmin) atualizarOpPecaPendente(currentUser.id);
+    if(document.getElementById('view-pecas')?.classList.contains('active'))       _renderSolicitacoesPanel('pecas-solicitacoes-panel','');
+    if(document.getElementById('subview-pecas-a')?.style.display !== 'none')      _renderSolicitacoesPanel('pecas-a-solicitacoes-panel','');
+    if(document.getElementById('view-solicitacoes')?.classList.contains('active')) renderSolicitacoesDoDia();
+    renderPecasView();
   } catch(e){
     alert('Erro ao excluir solicitação: ' + (e.message || 'sem permissão (verifique a policy RLS de DELETE na tabela solicitacoes_pecas)'));
     console.error('removerSolicitacaoPeca error:', e);
