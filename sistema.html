@@ -613,12 +613,6 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <h2>Gerenciar usuários</h2>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn-add" onclick="openNewUser()">+ Novo usuário</button>
-        <button onclick="openZerarDia()" style="background:rgba(242,87,87,.12);border:1px solid rgba(242,87,87,.3);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 14px;cursor:pointer;color:var(--danger)">🗑️ Zerar dia</button>
-        <button onclick="exportarBackup()" style="background:rgba(61,214,140,.12);border:1px solid rgba(61,214,140,.3);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 14px;cursor:pointer;color:var(--accent2)">💾 Backup</button>
-        <button onclick="listarBackups()" style="background:rgba(79,142,247,.12);border:1px solid rgba(79,142,247,.3);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 14px;cursor:pointer;color:var(--accent)">📂 Restaurar backup</button>
-        <button onclick="resetConfig()" style="background:rgba(245,166,35,.12);border:1px solid rgba(245,166,35,.3);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 14px;cursor:pointer;color:var(--warn)">🔥 Firebase</button>
-        <button onclick="restaurarCanceladosIndevidos()" style="background:rgba(61,214,140,.12);border:1px solid rgba(61,214,140,.3);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 14px;cursor:pointer;color:var(--accent2)">🔧 Restaurar cancelados</button>
-        <button id="btn-sync-all" onclick="sincronizarTodosTempos()" style="background:rgba(61,214,140,.15);border:1px solid var(--accent2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:700;padding:8px 14px;cursor:pointer;color:var(--accent2)">✨ Sincronizar Tudo</button>
         <button onclick="openGerenciarSetores()" style="background:rgba(167,139,250,.12);border:1px solid rgba(167,139,250,.4);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 14px;cursor:pointer;color:var(--purple)">🏷️ Setores</button>
       </div>
     </div>
@@ -2808,6 +2802,19 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     <label class="flbl">Setor</label>
     <select class="sel" id="mu-sector">
       <!-- Opções injetadas dinamicamente por _renderMuSectorOpts() -->
+    </select>
+    <label class="flbl">Linha de Trabalho <span style="font-size:10px;color:var(--muted);font-weight:400">(FluxoLAB — opcional)</span></label>
+    <select class="sel" id="mu-linha">
+      <option value="">Nenhuma (padrão do setor)</option>
+      <option value="LINHA_1">🔢 Linha 1</option>
+      <option value="LINHA_2">🔢 Linha 2</option>
+      <option value="LINHA_3">🔢 Linha 3</option>
+      <option value="LINHA_4">🔢 Linha 4</option>
+      <option value="LINHA_5">🔢 Linha 5</option>
+      <option value="LINHA_6">🔢 Linha 6</option>
+      <option value="LINHA_7">🔢 Linha 7</option>
+      <option value="LINHA_8">🔢 Linha 8</option>
+      <option value="LINHA_9">🔢 Linha 9</option>
     </select>
     <div class="merr" id="mu-err"></div>
     <div class="mbtns">

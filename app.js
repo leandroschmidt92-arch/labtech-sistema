@@ -411,6 +411,16 @@ function applyUserSnapshot(freshUsers){
       s._activeFrom    = null;
       s._pauseAccum = 0; s._pausedAt = null;
 
+    } else if(status === 'aguardando'){
+      s.status     = 'aguardando';
+      s.selb       = fu._selb || s.selb || null;
+      const hAg    = history.find(h => h.uid === fu.id && h.status === 'aguardando');
+      s.startEpoch = (hAg && hAg.startEpoch) || fu._startEpoch || s.startEpoch || null;
+      s.meta       = 60;
+      s._frozenElapsed = (fu._frozenElapsed != null) ? fu._frozenElapsed : (s._frozenElapsed || 0);
+      s._activeFrom    = null;
+      s._pauseAccum = 0; s._pausedAt = null;
+
     } else {
       s.status         = 'idle';
       s.selb           = null;
@@ -1470,9 +1480,9 @@ async function opSyncFromFirebase(uid){
     const s = getS(uid);
     const fbStatus = fbUser._status || 'idle';
 
-    if(fbStatus === 'running'){
+    if(fbStatus === 'running' && fbUser._selb){
       s.status         = 'running';
-      s.selb           = fbUser._selb || s.selb || null;
+      s.selb           = fbUser._selb;
       if(fbUser._startEpoch) s.startEpoch = fbUser._startEpoch;
       // ── Protege timer local: só aplica _activeFrom/_frozenElapsed do Firebase
       // quando o timer local ainda não foi iniciado (primeira carga).
@@ -1482,9 +1492,15 @@ async function opSyncFromFirebase(uid){
         s._frozenElapsed = (fbUser._frozenElapsed != null) ? fbUser._frozenElapsed : (s._frozenElapsed || 0);
         s._activeFrom    = (fbUser._activeFrom    != null) ? fbUser._activeFrom    : (s._activeFrom  || Date.now());
       }
-    } else if(fbStatus === 'paused'){
+    } else if(fbStatus === 'paused' && fbUser._selb){
       s.status         = 'paused';
-      s.selb           = fbUser._selb || s.selb || null;
+      s.selb           = fbUser._selb;
+      if(fbUser._startEpoch) s.startEpoch = fbUser._startEpoch;
+      s._frozenElapsed = fbUser._frozenElapsed != null ? fbUser._frozenElapsed : (s._frozenElapsed||0);
+      s._activeFrom    = null;
+    } else if(fbStatus === 'aguardando' && fbUser._selb){
+      s.status         = 'aguardando';
+      s.selb           = fbUser._selb;
       if(fbUser._startEpoch) s.startEpoch = fbUser._startEpoch;
       s._frozenElapsed = fbUser._frozenElapsed != null ? fbUser._frozenElapsed : (s._frozenElapsed||0);
       s._activeFrom    = null;
@@ -1508,10 +1524,12 @@ function opRenderState(uid){
     return;
   }
 
-  document.getElementById('op-idle').style.display    = 'none';
-  document.getElementById('op-checking').style.display= 'none';
-  document.getElementById('op-running').style.display = 'none';
-  document.getElementById('op-paused').style.display  = 'none';
+  document.getElementById('op-idle').style.display       = 'none';
+  document.getElementById('op-checking').style.display    = 'none';
+  document.getElementById('op-running').style.display     = 'none';
+  document.getElementById('op-paused').style.display      = 'none';
+  const opAg = document.getElementById('op-aguardando');
+  if(opAg) opAg.style.display = 'none';
 
   if(s.status === 'running'){
     document.getElementById('op-running').style.display = 'block';
@@ -1525,6 +1543,19 @@ function opRenderState(uid){
   } else if(s.status === 'paused'){
     document.getElementById('op-paused').style.display = 'block';
     document.getElementById('op-paused-selb').textContent = s.selb || '—';
+  } else if(s.status === 'aguardando'){
+    if(opAg) opAg.style.display = 'block';
+    const agSelb  = document.getElementById('op-ag-selb');
+    const agEquip = document.getElementById('op-ag-equip');
+    const agPecas = document.getElementById('op-ag-pecas');
+    if(agSelb)  agSelb.textContent  = s.selb || '—';
+    if(agEquip) agEquip.textContent = getEquipName(s.selb||'') || '';
+    if(agPecas){
+      const pends = Object.values(_solicitacoesPecas||{}).filter(p=>p.uid===uid && p.selb===s.selb && !p.lida);
+      agPecas.innerHTML = pends.length
+        ? pends.map(p=>`<div style="padding:3px 0">🔩 <b style="color:var(--text)">${p.peca||'—'}</b>${p.quantidade>1?` <span style="color:var(--warn);font-weight:700">×${p.quantidade}</span>`:''}</div>`).join('')
+        : '<span style="color:var(--muted)">Peças em rota…</span>';
+    }
   } else {
     document.getElementById('op-idle').style.display = 'block';
   }
@@ -1585,15 +1616,21 @@ async function opIniciarSelb(){
   try {
     // Consulta Firebase — fonte de verdade
     const fbUser = await dbGet('/users/'+uid);
-    if(fbUser && (fbUser._status === 'running' || fbUser._status === 'paused')){
-      // Já tem SELB ativo no Firebase — sincroniza e mostra
-      const s = getS(uid);
-      s.status = fbUser._status;
-      s.selb = fbUser._selb || null;
-      if(fbUser._startEpoch) s.startEpoch = fbUser._startEpoch;
-      document.getElementById('op-checking').style.display = 'none';
-      opRenderState(uid);
-      return;
+    if(fbUser && (fbUser._status === 'running' || fbUser._status === 'paused' || fbUser._status === 'aguardando')){
+      if(fbUser._selb){
+        // Já tem SELB ativo no Firebase — sincroniza e mostra
+        const s = getS(uid);
+        s.status = fbUser._status;
+        s.selb = fbUser._selb;
+        if(fbUser._startEpoch) s.startEpoch = fbUser._startEpoch;
+        if(fbUser._frozenElapsed != null) s._frozenElapsed = fbUser._frozenElapsed;
+        document.getElementById('op-checking').style.display = 'none';
+        opRenderState(uid);
+        return;
+      } else {
+        // Correção defensiva: se o status diz ativo mas o selb está nulo/vazio, força o reset do nó do usuário
+        await dbPatch('/users/'+uid, { _status: 'idle', _selb: null }).catch(()=>{});
+      }
     }
   } catch(e){}
 
@@ -1608,6 +1645,64 @@ async function opFinalizarSelb(){
   if(!currentUser) return;
   const uid = currentUser.id;
   openFin(uid);
+}
+
+async function opFinalizarAguardando(){
+  if(!currentUser) return;
+  const uid = currentUser.id;
+  const s = getS(uid);
+  const selb = s.selb;
+  if(!selb) return;
+
+  // Perguntar se deseja retomar trabalho ou finalizar o SELB
+  const retomar = confirm(`Você recebeu a peça do SELB ${selb}.\n\nClique em OK para RETOMAR o trabalho (o timer continuará rodando) ou em Cancelar para ir para a tela de FINALIZAÇÃO do SELB.`);
+
+  const now = Date.now();
+
+  // Atualiza estado local e no Firebase para 'running'
+  s.status = 'running';
+  s._activeFrom = now;
+  s._pausedAt = null;
+
+  await dbPatch('/users/' + uid, {
+    _status: 'running',
+    _activeFrom: now,
+    _pausedAt: null
+  }).catch(()=>{});
+
+  // Atualiza o registro de histórico ativo de volta para 'running'
+  const hAtivo = history.find(h => h.uid === uid && h.selb === selb && h.status === 'aguardando');
+  if(hAtivo && hAtivo._docId && hAtivo._dateKey){
+    await dbUpdateHistory(hAtivo._docId, hAtivo._dateKey, {
+      status: 'running',
+      end: null,
+      endEpoch: null,
+      duracao: null
+    }).catch(()=>{});
+    hAtivo.status = 'running';
+    hAtivo.end = null;
+    hAtivo.endEpoch = null;
+    hAtivo.duracao = null;
+  }
+
+  // Remove solicitações de peças pendentes no Supabase
+  if(typeof _solicitacoesPecas !== 'undefined'){
+    const promises = Object.entries(_solicitacoesPecas)
+      .filter(([,p]) => p.uid === uid && (p.selb||'').toUpperCase() === selb.toUpperCase() && !p.lida)
+      .map(([id]) => _supa.from('solicitacoes_pecas').delete().eq('id', id).catch(()=>{}));
+    await Promise.all(promises);
+  }
+
+  // Reinicia o timer no Admin
+  startTimer(uid);
+
+  // Atualiza tela do operador
+  opRenderState(uid);
+
+  // Se escolheu finalizar, abre o modal de finalização correspondente
+  if(!retomar){
+    openFin(uid);
+  }
 }
 
 // ── toggleAdminCred helper ──
@@ -1823,16 +1918,16 @@ function renderCard(uid){
     statusClass = 'warn';
   }
   
-  const isRun=s.status==='running',isPaus=s.status==='paused',isIdle=s.status==='idle';
+  const isRun=s.status==='running',isPaus=s.status==='paused',isAg=s.status==='aguardando',isIdle=s.status==='idle';
   const isMine=currentUser&&currentUser.id===uid;
   const isAdmin=currentUser&&currentUser.isAdmin;
   const isDisplay=currentUser&&currentUser.sector==='VISUALIZAÇÃO';
   const canAct=(isMine||isAdmin)&&!isDisplay;
   const card=document.getElementById('card-'+uid); if(!card) return;
-  card.className='card'+(isRun?' running':isPaus?' paused':'')+(goalDone?' goal-card':'');
+  card.className='card'+(isRun?' running':(isPaus||isAg)?' paused':'')+(goalDone?' goal-card':'');
   card.style.order = -totalDia;
   
-  const hRun = history.find(x=>x.uid===uid&&x.status==='running');
+  const hRun = history.find(x=>x.uid===uid&&(x.status==='running'||x.status==='aguardando'));
   const equipName = s.selb ? getEquipName(s.selb) : (hRun ? getEquipName(hRun.selb) : "");
   
   let badgeHtml = '';
@@ -1848,7 +1943,7 @@ function renderCard(uid){
         <div class="card-name">${u.name}</div>
         <div class="card-pin ${statusClass}">PIN ${u.pin}</div>
       </div>
-      <div class="sdot ${isRun?'running':isPaus?'paused':''}"></div>
+      <div class="sdot ${isRun?'running':(isPaus||isAg)?'paused':''}"></div>
     </div>
     
     <div class="prog-area">
@@ -1885,7 +1980,7 @@ function renderCard(uid){
     </div>
 
     <div class="card-meta">
-      ${(s.status === 'running' || s.status === 'paused') && s.selb ? `
+      ${(s.status === 'running' || s.status === 'paused' || s.status === 'aguardando') && s.selb ? `
       <div class="mitem">
         <div class="mlbl">Tempo O.S./SELB</div>
         <div class="mval t" id="m-timer-${uid}">${fmt(calcElapsedRunning(uid))}</div>
@@ -4015,14 +4110,76 @@ async function confirmarSolicitarPeca(){
   const now = Date.now();
 
   try {
+    // 1. Insere as solicitações de peças no Supabase
     const promises = _mspLista.map(it => {
       const sol = { selb, equipamento: equipName, peca: it.peca, quantidade: it.quantidade, obs: it.obs||'', uid, nome: u.name, setor: u.sector, ts: now, lida: false };
       return _supa.from('solicitacoes_pecas').insert({ ...sol, raw: sol });
     });
     await Promise.all(promises);
+
+    // 2. Atualiza o registro ativo no Firebase para status 'aguardando'
+    //    para que o admin veja na tela "Aguardando Peças"
+    const hAtivo = history.find(h => h.uid === uid && h.selb === selb &&
+      (h.status === 'running' || h.status === 'paused'));
+    if(hAtivo && hAtivo._docId && hAtivo._dateKey){
+      const endNow = new Date().toLocaleTimeString('pt-BR');
+      const elapsedMs = s._frozenElapsed || (s._activeFrom ? (now - s._activeFrom) + (s._pauseAccum||0) : 0);
+      const elapsedSec = Math.round(elapsedMs / 1000);
+      const h = Math.floor(elapsedSec / 3600);
+      const m = Math.floor((elapsedSec % 3600) / 60);
+      const sec = elapsedSec % 60;
+      const duracaoStr = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+
+      // Salva comentário com as peças solicitadas
+      const pecasTexto = _mspLista.map(it => `${it.peca}${it.quantidade>1?' x'+it.quantidade:''}${it.obs?' ('+it.obs+')':''}`).join(', ');
+
+      await dbUpdateHistory(hAtivo._docId, hAtivo._dateKey, {
+        status:    'aguardando',
+        end:       endNow,
+        endEpoch:  now,
+        duracao:   duracaoStr,
+        comentario: pecasTexto,
+        equipamento: equipName || hAtivo.equipamento || ''
+      });
+
+      // Atualiza o cache local do history
+      hAtivo.status    = 'aguardando';
+      hAtivo.end       = endNow;
+      hAtivo.endEpoch  = now;
+      hAtivo.duracao   = duracaoStr;
+      hAtivo.comentario = pecasTexto;
+
+      // Pausa o timer do usuário (sessão fica "aguardando peça")
+      if(timers[uid]){ clearInterval(timers[uid]); delete timers[uid]; }
+      s.status = 'aguardando';
+
+      // Limpa o _selb/_status no nó do usuário no Firebase para liberar o operador
+      await dbPatch('/users/'+uid, {
+        _status: 'aguardando',
+        _selb: selb,
+        _pausedAt: now,
+        _frozenElapsed: elapsedMs
+      }).catch(()=>{});
+
+      // Atualiza FluxoLAB: move para gaiola de aguardando peças
+      if(typeof fluxolabFinalizarSelb === 'function'){
+        fluxolabFinalizarSelb(selb, u.sector, 'aguardando').catch(()=>{});
+      }
+    }
+
     closeModal('modal-solicitar-peca');
     atualizarOpPecaPendente(uid);
     mostrarToastPeca(`${_mspLista.length} peça(s) solicitada(s) com sucesso!`);
+
+    // Atualiza tela admin se aberta
+    if(document.getElementById('view-pecas')?.classList.contains('active')) renderPecasView();
+    if(typeof renderPecasSubView === 'function') renderPecasSubView();
+
+    // Re-renderiza o card do operador
+    if(typeof renderCard === 'function') renderCard(uid);
+    if(typeof opRenderState === 'function' && currentUser && currentUser.id === uid){
+      opRenderState(uid);
+    }
   } catch(e){
     errEl.textContent = 'Erro ao enviar solicitações.';
     console.error('Erro solicitar peças:', e);
@@ -5825,12 +5982,17 @@ function renderUsers(){
         <button class="tbtn" onclick="resetFacialUser('${u.id}','${u.name}')" style="border-color:#f25757;color:#f25757;font-size:10px;padding:2px 7px" title="Apagar reconhecimento facial">🗑 Reset</button>
       </div>
     </td>`;
+    const _linhaB = u.linha ? (FLUXOLAB_BOLSOES.find(b=>b.key===u.linha)||{label:u.linha,color:'var(--muted)',bg:'rgba(255,255,255,.06)',border:'rgba(255,255,255,.12)',icon:'🔢'}) : null;
+    const linhaCell = _linhaB
+      ? `<span style="font-size:11px;font-weight:700;color:${_linhaB.color};background:${_linhaB.bg||'rgba(255,255,255,.06)'};border:1px solid ${_linhaB.border||'rgba(255,255,255,.12)'};border-radius:6px;padding:2px 9px;white-space:nowrap">${_linhaB.icon||''} ${_linhaB.label}</span>`
+      : `<span style="font-size:11px;color:var(--muted)">—</span>`;
     return `<tr style="${u.hidden?'opacity:0.5':''}">
     <td style="font-weight:500">${u.name}${u.hidden?` <span style="font-size:10px;color:var(--muted);background:var(--bg4);padding:2px 7px;border-radius:6px;margin-left:6px">Oculto</span>`:''}</td>
     <td><span class="pinbadge">${u.pin}</span></td>
     <td style="font-family:var(--mono);font-size:12px;color:var(--muted)">${u.code||'—'}</td>
     <td style="font-size:12px;color:var(--muted)">${u.local||'—'}</td>
     <td><span class="stag stag-${sc(u.sector)}">${u.sector}</span></td>
+    <td>${linhaCell}</td>
     <td><span class="schip ${u.active?'con':'coff'}"></span>${u.active?'Ativo':'Inativo'}</td>
     <td style="font-family:var(--mono)">${getTotalDia(u.id)}</td>
     ${faceCell}
@@ -5849,6 +6011,8 @@ function openNewUser(){
   document.getElementById('mu-sub').textContent='Preencha os dados do profissional.';
   ['mu-name','mu-pin','mu-code','mu-local'].forEach(i=>document.getElementById(i).value='');
   _renderMuSectorOpts('MONTAGEM');
+  const linhaEl = document.getElementById('mu-linha');
+  if(linhaEl) linhaEl.value = '';
   document.getElementById('mu-err').textContent='';
   document.getElementById('modal-user').classList.remove('hidden');
   setTimeout(()=>document.getElementById('mu-name').focus(),100);
@@ -5863,6 +6027,8 @@ function openEdit(id){
   document.getElementById('mu-code').value=u.code||'';
   document.getElementById('mu-local').value=u.local||'';
   _renderMuSectorOpts(u.sector);
+  const linhaEl = document.getElementById('mu-linha');
+  if(linhaEl) linhaEl.value = u.linha||'';
   document.getElementById('mu-err').textContent='';
   document.getElementById('modal-user').classList.remove('hidden');
   setTimeout(()=>document.getElementById('mu-name').focus(),100);
@@ -5873,6 +6039,8 @@ async function saveUser(){
   const code=document.getElementById('mu-code').value.trim();
   const local=document.getElementById('mu-local').value.trim();
   const sector=document.getElementById('mu-sector').value;
+  const linhaEl=document.getElementById('mu-linha');
+  const linha=(linhaEl?linhaEl.value:'')||'';
   const err=document.getElementById('mu-err');
   if(!name){ err.textContent='Informe o nome.'; return; }
   if(!/^\d{2,5}$/.test(pin)){ err.textContent='PIN deve ter entre 2 e 5 dígitos numéricos.'; return; }
@@ -5881,10 +6049,10 @@ async function saveUser(){
   try {
     if(editingId){
       const u=users.find(x=>x.id===editingId);
-      u.name=name;u.pin=pin;u.code=code;u.local=local;u.sector=sector;
+      u.name=name;u.pin=pin;u.code=code;u.local=local;u.sector=sector;u.linha=linha;
       await dbSaveUser(u);
     } else {
-      const newU={name,pin,code,local,sector,active:true,totalDia:0,repDia:0};
+      const newU={name,pin,code,local,sector,linha,active:true,totalDia:0,repDia:0};
       const newId=await dbAddUser(newU);
       users.push({...newU,id:newId});
     }
@@ -14383,6 +14551,16 @@ const FLUXOLAB_BOLSOES = [
   { key: 'GAIOLA_LAB',       label: 'Gaiola LAB',          icon: '🪣', color: '#e879f9',        bg: 'rgba(232,121,249,.08)', border: 'rgba(232,121,249,.3)' },
   { key: 'GAIOLA_AG_PECAS',  label: 'Gaiola Ag. peças',    icon: '🛠️', color: '#f59e0b',        bg: 'rgba(245,158,11,.08)',  border: 'rgba(245,158,11,.3)'  },
   { key: 'DOCA_1',           label: 'Doca 1',              icon: '📦', color: '#22d3ee',        bg: 'rgba(34,211,238,.08)',  border: 'rgba(34,211,238,.3)'  },
+  // ── Bolsões de Linha (Linha 1 a Linha 9) ──
+  { key: 'LINHA_1', label: 'Linha 1', icon: '1️⃣', color: '#fb923c', bg: 'rgba(251,146,60,.08)',  border: 'rgba(251,146,60,.35)' },
+  { key: 'LINHA_2', label: 'Linha 2', icon: '2️⃣', color: '#a78bfa', bg: 'rgba(167,139,250,.08)', border: 'rgba(167,139,250,.35)' },
+  { key: 'LINHA_3', label: 'Linha 3', icon: '3️⃣', color: '#34d399', bg: 'rgba(52,211,153,.08)',  border: 'rgba(52,211,153,.35)' },
+  { key: 'LINHA_4', label: 'Linha 4', icon: '4️⃣', color: '#f472b6', bg: 'rgba(244,114,182,.08)', border: 'rgba(244,114,182,.35)' },
+  { key: 'LINHA_5', label: 'Linha 5', icon: '5️⃣', color: '#38bdf8', bg: 'rgba(56,189,248,.08)',  border: 'rgba(56,189,248,.35)' },
+  { key: 'LINHA_6', label: 'Linha 6', icon: '6️⃣', color: '#facc15', bg: 'rgba(250,204,21,.08)',  border: 'rgba(250,204,21,.35)' },
+  { key: 'LINHA_7', label: 'Linha 7', icon: '7️⃣', color: '#4ade80', bg: 'rgba(74,222,128,.08)',  border: 'rgba(74,222,128,.35)' },
+  { key: 'LINHA_8', label: 'Linha 8', icon: '8️⃣', color: '#e879f9', bg: 'rgba(232,121,249,.08)', border: 'rgba(232,121,249,.35)' },
+  { key: 'LINHA_9', label: 'Linha 9', icon: '9️⃣', color: '#f87171', bg: 'rgba(248,113,113,.08)', border: 'rgba(248,113,113,.35)' },
 ];
 
 // Mapeia (setor que finalizou, resultado) → bolsão de destino na finalização.
