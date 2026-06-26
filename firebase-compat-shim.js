@@ -121,7 +121,7 @@ function createFirebaseCompatShim(supa) {
   async function rowsGet(cfg, p, filters) {
     const { dateKey, id, isCollection } = resolveRows(cfg, p);
     let q = supa.from(cfg.table).select('*');
-    if (dateKey) q = q.eq('data_key', dateKey);
+    if (dateKey) q = q.eq('date_key', dateKey);
     if (filters) for (const f of filters) q = q.eq(f.field, f.value);
     if (!isCollection) {
       const { data } = await q.eq('id', id).maybeSingle();
@@ -137,12 +137,12 @@ function createFirebaseCompatShim(supa) {
   async function rowsWriteOne(cfg, id, dateKey, value) {
     if (value === null || value === undefined) {
       let q = supa.from(cfg.table).delete().eq('id', id);
-      if (dateKey) q = q.eq('data_key', dateKey);
+      if (dateKey) q = q.eq('date_key', dateKey);
       await q;
       return;
     }
     const row = { id, raw: value, ...mirrorCols(cfg.table, value) };
-    if (dateKey) row.data_key = dateKey;
+    if (dateKey) row.date_key = dateKey;
     await supa.from(cfg.table).upsert(row, { onConflict: 'id' });
   }
 
@@ -151,11 +151,11 @@ function createFirebaseCompatShim(supa) {
     if (!isCollection) return rowsWriteOne(cfg, id, dateKey, value);
     // substitui a coleção inteira (usado em restauração de backup)
     let delQ = supa.from(cfg.table).delete();
-    delQ = dateKey ? delQ.eq('data_key', dateKey) : delQ.neq('id', '___never___');
+    delQ = dateKey ? delQ.eq('date_key', dateKey) : delQ.neq('id', '___never___');
     await delQ;
     const entries = Object.entries(value || {});
     if (!entries.length) return;
-    const rows = entries.map(([cid, v]) => ({ id: cid, raw: v, ...(dateKey ? { data_key: dateKey } : {}), ...mirrorCols(cfg.table, v) }));
+    const rows = entries.map(([cid, v]) => ({ id: cid, raw: v, ...(dateKey ? { date_key: dateKey } : {}), ...mirrorCols(cfg.table, v) }));
     await supa.from(cfg.table).upsert(rows, { onConflict: 'id' });
   }
 
@@ -163,7 +163,7 @@ function createFirebaseCompatShim(supa) {
     const { dateKey, id, isCollection } = resolveRows(cfg, p);
     if (!isCollection) {
       let q = supa.from(cfg.table).select('raw').eq('id', id);
-      if (dateKey) q = q.eq('data_key', dateKey);
+      if (dateKey) q = q.eq('date_key', dateKey);
       const { data: cur } = await q.maybeSingle();
       const merged = { ...(cur ? cur.raw : {}) };
       for (const k in patch) { if (patch[k] === null) delete merged[k]; else merged[k] = patch[k]; }
@@ -179,7 +179,7 @@ function createFirebaseCompatShim(supa) {
     const { dateKey, id, isCollection } = resolveRows(cfg, p);
     if (!isCollection) return rowsWriteOne(cfg, id, dateKey, null);
     let q = supa.from(cfg.table).delete();
-    q = dateKey ? q.eq('data_key', dateKey) : q.neq('id', '___never___');
+    q = dateKey ? q.eq('date_key', dateKey) : q.neq('id', '___never___');
     await q;
   }
 
@@ -198,7 +198,7 @@ function createFirebaseCompatShim(supa) {
     const reload = async () => { cb(makeSnapshot(await rowsGet(cfg, p, filters))); };
     reload();
     const chanName = 'shim_' + cfg.table + '_' + (dateKey || 'all') + '_' + (++_listenerSeq);
-    const filter = dateKey ? { event: '*', schema: 'public', table: cfg.table, filter: 'data_key=eq.' + dateKey } : { event: '*', schema: 'public', table: cfg.table };
+    const filter = dateKey ? { event: '*', schema: 'public', table: cfg.table, filter: 'date_key=eq.' + dateKey } : { event: '*', schema: 'public', table: cfg.table };
     const channel = supa.channel(chanName).on('postgres_changes', filter, reload).subscribe();
     return channel;
   }
