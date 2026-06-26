@@ -2923,20 +2923,28 @@ async function confirmarFin(){
   const _writeTs = Date.now();
   u._localRepDia  = u.repDia;
   u._lastWriteTs  = _writeTs;
+  const _clearSessionPatch = {
+    repDia:        u.repDia,
+    _selb:         null,
+    _status:       'idle',
+    _startEpoch:   null,
+    _elapsed:      null,
+    _pausedElapsed:null,
+    _lastWriteTs:  _writeTs
+  };
   try {
-    await dbPatch('/users/'+actionUid, {
-      repDia:        u.repDia,
-      _selb:         null,
-      _status:       'idle',
-      _startEpoch:   null,
-      _elapsed:      null,
-      _pausedElapsed:null,
-      _lastWriteTs:  _writeTs
-    });
+    await dbPatch('/users/'+actionUid, _clearSessionPatch);
   } catch(e) {
-    if(res==='rep'||res==='scrap') u.repDia--;
-    u._localRepDia = u.repDia;
-    console.warn('[confirmarFin] dbPatch falhou:', e.message);
+    console.warn('[confirmarFin] dbPatch falhou, tentando novamente:', e.message);
+    try {
+      // Segunda tentativa — falhas transitórias de rede costumam passar na 2ª chamada
+      await dbPatch('/users/'+actionUid, _clearSessionPatch);
+    } catch(e2) {
+      if(res==='rep'||res==='scrap') u.repDia--;
+      u._localRepDia = u.repDia;
+      console.error('[confirmarFin] dbPatch falhou novamente:', e2.message);
+      alert('⚠️ O SELB foi finalizado no histórico, mas houve um erro ao limpar a sessão do operador no servidor.\n\nSe esse SELB "voltar" sozinho depois de um recarregamento, finalize-o novamente ou avise o administrador.\n\nErro: ' + (e2.message || 'desconhecido'));
+    }
   }
   if(timers[actionUid]){ clearInterval(timers[actionUid]); delete timers[actionUid]; }
   s.selb=null; s.status='idle'; s.elapsed=0;
@@ -4325,15 +4333,6 @@ async function removerSolicitacaoPeca(id, selb){
   try {
     const { error } = await _supa.from('solicitacoes_pecas').delete().eq('id', id);
     if(error) throw error;
-    // ── Atualiza cache local imediatamente, sem esperar o Realtime ──
-    if(_solicitacoesPecas && _solicitacoesPecas[id]) delete _solicitacoesPecas[id];
-    atualizarBadgeTopbarPecas();
-    atualizarNotifPecasAdmin();
-    if(currentUser && !currentUser.isAdmin) atualizarOpPecaPendente(currentUser.id);
-    if(document.getElementById('view-pecas')?.classList.contains('active'))       _renderSolicitacoesPanel('pecas-solicitacoes-panel','');
-    if(document.getElementById('subview-pecas-a')?.style.display !== 'none')      _renderSolicitacoesPanel('pecas-a-solicitacoes-panel','');
-    if(document.getElementById('view-solicitacoes')?.classList.contains('active')) renderSolicitacoesDoDia();
-    renderPecasView();
   } catch(e){
     alert('Erro ao excluir solicitação: ' + (e.message || 'sem permissão (verifique a policy RLS de DELETE na tabela solicitacoes_pecas)'));
     console.error('removerSolicitacaoPeca error:', e);
@@ -11987,7 +11986,10 @@ window.toggleEtiquetaImpressaManual = async function(regId, checked, el){
       ? { etiqueta_impressa: true, etiqueta_impressa_ts: Date.now(), etiqueta_impressa_by: currentUser.name || null }
       : { etiqueta_impressa: false, etiqueta_impressa_ts: null, etiqueta_revertida_ts: Date.now(), etiqueta_revertida_by: currentUser.name || null };
     const _etRaw = { ...(_qualRegistros[regId]||{}), ..._etPatch };
-    await _supa.from('qualidade_registros').update({ raw: _etRaw }).eq('id', regId);
+    const { error: _etErr } = await _supa.from('qualidade_registros').update({ raw: _etRaw }).eq('id', regId);
+    if(_etErr) throw _etErr;
+    _qualRegistros[regId] = _etRaw; // sincroniza cache local pra refletir na tela sem precisar atualizar a página
+    if(typeof renderQualRegistros === 'function') renderQualRegistros();
 
     // ── FluxoLAB: SELB sai de LIBERADAS apenas quando etiqueta é marcada como concluída ──
     if(checked){
@@ -19100,7 +19102,9 @@ window.renderSolicitacoesDoDia = function(){
           ? { etiqueta_impressa: true, etiqueta_impressa_ts: Date.now(), etiqueta_impressa_by: currentUser.name || null }
           : { etiqueta_impressa: false, etiqueta_impressa_ts: null, etiqueta_revertida_ts: Date.now(), etiqueta_revertida_by: currentUser.name || null };
         const _pcpRaw = { ...(_qualRegistros[regId]||{}), ..._pcpPatch };
-        await _supa.from('qualidade_registros').update({ raw: _pcpRaw }).eq('id', regId);
+        const { error: _pcpErr } = await _supa.from('qualidade_registros').update({ raw: _pcpRaw }).eq('id', regId);
+        if(_pcpErr) throw _pcpErr;
+        _qualRegistros[regId] = _pcpRaw; // sincroniza cache local pra refletir na tela sem precisar atualizar a página
 
         // ── FluxoLAB: SELB sai de LIBERADAS quando etiqueta marcada como concluída ──
         if (checked) {
