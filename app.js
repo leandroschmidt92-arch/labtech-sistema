@@ -2560,55 +2560,54 @@ async function confirmarInicio(){
           ? Object.entries(fbHistory).map(([k,v])=>({...v,_docId:k,_dateKey:dateKey}))
           : [];
 
-        // Verifica se existe pelo menos um SELB finalizado como 'ok' para este usuário hoje
-        const temConcluido = recs.some(r => r.uid === actionUid && r.status === 'ok');
+        // Verifica se existe um registro 'running' ativo para este usuário hoje
+        const runOrphanCheck = recs.find(r => r.uid === actionUid && r.status === 'running');
 
-        if(!temConcluido){
-          // Não há nenhum SELB concluído — possivelmente aba desatualizada.
-          // Cancela o running fantasma e bloqueia novo início.
-          const runningNoFb = recs.find(r => r.uid === actionUid && r.status === 'running');
-          if(runningNoFb){
-            // Atualiza o array local e o Firebase para refletir o estado real
-            const localOrphan = history.find(h => h._docId === runningNoFb._docId);
-            if(localOrphan) localOrphan.status = 'running'; // já está lá, deixa o fechamento abaixo agir
-            else history.unshift({...runningNoFb});
+        if(runOrphanCheck){
+          // ── BUG FIX: verifica se o 'running' é realmente um fantasma ──────────
+          // Um registro é fantasma apenas se seu startEpoch é ANTERIOR ao endEpoch
+          // do registro 'ok' mais recente. Se ele for mais recente, é o SELB atual
+          // válido e não deve ser fechado automaticamente.
+          const latestOkEndEpoch = recs
+            .filter(r => r.uid === actionUid && r.status === 'ok' && r.endEpoch)
+            .reduce((max, r) => Math.max(max, r.endEpoch), 0);
+          const runStart = runOrphanCheck.startEpoch || 0;
+          const isCurrentValidSelb = runStart > latestOkEndEpoch || latestOkEndEpoch === 0;
+
+          if(isCurrentValidSelb){
+            // O running é o SELB atual em andamento — NÃO fechar. Bloquear novo início.
+            const localOrphan = history.find(h => h._docId === runOrphanCheck._docId);
+            if(!localOrphan) history.unshift({...runOrphanCheck});
+            const s2 = getS(actionUid);
+            s2.status     = 'running';
+            s2.selb       = fbUser._selb || s2.selb || runOrphanCheck.selb || null;
+            s2.startEpoch = runOrphanCheck.startEpoch || fbUser._startEpoch || s2.startEpoch || Date.now();
+            if(!timers[actionUid] && s2.startEpoch) startTimer(actionUid);
+            renderCard(actionUid);
+            alert('⚠️ Atenção: este operador já possui um SELB em andamento.\n\nFinalize o SELB atual antes de iniciar um novo.');
+            closeModal('modal-selb');
+            return;
           }
-          // Sincroniza wstate local com o Firebase
-          const s2 = getS(actionUid);
-          s2.status     = 'running';
-          s2.selb       = fbUser._selb || s2.selb || null;
-          s2.startEpoch = fbUser._startEpoch || s2.startEpoch || Date.now();
-          renderCard(actionUid);
-          alert('⚠️ Atenção: este operador já possui um SELB em andamento.\n\nFinalize o SELB atual antes de iniciar um novo.');
-          closeModal('modal-selb');
-          return;
-        }
 
-        // Existe pelo menos um 'ok' hoje: cancela o running em aberto no Firebase
-        // e segue normalmente para registrar o novo SELB.
-        const now2 = new Date();
-        if(fbUser._selb){
-          // Cancela o registro running no histórico do Firebase, se houver
-          const runOrphan = recs.find(r => r.uid === actionUid && r.status === 'running');
-          if(runOrphan){
-            const orphEnd = now2.toLocaleTimeString('pt-BR');
-            const orphStart = runOrphan.startEpoch || 0;
-            let orphElapsed = orphStart ? Math.max(0, Math.floor((Date.now() - orphStart)/1000)) : 0;
-            if(runOrphan.start){
-              const oSS = timeStrToSec(runOrphan.start);
-              const oES = timeStrToSec(orphEnd);
-              if(oSS!==null && oES!==null){
-                let od = oES-oSS; if(od<0) od+=86400;
-                if(od>=0 && od<86400 && Math.abs(orphElapsed-od)>60) orphElapsed=od;
-              }
+          // O running é anterior ao último 'ok' — é um fantasma: fechar.
+          const now2 = new Date();
+          const orphEnd = now2.toLocaleTimeString('pt-BR');
+          const orphStart = runOrphanCheck.startEpoch || 0;
+          let orphElapsed = orphStart ? Math.max(0, Math.floor((Date.now() - orphStart)/1000)) : 0;
+          if(runOrphanCheck.start){
+            const oSS = timeStrToSec(runOrphanCheck.start);
+            const oES = timeStrToSec(orphEnd);
+            if(oSS!==null && oES!==null){
+              let od = oES-oSS; if(od<0) od+=86400;
+              if(od>=0 && od<86400 && Math.abs(orphElapsed-od)>60) orphElapsed=od;
             }
-            await dbUpdateHistory(runOrphan._docId, runOrphan._dateKey,
-              {end:orphEnd, duracao:fmt(orphElapsed), status:'ok'}).catch(()=>{});
-            // Atualiza memória local
-            const localRef = history.find(h=>h._docId===runOrphan._docId);
-            if(localRef){ localRef.status='ok'; localRef.end=orphEnd; localRef.duracao=fmt(orphElapsed); }
           }
+          await dbUpdateHistory(runOrphanCheck._docId, runOrphanCheck._dateKey,
+            {end:orphEnd, duracao:fmt(orphElapsed), status:'ok'}).catch(()=>{});
+          const localRef = history.find(h=>h._docId===runOrphanCheck._docId);
+          if(localRef){ localRef.status='ok'; localRef.end=orphEnd; localRef.duracao=fmt(orphElapsed); }
         }
+
         // Reseta o wstate local para refletir idle antes do novo início
         const s3 = getS(actionUid);
         s3.status='idle'; s3.selb=null; s3.elapsed=0; s3.startEpoch=null;
@@ -3790,7 +3789,15 @@ function abrirSolicitarPeca(uid){
   }
 
   if(!selb){
-    return;
+    // Tenta recuperar o SELB do historico local (caso wstate tenha sido resetado)
+    const hRun = history.find(h => h.uid === uid && h.status === 'running');
+    if(hRun && hRun.selb){
+      selb = hRun.selb;
+      s.selb = selb; // recompoe wstate
+    } else {
+      if(typeof showToast === 'function') showToast('Nenhum SELB em andamento para solicitar pecas.', 'warn');
+      return;
+    }
   }
 
   _solicitacaoPecaUid = uid;
