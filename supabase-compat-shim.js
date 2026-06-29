@@ -143,16 +143,7 @@ function createSupabaseCompatShim(supa) {
     }
     const row = { id, raw: value, ...mirrorCols(cfg.table, value) };
     if (dateKey) row.date_key = dateKey;
-    const { error } = await supa.from(cfg.table).upsert(row, { onConflict: 'id' });
-    if (error) {
-      // Colunas dedicadas (mirrorCols) podem não existir na tabela — tenta só com raw.
-      // Isso garante que o dado crítico (_selb, _status, etc.) seja sempre salvo no JSONB.
-      console.warn('[supabase-compat-shim] upsert com colunas mirror falhou, tentando raw-only:', error.message);
-      const fallbackRow = { id, raw: value };
-      if (dateKey) fallbackRow.date_key = dateKey;
-      const { error: err2 } = await supa.from(cfg.table).upsert(fallbackRow, { onConflict: 'id' });
-      if (err2) console.error('[supabase-compat-shim] upsert raw-only também falhou:', err2.message);
-    }
+    await supa.from(cfg.table).upsert(row, { onConflict: 'id' });
   }
 
   async function rowsSet(cfg, p, value) {
@@ -171,12 +162,26 @@ function createSupabaseCompatShim(supa) {
   async function rowsUpdate(cfg, p, patch) {
     const { dateKey, id, isCollection } = resolveRows(cfg, p);
     if (!isCollection) {
-      let q = supa.from(cfg.table).select('raw').eq('id', id);
-      if (dateKey) q = q.eq('date_key', dateKey);
-      const { data: cur } = await q.maybeSingle();
-      const merged = { ...(cur ? cur.raw : {}) };
-      for (const k in patch) { if (patch[k] === null) delete merged[k]; else merged[k] = patch[k]; }
-      return rowsWriteOne(cfg, id, dateKey, merged);
+      // Merge atômico feito DENTRO do Postgres (sem ler→mesclar no JS→escrever),
+      // pra eliminar a race condition que apagava campos como _selb quando dois
+      // updates concorrentes acontecem perto um do outro.
+      const { data: merged, error } = await supa.rpc('jsonb_patch_row', {
+        p_table: cfg.table,
+        p_id: id,
+        p_patch: patch,
+        p_date_key: dateKey || null,
+      });
+      if (error) throw error;
+      // Espelha colunas dedicadas (best-effort, só pra leitura/filtragem direta
+      // via SQL — a fonte de verdade continua sendo a coluna raw, já atualizada
+      // atomicamente acima).
+      const mirror = mirrorCols(cfg.table, merged || {});
+      if (Object.keys(mirror).length) {
+        let mq = supa.from(cfg.table).update(mirror).eq('id', id);
+        if (dateKey) mq = mq.eq('date_key', dateKey);
+        await mq;
+      }
+      return;
     }
     // multi-location update: cada chave do patch é um filho que é substituído por completo
     for (const childId in patch) {
@@ -266,12 +271,17 @@ function createSupabaseCompatShim(supa) {
 
       async update(patch) {
         if (cfg.mode === 'blob') {
+          // Merge atômico dentro do Postgres — mesma razão do rowsUpdate acima:
+          // evita perder chaves quando dois updates concorrentes acontecem
+          // no mesmo nó/blob quase ao mesmo tempo.
           const bp = p.slice(1);
-          const blob = await blobLoad(cfg.blobKey);
-          const target = bp.length ? (getIn(blob, bp) || {}) : blob;
-          for (const k in patch) { if (patch[k] === null) delete target[k]; else target[k] = patch[k]; }
-          if (bp.length) setIn(blob, bp, target);
-          return blobSave(cfg.blobKey, bp.length ? blob : target);
+          const { error } = await supa.rpc('jsonb_patch_blob', {
+            p_key: cfg.blobKey,
+            p_path: bp,
+            p_patch: patch,
+          });
+          if (error) throw error;
+          return;
         }
         return rowsUpdate(cfg, p, patch);
       },
