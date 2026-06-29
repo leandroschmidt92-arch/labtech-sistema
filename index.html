@@ -528,7 +528,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
         </button>
       </div>
 
-      <!-- Estado: verificando Firebase -->
+      <!-- Estado: verificando Supabase -->
       <div id="op-checking" style="display:none">
         <div style="width:36px;height:36px;border:3px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 16px"></div>
         <div style="font-size:14px;color:var(--muted)">Verificando SELB em andamento...</div>
@@ -2483,7 +2483,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px">
       <div>
         <h1 style="font-size:22px;font-weight:800;margin:0 0 4px;letter-spacing:-.02em">🔬 FluxoLAB</h1>
-        <div style="font-size:12px;color:var(--muted)">Rastreamento em tempo real · atualizado via Firebase</div>
+        <div style="font-size:12px;color:var(--muted)">Rastreamento em tempo real · atualizado via Supabase</div>
       </div>
       <div style="display:flex;align-items:center;gap:10px">
         <div id="fluxolab-last-update" style="font-size:11px;color:var(--muted)"></div>
@@ -2900,7 +2900,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 <div class="modal-overlay hidden" id="modal-backups">
   <div class="modal" style="max-width:500px">
     <h2 style="margin-bottom:4px">📂 Restaurar backup</h2>
-    <div class="msub" style="margin-bottom:16px">Selecione um backup salvo no Firebase para restaurar, ou importe um arquivo JSON.</div>
+    <div class="msub" style="margin-bottom:16px">Selecione um backup salvo no Supabase para restaurar, ou importe um arquivo JSON.</div>
     <div id="backup-list" style="max-height:260px;overflow-y:auto;margin-bottom:14px"></div>
     <div style="border-top:1px solid var(--border);padding-top:12px;display:flex;gap:8px;align-items:center">
       <span style="font-size:12px;color:var(--muted)">Ou importar arquivo:</span>
@@ -3146,7 +3146,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 <div class="modal-overlay hidden" id="modal-zerar">
   <div class="modal" style="max-width:440px">
     <h2 style="color:var(--warn);margin-bottom:4px">🗑️ Opções de reset</h2>
-    <div class="msub" style="margin-bottom:18px">Nenhuma opção apaga relatórios ou dados do Firebase.</div>
+    <div class="msub" style="margin-bottom:18px">Nenhuma opção apaga relatórios ou dados do Supabase.</div>
 
     <!-- Opção 1: Zerar SELBs em andamento -->
     <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:12px;padding:14px;margin-bottom:10px">
@@ -3410,7 +3410,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.19.1/umd/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-<script src="firebase-compat-shim.js"></script>
+<script src="supabase-compat-shim.js"></script>
 <script src="app.js?v=5"></script>
 
 
@@ -3993,7 +3993,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     if(tbody) tbody.innerHTML='<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--muted)">⏳ Carregando movimentações…</td></tr>';
 
     // Busca uma janela ampla e fixa de histórico (1 ano), independente do filtro de data em tela.
-    // Isso evita refazer a busca pesada no Firebase a cada mudança no filtro — o filtro de data
+    // Isso evita refazer a busca pesada no Supabase a cada mudança no filtro — o filtro de data
     // passa a atuar apenas localmente sobre os dados já carregados (_tsRows).
     const ateIso = todayIso();
     const deIso  = new Date(Date.now()-364*86400000).toISOString().slice(0,10);
@@ -4010,7 +4010,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
   }
 
   // ── Filtros rápidos de período (30 / 90 dias / Todos) ──
-  // Atua apenas localmente sobre os dados já carregados (_tsRows) — não rebusca o Firebase.
+  // Atua apenas localmente sobre os dados já carregados (_tsRows) — não rebusca o Supabase.
   window.setTempoSelbPeriodo = function(dias, btnEl){
     const deInput  = document.getElementById('tempo-selb-de');
     const ateInput = document.getElementById('tempo-selb-ate');
@@ -4261,7 +4261,7 @@ function pedPrintLabels() {
 
 <!-- ═══════════════════════════════════════════════════════
      LABTECH — ALARME GLOBAL
-     Sincroniza via Firebase em todas as abas/dispositivos.
+     Sincroniza via Supabase em todas as abas/dispositivos.
      API: Alarme.disparar(msg, tipo) | Alarme.encerrar()
          tipo: 'urgente' | 'aviso' | 'info'
      ═══════════════════════════════════════════════════════ -->
@@ -4269,7 +4269,7 @@ function pedPrintLabels() {
 (function () {
   'use strict';
 
-  var FB_PATH = '/alarme_global';
+  var ALARM_PATH = '/alarme_global';
   var SONS = {
     urgente : { freqs:[880,660,880,660], dur:0.18, gap:0.04, rep:3, interval:800  },
     aviso   : { freqs:[660,550],         dur:0.22, gap:0.06, rep:2, interval:1200 },
@@ -4281,7 +4281,7 @@ function pedPrintLabels() {
     info    : { bg:'#dbeafe', border:'#3b82f6', text:'#1e3a5f', badge:'#3b82f6', icon:'ℹ️' },
   };
 
-  var _ctx = null, _loop = null, _state = null, _fbRef = null, _styled = false;
+  var _ctx = null, _loop = null, _state = null, _alarmRef = null, _styled = false;
 
   /* ── AudioContext ── */
   function _audio() {
@@ -4397,12 +4397,12 @@ function pedPrintLabels() {
     else { _rmBanner(); _stopLoop(); }
   }
 
-  /* ── Firebase listener ── */
+  /* ── Supabase listener (postgres_changes) ── */
   function _connect(tries) {
     tries = tries||0;
     if (typeof window._db !== 'undefined') {
-      _fbRef = window._db.ref(FB_PATH);
-      _fbRef.on('value', function(snap){ _apply(snap.val()); });
+      _alarmRef = window._db.ref(ALARM_PATH);
+      _alarmRef.on('value', function(snap){ _apply(snap.val()); });
     } else if (tries<80) {
       setTimeout(function(){ _connect(tries+1); }, 250);
     }
@@ -4490,7 +4490,7 @@ function pedPrintLabels() {
           return r;
         };
       }
-      // Se já estava logado quando o hook instalou (ex: sessão salva via Firebase Auth)
+      // Se já estava logado quando o hook instalou (ex: sessão salva via Supabase Auth)
       if (typeof currentUser !== 'undefined' && currentUser && currentUser.isAdmin) {
         _addFab();
       }
@@ -4504,11 +4504,11 @@ function pedPrintLabels() {
   window.Alarme = {
     disparar: function(msg,tipo){
       tipo=tipo||'aviso'; if(!SONS[tipo])tipo='aviso';
-      if(!_fbRef){console.warn('[Alarme] Firebase não pronto');return;}
-      _fbRef.set({msg:msg||'Alarme!',tipo:tipo,ts:Date.now(),ativa:true});
+      if(!_alarmRef){console.warn('[Alarme] Supabase não pronto');return;}
+      _alarmRef.set({msg:msg||'Alarme!',tipo:tipo,ts:Date.now(),ativa:true});
     },
     encerrar: function(){
-      if(_fbRef) _fbRef.set({ativa:false,ts:Date.now()});
+      if(_alarmRef) _alarmRef.set({ativa:false,ts:Date.now()});
     },
     abrirPainel: _painel,
   };

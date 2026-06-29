@@ -1475,7 +1475,6 @@ function showOperatorView(uid){
 
 async function opSyncFromSupabase(uid){
   try {
-    const _queryStart = Date.now(); // marca o início da query para detectar leituras obsoletas
     const fbUser = await dbGet('/users/'+uid);
     if(!fbUser) return;
     const s = getS(uid);
@@ -1506,13 +1505,6 @@ async function opSyncFromSupabase(uid){
       s._frozenElapsed = fbUser._frozenElapsed != null ? fbUser._frozenElapsed : (s._frozenElapsed||0);
       s._activeFrom    = null;
     } else {
-      // Guard: se o SELB foi iniciado localmente DEPOIS que esta query começou,
-      // o dado do banco está obsoleto (race condition entre opSyncFromSupabase e
-      // confirmarInicio). Não sobrescreve o estado local — o Realtime vai sincronizar.
-      if (s.status === 'running' && s.selb && s.startEpoch && s.startEpoch >= _queryStart) {
-        opRenderState(uid);
-        return;
-      }
       s.status = 'idle';
       s.selb   = null;
     }
