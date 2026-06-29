@@ -134,7 +134,7 @@
 // ════════════════════════════════════════════════════════════════
 // FLUXOLAB — Log de Movimentações
 // Registra cada entrada/saída/movimentação de SELB nos bolsões
-// Firebase path: /fluxolab_log/{pushKey} = { selb, de, para, user, ts, equipamento }
+// Supabase path: /fluxolab_log/{pushKey} = { selb, de, para, user, ts, equipamento }
 // ════════════════════════════════════════════════════════════════
 
 let _fluxolabMovLog = []; // cache em memória (máx. 200 entradas)
@@ -149,11 +149,11 @@ function _fluxolabLogEntry(selb, de, para, equipamento) {
     ts:         Date.now(),
     equipamento: equipamento || (typeof getEquipName === 'function' ? getEquipName(selb) : '') || '',
   };
-  // Push para Firebase com retry em caso de falha
+  // Push para Supabase com retry em caso de falha
   _db.ref('/fluxolab_log').push(entry).catch(err => {
-    console.warn('[FluxoLAB Log] Falha ao salvar entrada no Firebase:', err);
+    console.warn('[FluxoLAB Log] Falha ao salvar entrada no Supabase:', err);
   });
-  // Insere no cache local no topo (garante visibilidade imediata mesmo antes do Firebase responder)
+  // Insere no cache local no topo (garante visibilidade imediata mesmo antes do Supabase responder)
   _fluxolabMovLog.unshift(entry);
   if (_fluxolabMovLog.length > 500) _fluxolabMovLog.length = 500;
   // Atualiza badge do botão com contador de novas entradas
@@ -191,10 +191,10 @@ function fluxolabStartLogListener() {
       snap.forEach(child => arr.push(child.val()));
       // Ordena mais recente primeiro
       arr.sort((a, b) => (b.ts || 0) - (a.ts || 0));
-      // Merge: mantém entradas locais recentes que ainda não chegaram ao Firebase
+      // Merge: mantém entradas locais recentes que ainda não chegaram ao Supabase
       // (push assíncrono pode não ter completado antes do listener disparar)
-      const firebaseKeys = new Set(arr.map(e => String(e.ts) + '|' + e.selb));
-      const localOnly = _fluxolabMovLog.filter(e => !firebaseKeys.has(String(e.ts) + '|' + e.selb));
+      const syncedKeys = new Set(arr.map(e => String(e.ts) + '|' + e.selb));
+      const localOnly = _fluxolabMovLog.filter(e => !syncedKeys.has(String(e.ts) + '|' + e.selb));
       _fluxolabMovLog = [...localOnly, ...arr].sort((a, b) => (b.ts || 0) - (a.ts || 0));
       if (_fluxolabMovLog.length > 500) _fluxolabMovLog.length = 500;
       _fluxolabRenderLog();
@@ -262,7 +262,7 @@ function _fluxolabRenderLog() {
 }
 
 // ════════════════════════════════════════
-// SUPABASE — substitui o antigo Firebase Realtime Database
+// SUPABASE — substitui o antigo Supabase Realtime Database
 // ════════════════════════════════════════
 const _SB_URL = 'https://wpawjyqjrzzleojzejuw.supabase.co';
 const _SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwYXdqeXFqcnp6bGVvanplanV3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE4OTI1ODMsImV4cCI6MjA5NzQ2ODU4M30.7HRgwO-KiV5ZTCzOA2DPkFgARrcMUYoQrSGrZirIoss'; // anon public key
@@ -271,7 +271,7 @@ const _supa   = window.supabase.createClient(_SB_URL, _SB_KEY);
 // Shim de compatibilidade: mantém a mesma API que o resto do app já usa
 // (_db.ref(path).push/set/update/remove/on('value')/once('value')/child())
 // mas tudo é lido e gravado no Supabase.
-const _db = createFirebaseCompatShim(_supa);
+const _db = createSupabaseCompatShim(_supa);
 window._db = _db; // exposto globalmente para os patches de integração
 
 
@@ -308,7 +308,7 @@ async function dbPush(path, data){
 }
 async function dbPatch(path, data){
   _dbGuard();
-  // Remove undefined values to prevent Firebase errors
+  // Remove undefined values to prevent Supabase errors
   const clean = {};
   for(const k in data) if(data[k] !== undefined) clean[k] = data[k];
   await _db.ref(path).update(clean);
@@ -320,8 +320,8 @@ async function dbDelete(path){
 }
 
 // ════════════════════════════════════════
-// REALTIME SYNC — Firebase onValue listeners
-// Fonte de verdade: Firebase Realtime Database.
+// REALTIME SYNC — Supabase onValue listeners
+// Fonte de verdade: Supabase Realtime Database.
 // Tempo NUNCA é armazenado como contador — sempre calculado de _startEpoch.
 // ════════════════════════════════════════
 let _usersListener   = null;
@@ -341,8 +341,8 @@ function applyUserSnapshot(freshUsers){
       users.push(fu);
     } else {
       const local = users[idx];
-      // totalDia não é mais sincronizado do Firebase — calculado ao vivo pelo history[]
-      // repDia ainda é mantido no Firebase para persistir entre sessões
+      // totalDia não é mais sincronizado do Supabase — calculado ao vivo pelo history[]
+      // repDia ainda é mantido no Supabase para persistir entre sessões
       const fbRep  = fu.repDia || 0;
       const fbTs   = fu._lastWriteTs || 0;
       const locTs  = local._lastWriteTs || 0;
@@ -353,7 +353,7 @@ function applyUserSnapshot(freshUsers){
   });
   users = users.filter(u => freshUsers.find(fu => fu.id === u.id));
 
-  // ── Sync wstate a partir do Firebase ──
+  // ── Sync wstate a partir do Supabase ──
   users.forEach(fu => {
     const s      = getS(fu.id);
     const status = fu._status || null;
@@ -379,14 +379,14 @@ function applyUserSnapshot(freshUsers){
         // e retoma do início do expediente de hoje (ou agora, o que for menor)
         frozen += calcLiquidDuration(activeFrom, now);
         activeFrom = Math.max(todayStart.getTime() + (SCHEDULE.work.start[0]*3600 + SCHEDULE.work.start[1]*60)*1000, now);
-        // Garante que o Firebase também seja atualizado para evitar re-processamento
+        // Garante que o Supabase também seja atualizado para evitar re-processamento
         dbPatch('/users/'+fu.id, {_activeFrom: activeFrom, _frozenElapsed: frozen}).catch(()=>{});
       }
 
-      // ── Protege o timer local do operador logado contra sobrescrita do Firebase ──
+      // ── Protege o timer local do operador logado contra sobrescrita do Supabase ──
       // Se este usuário é o operador logado e o timer local já está rodando de forma
       // consistente, preserva _activeFrom e _frozenElapsed locais para evitar saltos visuais.
-      // O Firebase é fonte de verdade para outros usuários (cards do admin/dashboard).
+      // O Supabase é fonte de verdade para outros usuários (cards do admin/dashboard).
       const isOwnSession = currentUser && !currentUser.isAdmin && currentUser.id === fu.id;
       const localIsRunning = s._activeFrom != null && s._activeFrom > 0;
       if(isOwnSession && localIsRunning){
@@ -571,7 +571,7 @@ function startRealtimeSync(){
       return;
     }
     const freshUsers = Object.entries(snap.val()).map(([k,v]) => ({...v, id:k}));
-    // Protege startEpoch de writes parciais do Firebase:
+    // Protege startEpoch de writes parciais do Supabase:
     // Se o snapshot chega sem _startEpoch mas o wstate local já tem um válido
     // e o usuário ainda está running → preserva o startEpoch local
     freshUsers.forEach(fu => {
@@ -627,7 +627,7 @@ function startRealtimeSync(){
 // ════════════════════════════════════════
 // DATA
 // ════════════════════════════════════════
-// Admin credentials managed via Firebase Authentication (email/password)
+// Admin credentials managed via Supabase Authentication (email/password)
 
 const DEFAULT_USERS=[
   {name:'Angel Romero',           pin:'43',code:'',local:'',sector:'MONTAGEM',active:true,totalDia:0,repDia:0},
@@ -792,7 +792,7 @@ async function checkDayReset(){
     localStorage.setItem('sb_last_day', today);
     _supa.from('app_config').upsert({ key: 'lastResetDay', value: today }, { onConflict: 'key' }).catch(()=>{});
 
-    // Busca registros 'running' do dia anterior no Firebase e mantém no history[]
+    // Busca registros 'running' do dia anterior no Supabase e mantém no history[]
     // para que os cards continuem visíveis até o operador finalizar o SELB.
     if(lastDay){
       const prevDk = lastDay.replace(/ /g,'_');
@@ -847,11 +847,11 @@ function restoreActiveSelbs(){
 
 // ════ BOOT ════
 let _bootReady = false;
-let _pendingFirebaseUser = null; // holds firebase user if auth fired before boot finished
+let _pendingAuthUser = null; // holds auth user if auth fired before boot finished
 let _selbsExcluidos = new Set(); // Set de _docId excluídos do cálculo de média
 
 function bootApp(){
-  // Inicia numpad desabilitado até o Firebase responder com os usuários
+  // Inicia numpad desabilitado até o Supabase responder com os usuários
   // (usa setTimeout para garantir que o DOM já está pronto)
   setTimeout(() => setPinLoading(true), 0);
 
@@ -867,7 +867,7 @@ function bootApp(){
   // Inicia listeners em background
   try { startRealtimeSync(); } catch(e){ console.error('sync error',e); }
 
-  // Fallback: se Firebase demorar mais de 8s, libera o numpad com aviso
+  // Fallback: se Supabase demorar mais de 8s, libera o numpad com aviso
   setTimeout(() => {
     if(users.length === 0){
       setPinLoading(false);
@@ -880,7 +880,7 @@ function bootApp(){
   loadEquipamentos().catch(()=>{});
   loadSetores().catch(()=>{});
 
-  // Carrega SELBs excluídos do cálculo de média (persistidos no Firebase)
+  // Carrega SELBs excluídos do cálculo de média (persistidos no Supabase)
   _supa.from('app_config').select('value').eq('key', 'selbsExcluidos').single().then(({data}) => {
     if(data && data.value && typeof data.value === 'object'){
       Object.keys(data.value).forEach(docId => { if(data.value[docId]===true) _selbsExcluidos.add(docId); });
@@ -952,9 +952,9 @@ function bootApp(){
   }
 
   // Processa login pendente (admin com sessão salva)
-  if(_pendingFirebaseUser && !currentUser){
-    loginAs({id:_pendingFirebaseUser.uid, name:'Laboratório', sector:'admin', isAdmin:true});
-    _pendingFirebaseUser = null;
+  if(_pendingAuthUser && !currentUser){
+    loginAs({id:_pendingAuthUser.uid, name:'Laboratório', sector:'admin', isAdmin:true});
+    _pendingAuthUser = null;
   }
 }
 
@@ -1001,7 +1001,7 @@ document.addEventListener('DOMContentLoaded', function(){
         loginAs({id: sbUser.id, name:'Laboratório', sector:'admin', isAdmin: true});
       } else {
         // Boot still running — queue the login for when boot finishes
-        _pendingFirebaseUser = sbUser;
+        _pendingAuthUser = sbUser;
       }
     }
   });
@@ -1139,8 +1139,8 @@ function calcDuracaoLiquida(h){
 }
 // Timer do SELB em andamento — contagem LOCAL após o início.
 // Depois que o operador inicia o SELB, o tempo é contado apenas no cliente
-// (não consulta nem é sobrescrito pelo Firebase). Isso elimina o "sobe e volta".
-// O Firebase só é usado para detectar pausa/intervalo do sistema (status === 'paused')
+// (não consulta nem é sobrescrito pelo Supabase). Isso elimina o "sobe e volta".
+// O Supabase só é usado para detectar pausa/intervalo do sistema (status === 'paused')
 // — nesse momento o contador local é CONGELADO e retomado de onde parou ao voltar.
 const _localTimerCache = Object.create(null); // uid -> { selb, baseSec, runningSince }
 
@@ -1152,7 +1152,7 @@ function _localTimerEnsure(uid){
   let c = _localTimerCache[uid];
   // (Re)inicializa quando o SELB muda ou ainda não existe cache local.
   // A semente vem UMA ÚNICA VEZ do estado conhecido (frozen + tempo vivo desde _activeFrom/startEpoch).
-  // Depois disso, nada mais é puxado do Firebase para o cálculo do tempo.
+  // Depois disso, nada mais é puxado do Supabase para o cálculo do tempo.
   if(!c || c.selb !== s.selb){
     const frozenSec = Math.max(0, Number(s._frozenElapsed) || 0);
     const since = s._activeFrom || s.startEpoch;
@@ -1170,7 +1170,7 @@ function _localTimerEnsure(uid){
 
 // Anti-oscilação: guarda o último valor emitido por uid+SELB para impedir
 // que o tempo pule pra frente/trás caso o cache local seja reinicializado
-// por uma sincronização do Firebase (ex.: _frozenElapsed/_activeFrom mudam).
+// por uma sincronização do Supabase (ex.: _frozenElapsed/_activeFrom mudam).
 const _lastEmittedElapsed = Object.create(null); // uid -> { selb, sec, ts }
 
 function _clearLastEmitted(uid){ delete _lastEmittedElapsed[uid]; }
@@ -1446,7 +1446,7 @@ function logout(){
 // ════════════════════════════════════════
 // TELA DO OPERADOR — view dedicada para login por PIN
 // Separada do dashboard para evitar confusão e bugs de estado.
-// Estado sempre buscado do Firebase antes de qualquer ação.
+// Estado sempre buscado do Supabase antes de qualquer ação.
 // ════════════════════════════════════════
 let _opSyncInterval = null;
 
@@ -1464,17 +1464,18 @@ function showOperatorView(uid){
   document.getElementById('op-sector-tag').innerHTML =
     `<span style="color:${secColor}">${u.sector}</span> · PIN ${u.pin}`;
 
-  // Sincroniza estado do Firebase e renderiza
-  opSyncFromFirebase(uid);
+  // Sincroniza estado do Supabase e renderiza
+  opSyncFromSupabase(uid);
 
-  // Re-sync a cada 30s — o listener onValue do Firebase já cuida das atualizações
+  // Re-sync a cada 30s — o listener onValue do Supabase já cuida das atualizações
   // em tempo real. Polling frequente causava saltos no timer visual.
   _opSyncInterval && clearInterval(_opSyncInterval);
-  _opSyncInterval = setInterval(()=>{ if(currentUser && currentUser.id===uid) opSyncFromFirebase(uid); }, 30000);
+  _opSyncInterval = setInterval(()=>{ if(currentUser && currentUser.id===uid) opSyncFromSupabase(uid); }, 30000);
 }
 
-async function opSyncFromFirebase(uid){
+async function opSyncFromSupabase(uid){
   try {
+    const _queryStart = Date.now(); // marca o início da query para detectar leituras obsoletas
     const fbUser = await dbGet('/users/'+uid);
     if(!fbUser) return;
     const s = getS(uid);
@@ -1484,7 +1485,7 @@ async function opSyncFromFirebase(uid){
       s.status         = 'running';
       s.selb           = fbUser._selb;
       if(fbUser._startEpoch) s.startEpoch = fbUser._startEpoch;
-      // ── Protege timer local: só aplica _activeFrom/_frozenElapsed do Firebase
+      // ── Protege timer local: só aplica _activeFrom/_frozenElapsed do Supabase
       // quando o timer local ainda não foi iniciado (primeira carga).
       // Evita que o sync periódico de 5s cause saltos no timer visual. ──
       const localRunning = s._activeFrom != null && s._activeFrom > 0;
@@ -1505,6 +1506,13 @@ async function opSyncFromFirebase(uid){
       s._frozenElapsed = fbUser._frozenElapsed != null ? fbUser._frozenElapsed : (s._frozenElapsed||0);
       s._activeFrom    = null;
     } else {
+      // Guard: se o SELB foi iniciado localmente DEPOIS que esta query começou,
+      // o dado do banco está obsoleto (race condition entre opSyncFromSupabase e
+      // confirmarInicio). Não sobrescreve o estado local — o Realtime vai sincronizar.
+      if (s.status === 'running' && s.selb && s.startEpoch && s.startEpoch >= _queryStart) {
+        opRenderState(uid);
+        return;
+      }
       s.status = 'idle';
       s.selb   = null;
     }
@@ -1614,11 +1622,11 @@ async function opIniciarSelb(){
   document.getElementById('op-checking').style.display = 'block';
 
   try {
-    // Consulta Firebase — fonte de verdade
+    // Consulta Supabase — fonte de verdade
     const fbUser = await dbGet('/users/'+uid);
     if(fbUser && (fbUser._status === 'running' || fbUser._status === 'paused' || fbUser._status === 'aguardando')){
       if(fbUser._selb){
-        // Já tem SELB ativo no Firebase — sincroniza e mostra
+        // Já tem SELB ativo no Supabase — sincroniza e mostra
         const s = getS(uid);
         s.status = fbUser._status;
         s.selb = fbUser._selb;
@@ -1659,7 +1667,7 @@ async function opFinalizarAguardando(){
 
   const now = Date.now();
 
-  // Atualiza estado local e no Firebase para 'running'
+  // Atualiza estado local e no Supabase para 'running'
   s.status = 'running';
   s._activeFrom = now;
   s._pausedAt = null;
@@ -1729,7 +1737,7 @@ function setView(v,btn){
   }
   // ── SEGURANÇA: bloqueia views restritas para não-admins ──
   if(v === 'admin' && !(currentUser && currentUser.isAdmin)){
-    console.warn('[Security] setView admin bloqueado — não é admin Firebase');
+    console.warn('[Security] setView admin bloqueado — não é admin Supabase');
     return;
   }
   if(v === 'equip' && !(currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP'))){
@@ -2304,7 +2312,7 @@ function ativarBloqueio(uid){
   const nome = u ? u.name : 'Usuário';
   let secs = 5 * 60;
 
-  // Bloqueia no Firebase para todas as telas
+  // Bloqueia no Supabase para todas as telas
   dbPatch('/users/'+uid, {_bloqueado: true, _bloqueadoAte: Date.now() + secs*1000}).catch(()=>{});
 
   document.getElementById('modal-bloqueado').classList.remove('hidden');
@@ -2353,7 +2361,7 @@ async function listarBackups(){
           <div style="font-size:11px;color:var(--muted);margin-top:2px">${saved} · ${motivo} · ${recCount} registros</div>
         </div>
         <button class="btn bp" style="font-size:11px;padding:6px 12px;white-space:nowrap"
-          onclick="restaurarBackupFirebase('${b.dk}')">Restaurar</button>
+          onclick="restaurarBackupSupabase('${b.dk}')">Restaurar</button>
       </div>`;
     }).join('');
   } catch(e){
@@ -2361,7 +2369,7 @@ async function listarBackups(){
   }
 }
 
-async function restaurarBackupFirebase(dateKey){
+async function restaurarBackupSupabase(dateKey){
   if(!confirm('⚠️ Restaurar o backup de "'+dateKey.replace(/_/g,' ')+'"?\n\nIsso vai substituir os dados do dia atual.')){
     return;
   }
@@ -2507,17 +2515,17 @@ Os relatórios agora mostrarão os tempos corretos.`);
   }
 }
 
-// ════ RESET CONFIG FIREBASE ════
+// ════ RESET CONFIG SUPABASE ════
 async function resetConfig(){
   if(!currentUser || !currentUser.isAdmin) return;
   const opcao = window.confirm(
-    '🔥 Manutenção Firebase\n\n' +
-    'Clique OK para recarregar os dados do Firebase agora\n' +
+    '🔥 Manutenção Supabase\n\n' +
+    'Clique OK para recarregar os dados do Supabase agora\n' +
     '(equipamentos, excluídos de média e contadores de usuários).\n\n' +
     'Os dados de histórico e usuários NÃO serão apagados.'
   );
   if(!opcao) return;
-  showLoader('Recarregando configurações do Firebase...');
+  showLoader('Recarregando configurações do Supabase...');
   try {
     // Recarrega equipamentos
     await loadEquipamentos();
@@ -2635,7 +2643,7 @@ async function confirmarInicio(){
   }
 
   // ════════════════════════════════════════════════════════════════
-  // VERIFICAÇÃO FIREBASE-FIRST: consulta o estado real do servidor
+  // VERIFICAÇÃO SUPABASE-FIRST: consulta o estado real do servidor
   // antes de registrar, para evitar duplicatas quando a aba do
   // navegador está desatualizada e o usuário clica duas vezes.
   // ════════════════════════════════════════════════════════════════
@@ -2643,13 +2651,13 @@ async function confirmarInicio(){
     try {
       const dateKey = new Date().toDateString().replace(/ /g,'_');
 
-      // 1) Lê o nó do usuário direto do Firebase (estado live)
+      // 1) Lê o nó do usuário direto do Supabase (estado live)
       const fbUser = await dbGet('/users/'+actionUid);
 
-      // 2) Se o Firebase diz que este usuário já está em 'running',
+      // 2) Se o Supabase diz que este usuário já está em 'running',
       //    verifica se existe um SELB concluído hoje antes de permitir novo início
       if(fbUser && fbUser._status === 'running'){
-        // Busca o histórico do dia direto do Firebase para verificar SELBs concluídos
+        // Busca o histórico do dia direto do Supabase para verificar SELBs concluídos
         const fbHistory = await dbGet('/history/'+dateKey);
         const recs = fbHistory
           ? Object.entries(fbHistory).map(([k,v])=>({...v,_docId:k,_dateKey:dateKey}))
@@ -2708,19 +2716,19 @@ async function confirmarInicio(){
         s3.status='idle'; s3.selb=null; s3.elapsed=0; s3.startEpoch=null;
       }
 
-      // 3) Sincroniza o history[] local com os registros do Firebase para garantir
+      // 3) Sincroniza o history[] local com os registros do Supabase para garantir
       //    que o fechamento de orphans locais (abaixo) use dados atualizados
       const fbHistSync = await dbGet('/history/'+dateKey);
       if(fbHistSync){
         const fbRecs = Object.entries(fbHistSync).map(([k,v])=>({...v,_docId:k,_dateKey:dateKey}));
-        // Adiciona ao history[] qualquer registro running do Firebase que não esteja local
+        // Adiciona ao history[] qualquer registro running do Supabase que não esteja local
         fbRecs.filter(r=>r.uid===actionUid&&r.status==='running').forEach(r=>{
           if(!history.find(h=>h._docId===r._docId)) history.unshift(r);
         });
       }
     } catch(e){
-      // Falha na consulta Firebase — continua normalmente (comportamento anterior)
-      console.warn('[SELB] Verificação Firebase-first falhou, continuando:', e);
+      // Falha na consulta Supabase — continua normalmente (comportamento anterior)
+      console.warn('[SELB] Verificação Supabase-first falhou, continuando:', e);
     }
   }
   // ════════════════════════════════════════════════════════════════
@@ -2942,7 +2950,7 @@ async function confirmarFin(){
   if(res==='cancelado'&&!motivo){ document.getElementById('mfin-motivo-cancelado').focus(); alert('Informe o motivo do cancelamento.'); return; }
   if(res==='cancelado'&&!(currentUser&&currentUser.isAdmin)){ alert('Apenas administradores podem cancelar um SELB.'); return; }
   const s=getS(actionUid); const u=users.find(x=>x.id===actionUid);
-  // ── Captura o SELB atual ANTES de qualquer await (evita race condition com listener Firebase) ──
+  // ── Captura o SELB atual ANTES de qualquer await (evita race condition com listener Supabase) ──
   const selbAtualSnapshot = s.selb;
   // ── Anti-duplicata: bloqueia "Aguardando Peças" se SELB já está em Máquinas A ──
   if(res === 'aguardando'){
@@ -2955,7 +2963,7 @@ async function confirmarFin(){
   }
   const h=history.find(x=>x.selb===selbAtualSnapshot&&x.uid===actionUid&&x.status==='running');
   const endTime=new Date().toLocaleTimeString('pt-BR');
-  // Elapsed: usa h.startEpoch (Firebase) como fonte mais confiável;
+  // Elapsed: usa h.startEpoch (Supabase) como fonte mais confiável;
   // s.startEpoch pode estar desatualizado se outra tela retomou a pausa.
   const now_fin = Date.now();
 
@@ -3057,7 +3065,7 @@ async function confirmarFin(){
   const jaDisparou = localStorage.getItem(bipKey);
   if(res === 'ok' && newTotal >= meta && prevTotal < meta && !jaDisparou){
     localStorage.setItem(bipKey, '1');
-    // Dispara celebração global via Firebase
+    // Dispara celebração global via Supabase
     _supa.from('app_config').upsert({ key: 'latestCelebration', value: { uid: actionUid, name: u.name, timestamp: Date.now() } }, { onConflict: 'key' }).catch(()=>{});
   }
 
@@ -3067,7 +3075,7 @@ async function confirmarFin(){
   // 'scrap' → bolsão SCRAP
   // 'rep'   → mantém no bolsão atual (SELB reprovado fica no último bolsão registrado)
   // Usa h.selb como fonte principal; fallback para selbAtualSnapshot caso h seja nulo
-  // (evita SELB ficar preso no bolsão quando listener Firebase limpa s.selb antes do fim do await)
+  // (evita SELB ficar preso no bolsão quando listener Supabase limpa s.selb antes do fim do await)
   const selbParaMover = (h && h.selb) ? h.selb : selbAtualSnapshot;
   if(selbParaMover){
     fluxolabFinalizarSelb(selbParaMover, u.sector, res).catch(e => console.warn('[FluxoLAB] Erro ao mover SELB no FluxoLAB:', e));
@@ -3106,7 +3114,7 @@ async function addFollowupEntry(uid){
 
   try {
     await dbUpdateHistory(h._docId, h._dateKey, { followup: updated });
-    // Opcional: atualizar visualmente o log imediatamente se o Firebase demorar
+    // Opcional: atualizar visualmente o log imediatamente se o Supabase demorar
     const logDiv = document.getElementById('flog-'+uid);
     if(logDiv){
       if(logDiv.textContent === 'Nenhum registro...') logDiv.innerHTML = '';
@@ -3196,7 +3204,7 @@ function startTimer(uid){
     console.warn('[Sanity Check] startTimer called sem uid');
     return;
   }
-  // Tick puramente visual — não grava nada no Firebase.
+  // Tick puramente visual — não grava nada no Supabase.
   // Atualiza o elemento #m-timer-<uid> a cada 1s enquanto status === 'running'.
   if(timers[uid]){ clearInterval(timers[uid]); delete timers[uid]; }
   timers[uid] = setInterval(()=>{
@@ -3640,7 +3648,7 @@ async function liberarPeca(docId, dateKey){
   if(!confirm("Deseja aprovar e liberar este SELB? Ele sairá da lista de aguardando peças.")) return;
   
   try {
-    // Atualiza status no Firebase
+    // Atualiza status no Supabase
     await dbUpdateHistory(docId, dateKey, { status: 'ok' });
     
     // Atualiza localmente
@@ -3983,7 +3991,7 @@ function abrirSolicitarPecaOperador(){
     return;
   }
 
-  // Fallback: busca selb diretamente do Firebase (race condition entre sync e clique)
+  // Fallback: busca selb diretamente do Supabase (race condition entre sync e clique)
   dbGet('/users/'+uid).then(fbUser => {
     if(fbUser && fbUser._selb && fbUser._status === 'running'){
       // Garante que o wstate está atualizado
@@ -4117,7 +4125,7 @@ async function confirmarSolicitarPeca(){
     });
     await Promise.all(promises);
 
-    // 2. Atualiza o registro ativo no Firebase para status 'aguardando'
+    // 2. Atualiza o registro ativo no Supabase para status 'aguardando'
     //    para que o admin veja na tela "Aguardando Peças"
     const hAtivo = history.find(h => h.uid === uid && h.selb === selb &&
       (h.status === 'running' || h.status === 'paused'));
@@ -4153,7 +4161,7 @@ async function confirmarSolicitarPeca(){
       if(timers[uid]){ clearInterval(timers[uid]); delete timers[uid]; }
       s.status = 'aguardando';
 
-      // Limpa o _selb/_status no nó do usuário no Firebase para liberar o operador
+      // Limpa o _selb/_status no nó do usuário no Supabase para liberar o operador
       await dbPatch('/users/'+uid, {
         _status: 'aguardando',
         _selb: selb,
@@ -4657,7 +4665,7 @@ async function abrirModalLogsPecas() {
 
 async function moverPeca(id, direcao){
   const pecas = getListaPecas().filter(p=>!p.id.startsWith('pad_'));
-  // Se ainda estiver usando padrão, inicializa no Firebase primeiro
+  // Se ainda estiver usando padrão, inicializa no Supabase primeiro
   if (!Object.keys(_configPecas).length) {
     for (let i = 0; i < PECAS_PADRAO.length; i++) {
       const p = PECAS_PADRAO[i];
@@ -4679,13 +4687,13 @@ async function moverPeca(id, direcao){
 
 // ════════════════════════════════════════════
 // GARANTIA
-// Armazenado em /garantia/{id} no Firebase
+// Armazenado em /garantia/{id} no Supabase
 // Campos: nome, codigo, motivo, status, registradoPor, registradoEm (ts), uid
 // ════════════════════════════════════════════
 
 let _garantiaCache    = {};   // cache local { id: {...} }
 let _garantiaFilter   = '';   // filtro de status atual
-let _garantiaListener = null; // referência ao listener Firebase
+let _garantiaListener = null; // referência ao listener Supabase
 
 // ── Listener Supabase para garantia ─────────────────────────────────────────
 async function startGarantiaListener(){
@@ -4929,15 +4937,15 @@ function setGarantiaSubTab(tab){
 
 // ════════════════════════════════════════════
 // DEVOLUÇÃO DE PEÇAS
-// Armazenado em /devolucoes/{id} no Firebase
+// Armazenado em /devolucoes/{id} no Supabase
 // Campos: nome, codigo, motivo, quantidade, selb, registradoPor, registradoEm (ts)
 // Registro somente interno no LabTech — NÃO altera o estoque do Pietro.
 // ════════════════════════════════════════════
 
 let _devolucaoCache    = {};   // cache local { id: {...} }
-let _devolucaoListener = null; // referência ao listener Firebase
+let _devolucaoListener = null; // referência ao listener Supabase
 
-// ── Listener Firebase ────────────────────────────────────────────────────────
+// ── Listener Supabase ────────────────────────────────────────────────────────
 function startDevolucaoListener(){
   if(!_db || _devolucaoListener) return;
   _devolucaoListener = _db.ref('/devolucoes').on('value', snap => {
@@ -5160,7 +5168,7 @@ async function confirmarRemoverDevolucao(id, nome){
 
 // ════════════════════════════════════════════
 // MÁQUINAS PERDIDAS
-// Armazenado em /maquinas_perdidas/{id} no Firebase
+// Armazenado em /maquinas_perdidas/{id} no Supabase
 // Campos: selb, equipamento, setor, observacao, registradoPor, registradoEm, status ('perdida'|'encontrada')
 // ════════════════════════════════════════════
 let _maquinasPerdidas = {}; // cache local { id: {...} }
@@ -5208,7 +5216,7 @@ function abrirModalAdicionarPerdida(){
   setTimeout(() => document.getElementById('mperd-selb').focus(), 100);
 }
 
-// ── Salva máquina perdida no Firebase ─────────────────────────────────────
+// ── Salva máquina perdida no Supabase ─────────────────────────────────────
 async function salvarMaquinaPerdida(){
   const selb  = document.getElementById('mperd-selb').value.trim().toUpperCase();
   const equip = document.getElementById('mperd-equip').value.trim();
@@ -5719,7 +5727,7 @@ async function confirmarReprovacao(){
     } catch(e){ console.warn('[FluxoLAB] Erro ao mover SELB reprovado:', e); }
 
 
-    // 2. Incrementa repDia do profissional original no Firebase
+    // 2. Incrementa repDia do profissional original no Supabase
     const profUser = users.find(u => u.id === orig.uid);
     if(profUser){
       profUser.repDia = (profUser.repDia || 0) + 1;
@@ -6770,9 +6778,9 @@ let scrapFilter='';
 let _usuarioSector  = '';
 let _usuarioSelUid  = null;
 let _chartUsuario   = null;
-let _usuarioAllRecs = null; // cache de registros carregados do Firebase para o período
+let _usuarioAllRecs = null; // cache de registros carregados do Supabase para o período
 
-// Carrega registros do Firebase conforme o período selecionado
+// Carrega registros do Supabase conforme o período selecionado
 async function loadUsuarioByPeriod(){
   const period  = (document.getElementById('usuario-period')||{}).value || 'today';
   const loading = document.getElementById('usuario-loading');
@@ -7090,7 +7098,7 @@ function renderUsuarioRel(){
 let relSubTab='prod';
 
 // ════ REFRESH BADGE — relatórios ════
-// Em vez de redesenhar a cada update do Firebase (que pisca a tela),
+// Em vez de redesenhar a cada update do Supabase (que pisca a tela),
 // mostra um badge discreto. O usuário clica quando quiser atualizar.
 function showRelRefreshBadge(){
   const badge = document.getElementById('rel-refresh-badge');
@@ -8766,7 +8774,7 @@ async function renderModeloRel(){
 
 // ════════════════════════════════════════
 // RELATÓRIO MENSAL
-// Lê todos os dias do mês diretamente do Firebase (/history/dateKey)
+// Lê todos os dias do mês diretamente do Supabase (/history/dateKey)
 // ════════════════════════════════════════
 let mensalSector  = '';
 let _mensalData   = null; // cached loaded month data { monthKey, days: {dateKey: records[]} }
@@ -8802,7 +8810,7 @@ function getDaysInMonth(yearMonth){
   const daysInMonth = new Date(y, m, 0).getDate();
   for(let d = 1; d <= daysInMonth; d++){
     const date = new Date(y, m-1, d);
-    // Firebase stores dateKeys as JS toDateString().replace(/ /g,'_')
+    // Supabase stores dateKeys as JS toDateString().replace(/ /g,'_')
     days.push(date.toDateString().replace(/ /g,'_'));
   }
   return days;
@@ -9415,7 +9423,7 @@ function renderRelGraficos(){
 
 // ════════════════════════════════════════
 // EQUIPAMENTOS — SELB → Nome do equipamento
-// Stored in Firebase at /equipamentos/{selbCode}
+// Stored in Supabase at /equipamentos/{selbCode}
 // ════════════════════════════════════════
 let equipamentos = {}; // { 'SELB-001': 'Impressora HP 1020', ... }
 let _equipSeries = {};  // { 'SELB-001': 'X2SR003422', ... }
@@ -9860,13 +9868,13 @@ async function clearEquipamentos(){
 // ZERAR DIA
 // ════════════════════════════════════════
 // ════════════════════════════════════════
-// BACKUP AUTOMÁTICO NO FIREBASE
+// BACKUP AUTOMÁTICO NO SUPABASE
 // Salvo em /backups/{dateKey} ao fim do expediente ou antes de zerar tudo.
 // Restauração manual via botão "Restaurar" na aba Admin.
 // ════════════════════════════════════════
 let _autoBackupDone = false; // só faz backup uma vez por dia
 
-async function fazerBackupFirebase(dateKey, motivo){
+async function fazerBackupSupabase(dateKey, motivo){
   try {
     const histData  = await dbGet('/history/'+dateKey);
     const usersData = await dbGet('/users');
@@ -9913,7 +9921,7 @@ async function zerarSelbs(){
       const _endDateKey2 = new Date(_endEpoch2).toDateString().replace(/ /g,'_');
       await dbUpdateHistory(h._docId, h._dateKey, {end:endTime, duracao:fmt(elapsed), status:'ok', endEpoch:_endEpoch2, endDateKey:_endDateKey2});
     }
-    // Reseta estado ativo de cada usuário afetado (totalDia não é mais mantido no Firebase)
+    // Reseta estado ativo de cada usuário afetado (totalDia não é mais mantido no Supabase)
     const activeUsers = users.filter(u => {
       const s = wstate[u.id];
       return s && (s.status === 'running' || s.status === 'paused');
@@ -9952,11 +9960,11 @@ async function confirmarZerarDia(){
   try {
     const dateKey = new Date().toDateString().replace(/ /g,'_');
 
-    // 0. Backup automático antes de zerar — salva snapshot completo no Firebase
-    await fazerBackupFirebase(dateKey, 'zerar-dia-manual');
+    // 0. Backup automático antes de zerar — salva snapshot completo no Supabase
+    await fazerBackupSupabase(dateKey, 'zerar-dia-manual');
 
     // 1. Finalizar todos os SELBs em andamento — APENAS fecha os registros abertos
-    //    NÃO apaga nada do /history no Firebase
+    //    NÃO apaga nada do /history no Supabase
     const running = users.filter(u => {
       const s = wstate[u.id];
       return s && (s.status === 'running' || s.status === 'paused');
@@ -9972,7 +9980,7 @@ async function confirmarZerarDia(){
         h.status = 'ok'; h.endEpoch = _endEp3; h.endDateKey = _endDk3;
         await dbUpdateHistory(h._docId, h._dateKey, {end:endTime, duracao:fmt(elapsed), status:'ok', endEpoch:_endEp3, endDateKey:_endDk3});
       }
-      // Limpa estado ativo — totalDia não é mais mantido no Firebase
+      // Limpa estado ativo — totalDia não é mais mantido no Supabase
       await dbPatch('/users/'+u.id, {
         _selb:null, _status:'idle', _startEpoch:null,
         _elapsed:null, _pausedElapsed:null, _pausedAt:null,
@@ -9983,7 +9991,7 @@ async function confirmarZerarDia(){
       s._pausedAt=null; s._pauseAccum=0; s._frozenElapsed=0; s._activeFrom=null;
     }
 
-    // 2. Reseta apenas o wstate local (display) — NÃO altera /history nem totalDia no Firebase
+    // 2. Reseta apenas o wstate local (display) — NÃO altera /history nem totalDia no Supabase
     Object.keys(wstate).forEach(uid => {
       wstate[uid] = {
         selb:null, status:'idle', elapsed:0, meta:60,
@@ -9993,17 +10001,17 @@ async function confirmarZerarDia(){
       };
     });
 
-    // 3. Grava data do reset no Firebase para evitar reset duplo na virada do dia
+    // 3. Grava data do reset no Supabase para evitar reset duplo na virada do dia
     await _supa.from('app_config').upsert({ key: 'lastResetDay', value: new Date().toDateString() }, { onConflict: 'key' }).catch(()=>{});
     localStorage.setItem('sb_last_day', new Date().toDateString());
     _autoBackupDone = true;
 
-    // 4. Os dados do /history PERMANECEM no Firebase intactos.
+    // 4. Os dados do /history PERMANECEM no Supabase intactos.
     //    O listener de tempo real já mantém history[] sincronizado — não precisa limpar.
     hideLoader();
     buildCards();
     updateSummary();
-    alert('✅ Dia zerado!\n\nOs relatórios e histórico no Firebase foram preservados.\nBackup salvo em /backups/'+dateKey);
+    alert('✅ Dia zerado!\n\nOs relatórios e histórico no Supabase foram preservados.\nBackup salvo em /backups/'+dateKey);
   } catch(e){
     showError('Erro ao zerar: '+e.message);
   }
@@ -10284,7 +10292,7 @@ function scheduleCheck(){
     if(state.type==='after' && !_autoBackupDone && currentUser){
       _autoBackupDone = true;
       const dk = new Date().toDateString().replace(/ /g,'_');
-      fazerBackupFirebase(dk, 'fim-expediente').catch(()=>{});
+      fazerBackupSupabase(dk, 'fim-expediente').catch(()=>{});
     }
     pauseAllRunning();
     showScheduleOverlay(state);
@@ -10333,10 +10341,10 @@ function liveClock(){
       });
     }
 
-    // Re-sync periódico removido: o listener onValue do Firebase (applyUserSnapshot)
+    // Re-sync periódico removido: o listener onValue do Supabase (applyUserSnapshot)
     // já sincroniza _startEpoch, _pauseAccum e _pausedAt em tempo real sempre que
     // qualquer dado muda no banco — inclusive pausas/retomadas de outras abas/máquinas.
-    // Polling manual era redundante e gerava leituras desnecessárias no Firebase.
+    // Polling manual era redundante e gerava leituras desnecessárias no Supabase.
 
     // ── Auditoria de bolsões às 17:15 ────────────────────────────────────────
     // Varre o FluxoLAB e remove qualquer SELB do setor DESMEMBRAMENTO que tenha
@@ -10832,7 +10840,7 @@ function renderRpBody(recs){
 
 // ════════════════════════════════════════════
 // MÁQUINAS A
-// Armazenado em /maquinas_a/{id} no Firebase
+// Armazenado em /maquinas_a/{id} no Supabase
 // Campos: selb, equipamento, setor, observacao, registradoPor, registradoEm, status ('ativa'|'removida')
 // ════════════════════════════════════════════
 let _maquinasA = {}; // cache local { id: {...} }
@@ -10879,7 +10887,7 @@ async function renderPecasSubView(){
     dks.push(d.toDateString().replace(/ /g,'_'));
   }
 
-  // Busca no Firebase os dias que ainda não estão no cache
+  // Busca no Supabase os dias que ainda não estão no cache
   for(const dk of dks){
     if(history.some(h => h._dateKey === dk && h.status === 'aguardando')) continue;
     try {
@@ -10984,7 +10992,7 @@ function abrirModalAdicionarMaquinaA(){
   setTimeout(() => document.getElementById('ma-selb').focus(), 100);
 }
 
-// ── Salva Máquina A no Firebase ─────────────────────────────────────────
+// ── Salva Máquina A no Supabase ─────────────────────────────────────────
 // ── Auto-preenche modelo ao bipar/digitar SELB no modal de Máquina A ────────
 function maquinaAAutoPreencherEquip(selb) {
   const previewEl   = document.getElementById('ma-equip-preview');
@@ -11463,7 +11471,7 @@ async function renderBuscaModeloRel(){
 // Exibe um pop-up fixo para cada profissional IDLE nessas áreas.
 // O alerta desaparece APENAS quando o profissional inicia um SELB
 // ou quando o admin clica em "Remover Alerta".
-// Sincronizado via Firebase /alerts/dismissed para todas as janelas.
+// Sincronizado via Supabase /alerts/dismissed para todas as janelas.
 // ════════════════════════════════════════════════════════════════════════
 (function(){
 const ALERT_SECTORS = new Set(['COMPLEXA','MONTAGEM','LIMPEZA']);
@@ -11577,7 +11585,7 @@ const ALERT_SECTORS = new Set(['COMPLEXA','MONTAGEM','LIMPEZA']);
     setTimeout(() => { if(card.parentNode) card.parentNode.removeChild(card); }, 260);
   }
 
-  // ── Admin remove o alerta — persiste no Firebase ──────────────────────────
+  // ── Admin remove o alerta — persiste no Supabase ──────────────────────────
   window.admRemoverAlerta = async function(uid, btn){
     if(!currentUser || !currentUser.isAdmin) return;
     if(btn){ btn.disabled = true; btn.textContent = '…'; }
@@ -11588,7 +11596,7 @@ const ALERT_SECTORS = new Set(['COMPLEXA','MONTAGEM','LIMPEZA']);
     if(card) dismissCardAnim(card);
   };
 
-  // ── Ouve /alerts/dismissed no Firebase (sincroniza entre janelas) ──────────
+  // ── Ouve /alerts/dismissed no Supabase (sincroniza entre janelas) ──────────
   let _alertsListener = null;
   function startAlertsListener(){
     if(_alertsListener) return;
@@ -11882,12 +11890,12 @@ async function confirmarScrapDireto(){
 
 // ════════════════════════════════════════════════════════════════════
 // QUALIDADE — Registros de inspeção (antigo Gaiola LAB)
-// Firebase path: /qualidade_registros/{id}
+// Supabase path: /qualidade_registros/{id}
 // ════════════════════════════════════════════════════════════════════
 
 let _qualRegistros = {};  // cache local
 
-// ── Carrega registros do Firebase e monta o listener em tempo real ──
+// ── Carrega registros do Supabase e monta o listener em tempo real ──
 async function _initQualListener(){
   async function _reloadQualReg(){
     const { data } = await _supa.from('qualidade_registros').select('*');
@@ -12339,7 +12347,7 @@ function renderQualRegistros(){
     cardPendRef.insertAdjacentElement('afterend', card);
     statsChk = document.getElementById('qual-stats-checklist');
   }
-  // Carrega o valor do dia do Firebase
+  // Carrega o valor do dia do Supabase
   qualLoadChecklistCount();
 
   // ── Card LIBERADAS — SELBs inseridos manualmente como liberados ──
@@ -12720,7 +12728,7 @@ function qualRenderTotaisModelo(){
   // __qualChecklistAcumulado: saldo acumulado por modelo (persiste entre bipes e recargas)
   window.__qualChecklist = window.__qualChecklist || {};
   window.__qualChecklistAcumulado = window.__qualChecklistAcumulado || {};
-  // Restaura do Firebase se memória estiver zerada (ex: após recarregar a página)
+  // Restaura do Supabase se memória estiver zerada (ex: após recarregar a página)
   if (Object.keys(window.__qualChecklistAcumulado).length === 0) {
     const _todayChk = new Date().toISOString().slice(0,10);
 _supa.from('qual_checklist_dia').select('acumulado').eq('date_key', _todayChk).single().then(({data}) => {
@@ -12805,7 +12813,7 @@ _supa.from('qual_checklist_dia').select('acumulado').eq('date_key', _todayChk).s
     box.querySelector('#_chk-btn-ok').onclick = () => {
       window.__qualChecklistAcumulado[modelo] = novoTotal;
       window.__qualChecklist[modelo] = String(novoTotal);
-      // Persiste no Firebase por dia
+      // Persiste no Supabase por dia
       const _todayChk = new Date().toISOString().slice(0,10);
       _supa.from('qual_checklist_dia').upsert({ date_key: _todayChk, acumulado: window.__qualChecklistAcumulado }, { onConflict: 'date_key' }).catch(()=>{});
       overlay.remove();
@@ -13024,7 +13032,7 @@ function qualLoadChecklistCount(){
   if(el) el.textContent = soma;
 
   // Se o cache ainda está vazio (ex: página recarregada sem abrir o painel de checklist),
-  // busca direto do Firebase e atualiza o card quando retornar.
+  // busca direto do Supabase e atualiza o card quando retornar.
   if(!window.__qualChecklistAcumulado || Object.keys(window.__qualChecklistAcumulado).length === 0){
     const _today = new Date().toISOString().slice(0,10);
 _supa.from('qual_checklist_dia').select('acumulado').eq('date_key', _today).single().then(({data}) => {
@@ -13058,7 +13066,7 @@ function qualPrintLabels(){
   document.body.classList.add('printing-qualidade');
   window.print();
 
-  // Registra impressao no Firebase sem incrementar o card azul
+  // Registra impressao no Supabase sem incrementar o card azul
   if(qtyPrinted > 0) qualIncrementChecklist(qtyPrinted);
 }
 
@@ -14092,7 +14100,7 @@ function defaultAllPerms(){
 
 let _sectorTabPerms = defaultAllPerms();
 
-// Valor bruto do Firebase — guardado para re-merge quando _setores carregar setores dinâmicos
+// Valor bruto do Supabase — guardado para re-merge quando _setores carregar setores dinâmicos
 let _sectorTabPermsRaw = null;
 
 function _applySectorTabPermsRaw(){
@@ -14108,7 +14116,7 @@ function _applySectorTabPermsRaw(){
   renderSectorPermsUI();
 }
 
-// Carrega do Firebase em tempo real
+// Carrega do Supabase em tempo real
 (async function loadSectorTabPerms(){
   try{
     const { data } = await _supa.from('app_config').select('value').eq('key','sectorTabPerms').single();
@@ -14219,7 +14227,7 @@ function defaultAllRelPerms(){
 
 let _relSubTabPerms = defaultAllRelPerms();
 
-// Valor bruto do Firebase para sub-abas — re-merge após _setores carregar
+// Valor bruto do Supabase para sub-abas — re-merge após _setores carregar
 let _relSubTabPermsRaw = null;
 
 function _applyRelSubTabPermsRaw(){
@@ -14314,12 +14322,12 @@ function resetRelSubTabPerms(){
 
 // ════════════════════════════════════════════════════════════════
 // GERENCIAR SETORES
-// Setores ficam em Firebase: /setores (array de strings em maiúsculo)
+// Setores ficam em Supabase: /setores (array de strings em maiúsculo)
 // Setores fixos (nunca removíveis): VISUALIZAÇÃO, EXIBIÇÃO
 // ════════════════════════════════════════════════════════════════
 
 const SETORES_FIXOS = ['MONTAGEM','LIMPEZA','COMPLEXA','ELETRÔNICA','QUALIDADE','DESMEMBRAMENTO','VISUALIZAÇÃO'];
-let _setores = [...SETORES_FIXOS]; // carregado do Firebase ao iniciar
+let _setores = [...SETORES_FIXOS]; // carregado do Supabase ao iniciar
 
 // Tipo de visualização por setor: 'operador' (tela tipo Montagem) ou 'admin' (visão administrativa)
 // Padrão para setores fixos: VISUALIZAÇÃO/QUALIDADE => 'admin'; demais => 'operador'
@@ -14536,7 +14544,7 @@ async function removeSetor(nome) {
 // ════════════════════════════════════════════════════════════════
 // FLUXOLAB — Rastreamento em tempo real de SELBs por bolsao
 // Bolsoes: LIMPEZA, MONTAGEM, COMPLEXA, QUALIDADE, DOCA 1-4
-// Estrutura Firebase: /fluxolab/<bolsao>/<selbKey> = { selb, uid, userName, sector, ts }
+// Estrutura Supabase: /fluxolab/<bolsao>/<selbKey> = { selb, uid, userName, sector, ts }
 // Regra: cada SELB e unico no sistema sem duplicatas entre bolsoes.
 // ════════════════════════════════════════════════════════════════
 
@@ -15594,7 +15602,7 @@ function renderRelatorioUsuariosQual() {
     }
     return true;
   };
-  // Usa _qualReprovRecs (carregado do Firebase para períodos históricos) ou history como fallback
+  // Usa _qualReprovRecs (carregado do Supabase para períodos históricos) ou history como fallback
   const reprovSrc = (window._qualReprovRecs && window._qualReprovRecs.length)
     ? window._qualReprovRecs
     : (history || []).filter(h => h.status === 'rep' && h._reprovadoPor);
@@ -15950,7 +15958,7 @@ function fluxolabRenderModelos() {
     const sample = _fluxolabChecklistsImported[0];
     const modelKey = _fluxolabFindKey(sample, 'Descrição Equipamento') || _fluxolabFindKey(sample, 'Descricao Equipamento');
     if (modelKey) {
-      // Monta mapa normKey -> nomeOriginal do Firebase (para lookup reverso)
+      // Monta mapa normKey -> nomeOriginal do Supabase (para lookup reverso)
       const gruposNormMap = new Map(); // normKey -> nomeModelo em grupos
       Object.keys(grupos).forEach(m => gruposNormMap.set(_fluxolabNormModel(m), m));
 
@@ -16229,12 +16237,12 @@ function fluxolabRenderModelos() {
 // ════════════════════════════════════════
 // FLUXOLAB — Importação de Checklists (XLSX)
 // Agrupa checklists por "Descrição Equipamento"
-// Persistência via Firebase (mesmo padrão de importEquipFile)
+// Persistência via Supabase (mesmo padrão de importEquipFile)
 // ════════════════════════════════════════
 let _fluxolabChecklistsImported = []; // [{ ...rowFromXlsx }]
 
 // Cada linha é salva como string JSON para evitar que nomes de colunas com caracteres
-// proibidos pelo Firebase (. # $ / [ ]) se tornem chaves aninhadas.
+// proibidos pelo Supabase (. # $ / [ ]) se tornem chaves aninhadas.
 let _fluxolabChecklistsListener = null;
 function fluxolabStartChecklistsListener(){
   if (_fluxolabChecklistsListener) return;
@@ -16246,7 +16254,7 @@ function fluxolabStartChecklistsListener(){
         _fluxolabChecklistsImported = Object.values(val).map(s => JSON.parse(s));
       } catch(e) {
         _fluxolabChecklistsImported = [];
-        console.warn('[FluxoLAB] erro ao parsear checklists do Firebase', e);
+        console.warn('[FluxoLAB] erro ao parsear checklists do Supabase', e);
       }
     }
     fluxolabRenderChecklistsImported();
@@ -16289,7 +16297,7 @@ async function fluxolabImportChecklists(ev){
     const rows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
     if (!rows.length) { hideLoader(); alert('Planilha vazia.'); return; }
 
-    // Salva no Firebase: cada linha como string JSON (evita chaves com / # $ . [ ])
+    // Salva no Supabase: cada linha como string JSON (evita chaves com / # $ . [ ])
     await dbDelete('/fluxolab_checklists');
     const batch = {};
     rows.forEach((r, i) => { batch[String(i)] = JSON.stringify(r); });
@@ -16391,14 +16399,14 @@ function fluxolabRenderChecklistsImported(){
   const DOCA_KEYS = new Set(['DOCA_1']);
 
   // Mapa de nomes normalizados dos modelos da planilha → nome original
-  // Usado para match fuzzy entre nomes do Firebase e da planilha
+  // Usado para match fuzzy entre nomes do Supabase e da planilha
   const modelosPlanilhaNorm = new Map(); // normKey → nomeOriginal
   Object.keys(grupos).forEach(m => modelosPlanilhaNorm.set(_fluxolabNormModel(m), m));
 
   // Função de match: tenta exato, depois por palavras-chave (modelo/série)
-  function _matchModelo(nomeFirebase) {
-    if (!nomeFirebase) return null;
-    const norm = _fluxolabNormModel(nomeFirebase);
+  function _matchModelo(nomeOriginalDb) {
+    if (!nomeOriginalDb) return null;
+    const norm = _fluxolabNormModel(nomeOriginalDb);
     if (!norm) return null;
     // 1. Exato
     if (modelosPlanilhaNorm.has(norm)) return norm;
@@ -16408,7 +16416,7 @@ function fluxolabRenderChecklistsImported(){
     for (const [k] of modelosPlanilhaNorm) {
       if (tokens.every(t => k.includes(t))) return k;
     }
-    // 3. Fuzzy reverso: tokens do nome da planilha dentro do nome do firebase
+    // 3. Fuzzy reverso: tokens do nome da planilha dentro do nome do registro
     for (const [k] of modelosPlanilhaNorm) {
       const kt = k.split(/\s+/).filter(t => t.length >= 4);
       if (kt.length && kt.every(t => norm.includes(t))) return k;
@@ -17566,7 +17574,7 @@ function _fluxolabBuildChecklistIndex(){
     return true;
   }
 
-  // ── Busca o histórico no Firebase + bolsão atual em memória ─────
+  // ── Busca o histórico no Supabase + bolsão atual em memória ─────
   function buscarHistorico(selb){
     abrirModalLoading(selb);
 
@@ -17736,7 +17744,7 @@ function _fluxolabBuildChecklistIndex(){
 
    O que este patch faz:
    1. Sobrescreve _renderSolicitacoesPanel → cards maiores + campo de bipe
-   2. Sobrescreve entregarPeca → salva o código bipado no Firebase
+   2. Sobrescreve entregarPeca → salva o código bipado no Supabase
    3. Nova função entregarPecaComCodigo → chamada ao bipar (Enter / blur)
    4. Sobrescreve renderSolicitacoesDoDia → adiciona coluna "Código"
    5. Adiciona <th>Código</th> na tabela via DOM (sem mexer no HTML)
@@ -18009,7 +18017,7 @@ window._renderSolicitacoesPanel = function(panelId, q){
     + '</div>';
   }).join('');
 
-  // ── Preserva scroll entre re-renders rápidos (ex: 2 escritas Firebase na entrega) ──
+  // ── Preserva scroll entre re-renders rápidos (ex: 2 escritas Supabase na entrega) ──
   // Salva posições só na PRIMEIRA chamada de um lote; o rAF restaura uma única vez.
   if (!window._bolsaoRafPending) window._bolsaoRafPending = {};
   if (!window._bolsaoScrollSave) window._bolsaoScrollSave = {};
@@ -18085,7 +18093,7 @@ window._labPopup = function(titulo, htmlMsg, tipo) {
   setTimeout(function(){ if(ov.parentNode) ov.remove(); }, 2000);
 };
 
-// ── 3. entregarPecaComCodigo — Firebase + Supabase direto + popup resultado ──
+// ── 3. entregarPecaComCodigo — Supabase + Supabase direto + popup resultado ──
 //      v2: 3 guardas (histórico / já processado / concorrência)
 window.entregarPecaComCodigo = async function(id, selb) {
   var inputEl = document.getElementById('bipe-' + id);
@@ -18103,7 +18111,7 @@ window.entregarPecaComCodigo = async function(id, selb) {
   }
 
   if (!window._db) {
-    window._labPopup('Firebase desconectado', 'Recarregue a pagina e tente novamente.', 'erro');
+    window._labPopup('Supabase desconectado', 'Recarregue a pagina e tente novamente.', 'erro');
     return;
   }
 
@@ -18534,7 +18542,7 @@ window.renderSolicitacoesDoDia = function(){
     try { el.setSelectionRange(_focoAtivo.selStart, _focoAtivo.selEnd); } catch(_) {}
   }
 
-  // Hook no Firebase update: snapshot ANTES, restaura DEPOIS do render
+  // Hook no Supabase update: snapshot ANTES, restaura DEPOIS do render
   if (typeof window._renderSolicitacoesPanel === 'function') {
     var _origRender = window._renderSolicitacoesPanel;
     window._renderSolicitacoesPanel = function(){
@@ -18894,7 +18902,7 @@ window.renderSolicitacoesDoDia = function(){
   console.log('[LabTech] patch-bipagem-peca v4 ativo: HID por code, validação e anti-layout-errado.');
 })();
 /* ════════════════════════════════════════════════════════════════════════
-   PATCH — Integração LabTech (Firebase) → Supabase (estoque-lab do Pietro)
+   PATCH — Integração LabTech (Supabase) → Supabase (estoque-lab do Pietro)
    v2 — corrige LOOP INFINITO de baixa
    --------------------------------------------------------------------------
    MUDANÇAS EM RELAÇÃO À VERSÃO ANTERIOR:
@@ -19716,7 +19724,7 @@ window._copiarSelb = function (selb, btn) {
     };
   }
 
-  // Reaplica periodicamente (cobre inserções tardias / reconexão Firebase)
+  // Reaplica periodicamente (cobre inserções tardias / reconexão Supabase)
   setInterval(_injetarSugestoes, 1800);
   if(document.readyState === 'loading'){
     document.addEventListener('DOMContentLoaded', _injetarSugestoes);
@@ -19959,7 +19967,7 @@ window._copiarSelb = function (selb, btn) {
    2. Após login bem-sucedido como operador (não-admin), aparece um
       convite "Ativar login facial" (uma vez por dispositivo/usuário).
    3. O rosto é capturado pela webcam, gerado um descritor 128-d com
-      face-api.js e salvo em Firebase em `faceAuth/{userId}`.
+      face-api.js e salvo em Supabase em `faceAuth/{userId}`.
    4. Na tela de login, aparece o botão "🙂 Entrar com rosto" — abre a
       câmera, compara com TODOS os descritores cadastrados e, se casar
       (distância < 0.5), chama loginAs() automaticamente.
@@ -20025,7 +20033,7 @@ window._copiarSelb = function (selb, btn) {
     return modelsLoading;
   }
 
-  // ── Firebase: leitura dos descritores cadastrados ────────────────
+  // ── Supabase: leitura dos descritores cadastrados ────────────────
   function subscribeDescriptors(){
     const ref = window._db.ref('faceAuth');
     ref.on('value', snap => {
@@ -20620,7 +20628,7 @@ window._copiarSelb = function (selb, btn) {
 (function () {
   'use strict';
 
-  var FB_PATH = '/alarme_global';
+  var ALARM_PATH = '/alarme_global';
   var SONS = {
     urgente : { freqs:[880,660,880,660], dur:0.18, gap:0.04, rep:3, interval:800  },
     aviso   : { freqs:[660,550],         dur:0.22, gap:0.06, rep:2, interval:1200 },
@@ -20632,7 +20640,7 @@ window._copiarSelb = function (selb, btn) {
     info    : { bg:'#dbeafe', border:'#3b82f6', text:'#1e3a5f', badge:'#3b82f6', icon:'ℹ️' },
   };
 
-  var _ctx = null, _loop = null, _state = null, _fbRef = null, _styled = false;
+  var _ctx = null, _loop = null, _state = null, _alarmRef = null, _styled = false;
   var _checkInterval = null;
 
   /* ── AudioContext ── */
@@ -20780,8 +20788,8 @@ window._copiarSelb = function (selb, btn) {
           var rec = _state.recorrentes[keys[i]];
           if (rec.hora === hhmm) {
              localStorage.setItem('alm_last_rec', hhmm);
-             if (_fbRef) {
-                _fbRef.update({
+             if (_alarmRef) {
+                _alarmRef.update({
                    msg: rec.msg || 'Alarme Automático',
                    tipo: rec.tipo || 'aviso',
                    ts: Date.now(),
@@ -20794,12 +20802,12 @@ window._copiarSelb = function (selb, btn) {
     }
   }
 
-  /* ── Firebase listener ── */
+  /* ── Supabase listener (postgres_changes) ── */
   function _connect(tries) {
     tries = tries||0;
     if (typeof window._db !== 'undefined') {
-      _fbRef = window._db.ref(FB_PATH);
-      _fbRef.on('value', function(snap){ _apply(snap.val()); });
+      _alarmRef = window._db.ref(ALARM_PATH);
+      _alarmRef.on('value', function(snap){ _apply(snap.val()); });
       if (!_checkInterval) _checkInterval = setInterval(_checkRecurring, 10000); // checa a cada 10s
     } else if (tries<80) {
       setTimeout(function(){ _connect(tries+1); }, 250);
@@ -20892,8 +20900,8 @@ window._copiarSelb = function (selb, btn) {
       ov.querySelectorAll('.rec-del').forEach(function(btn){
          btn.onclick = function() {
             var id = this.dataset.id;
-            if (_fbRef) _fbRef.child('recorrentes').child(id).remove();
-            setTimeout(render, 300); // re-render after short delay to let firebase sync
+            if (_alarmRef) _alarmRef.child('recorrentes').child(id).remove();
+            setTimeout(render, 300); // re-render after short delay to let supabase sync
          };
       });
       
@@ -20904,8 +20912,8 @@ window._copiarSelb = function (selb, btn) {
             var msgVal = (ov.querySelector('#alm-rec-msg').value||'').trim();
             var tipoVal = ov.querySelector('#alm-rec-tipo').value;
             if(!timeVal || !msgVal) return;
-            if (_fbRef) {
-               _fbRef.child('recorrentes').push({
+            if (_alarmRef) {
+               _alarmRef.child('recorrentes').push({
                   hora: timeVal,
                   msg: msgVal,
                   tipo: tipoVal
@@ -20968,11 +20976,11 @@ window._copiarSelb = function (selb, btn) {
   window.Alarme = {
     disparar: function(msg,tipo){
       tipo=tipo||'aviso'; if(!SONS[tipo])tipo='aviso';
-      if(!_fbRef){console.warn('[Alarme] Firebase não pronto');return;}
-      _fbRef.update({msg:msg||'Alarme!',tipo:tipo,ts:Date.now(),ativa:true});
+      if(!_alarmRef){console.warn('[Alarme] Supabase não pronto');return;}
+      _alarmRef.update({msg:msg||'Alarme!',tipo:tipo,ts:Date.now(),ativa:true});
     },
     encerrar: function(){
-      if(_fbRef) _fbRef.update({ativa:false,ts:Date.now()});
+      if(_alarmRef) _alarmRef.update({ativa:false,ts:Date.now()});
     },
     abrirPainel: _painel,
   };
@@ -20981,7 +20989,7 @@ window._copiarSelb = function (selb, btn) {
 
 // ════════════════════════════════════════════════════════════════════════
 // BIPAGEM EM MASSA — Consulta SELB no Supabase do Pietro e registra
-// como Máquina A no Firebase do LabTech.
+// como Máquina A no Supabase do LabTech.
 // REST direto contra a API do Supabase do Pietro (sem dependências novas).
 // ════════════════════════════════════════════════════════════════════════
 const PIETRO_URL = 'https://idpmrjjalhnpsxpfugph.supabase.co';
