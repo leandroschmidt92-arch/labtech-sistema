@@ -1,5 +1,5 @@
 -- ════════════════════════════════════════════════════════════════════
--- MIGRAÇÃO FIREBASE → SUPABASE — peças que faltavam no schema
+-- ESTRUTURA DO BANCO SUPABASE — peças complementares do schema
 -- Rode tudo isso no SQL Editor do Supabase (projeto wpawjyqjrzzleojzejuw)
 -- ════════════════════════════════════════════════════════════════════
 
@@ -18,12 +18,12 @@ create table if not exists public.face_auth (
   created_at  timestamp with time zone default now()
 );
 
--- (Observação: "/fluxolab" e "/alarme_global" do Firebase passam a usar a
---  tabela fluxolab_state que você já tem, key='fluxolab' e key='alarme_global'.
+-- (Observação: "/fluxolab" e "/alarme_global" usam a tabela fluxolab_state
+--  que você já tem, key='fluxolab' e key='alarme_global'.
 --  Não precisa criar tabela nova pra eles.)
 
 -- 3) Habilita Realtime (Postgres Changes) nas tabelas que têm listeners
---    em tempo real no app (onValue do Firebase).
+--    em tempo real no app (listeners on('value')).
 alter publication supabase_realtime add table public.operadores;
 alter publication supabase_realtime add table public.history;
 alter publication supabase_realtime add table public.fluxolab_log;
@@ -33,8 +33,8 @@ alter publication supabase_realtime add table public.devolucoes;
 alter publication supabase_realtime add table public.face_auth;
 
 -- 4) RLS — habilita e libera acesso para a chave "publishable" (anon),
---    replicando o comportamento "aberto" que o Firebase RTDB tinha.
---    ⚠️ Isso é equivalente ao que provavelmente já existia no Firebase,
+--    replicando o comportamento "aberto" que o banco anterior tinha.
+--    ⚠️ Isso é equivalente ao que provavelmente já existia antes,
 --    mas se quiser mais segurança depois, troque "true" por uma condição
 --    (ex: exigir auth.role() = 'authenticated' nas escritas de admin).
 alter table public.devolucoes   enable row level security;
@@ -51,3 +51,19 @@ create policy "anon full access" on public.face_auth
 -- alter table public.operadores enable row level security;
 -- create policy "anon full access" on public.operadores for all using (true) with check (true);
 -- (repita para history, fluxolab_log, fluxolab_state, fluxolab_checklists)
+
+
+-- ════════════════════════════════════════════════════════════════════
+-- BUGFIX: colunas de sessão ativa em operadores
+-- O shim tenta escrever estas colunas via mirrorCols. Se não existirem,
+-- o upsert inteiro falha silenciosamente (incluindo a coluna `raw`),
+-- fazendo o _selb nunca ser persistido no banco.
+-- ════════════════════════════════════════════════════════════════════
+alter table public.operadores
+  add column if not exists selb          text,
+  add column if not exists status        text,
+  add column if not exists start_epoch   bigint,
+  add column if not exists frozen_elapsed bigint,
+  add column if not exists active_from   bigint,
+  add column if not exists bloqueado     boolean,
+  add column if not exists bloqueado_ate bigint;
