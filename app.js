@@ -17878,7 +17878,32 @@ window._renderSolicitacoesPanel = function(panelId, q){
     .sort(function(a,b){ return (a[1].ts||0) - (b[1].ts||0); }); // crescente: mais antigo primeiro
 
   if(!pendentes.length){
-    panel.style.display = 'none';
+    // Mantém o painel sempre visível com as 4 colunas (vazias) — não some mais
+    // quando não há solicitações pendentes no momento.
+    panel.style.display = 'block';
+    var emptyMarcarBtn = (currentUser && currentUser.isAdmin)
+      ? '<button onclick="marcarTodasPecasLidas()" style="background:rgba(61,214,140,.1);border:1px solid rgba(61,214,140,.35);border-radius:8px;color:var(--accent2);font-family:var(--font);font-size:11px;font-weight:600;padding:5px 12px;cursor:pointer;opacity:.4;pointer-events:none">✓ Marcar todas como lidas</button>'
+      : '';
+    var emptyColsHtml = window._BOLSOES_PECAS.map(function(b){
+      return '<div class="bolsao-col">'
+        + '<div class="bolsao-head">'
+          + '<div class="bolsao-title" style="color:'+b.color+'">'+b.icon+' '+b.label+'</div>'
+          + '<span class="bolsao-count">0</span>'
+        + '</div>'
+        + '<div class="bolsao-list"><div style="font-size:11px;color:var(--muted);text-align:center;padding:14px 0;opacity:.6">Vazio</div></div>'
+      + '</div>';
+    }).join('');
+    panel.innerHTML = ''
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">'
+        + '<div style="display:flex;align-items:center;gap:8px">'
+          + '<span style="font-size:16px">🔔</span>'
+          + '<span style="font-size:14px;font-weight:700;color:var(--warn)">Solicitações de Peças Pendentes</span>'
+          + '<span style="background:var(--warn);color:#000;border-radius:20px;font-size:11px;font-weight:800;padding:2px 9px">0</span>'
+          + '<span style="font-size:10px;color:var(--muted);margin-left:4px">arraste para travar em outro bolsão</span>'
+        + '</div>'
+        + emptyMarcarBtn
+      + '</div>'
+      + '<div class="bolsao-grid">' + emptyColsHtml + '</div>';
     return;
   }
 
