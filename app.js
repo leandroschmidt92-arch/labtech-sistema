@@ -18737,7 +18737,11 @@ async function fluxolabConsumirChecklistPorModelo(modeloTexto, meta){
       .map(([key, r]) => ({ key, ...r }))
       .sort((a, b) => (b.ts || 0) - (a.ts || 0));
 
-    let filterDate = todayStr();
+    let filterDate = '';
+    const dObj = new Date();
+    const todayFormated = String(dObj.getDate()).padStart(2,'0') + '/' + String(dObj.getMonth()+1).padStart(2,'0') + '/' + dObj.getFullYear();
+    filterDate = todayFormated;
+
     const mainDateFilter = document.getElementById('qual-reg-date-filter');
     if (mainDateFilter && mainDateFilter.value) {
       const [yyyy, mm, dd] = mainDateFilter.value.split('-');
