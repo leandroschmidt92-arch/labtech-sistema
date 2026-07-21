@@ -1520,6 +1520,7 @@ html,body{
   /* Garante cores */
   .ped-pedido-bar { print-color-adjust: exact !important; -webkit-print-color-adjust: exact !important; }
   * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+}
 
 @media print {
   body { background: #fff !important; }
