@@ -16271,6 +16271,13 @@ function renderFluxoLAB() {
 }
 
 function fluxolabForceRefresh() {
+  // OTIMIZAÇÃO: se já temos dados via listener realtime, apenas re-renderiza
+  // sem novo GET. Só busca do servidor se realmente não houver cache.
+  if (typeof _fluxolabData === 'object' && _fluxolabData && Object.keys(_fluxolabData).length) {
+    _fluxolabRenderGrid();
+    _fluxolabUpdateTimestamp();
+    return;
+  }
   dbGet('/fluxolab').then(data => {
     _fluxolabData = data || {};
     _fluxolabRenderGrid();
@@ -16990,7 +16997,9 @@ async function fluxolabRegistrarSelb(selbCode, uid) {
 
 async function fluxolabRemoveSelbGlobal(selbCode) {
   try {
-    const snap = await dbGet('/fluxolab');
+    // OTIMIZAÇÃO: usar _fluxolabData já mantido em memória pelo listener
+    // realtime em vez de refazer GET /fluxolab_state?key=eq.fluxolab.
+    const snap = (typeof _fluxolabData === 'object' && _fluxolabData) ? _fluxolabData : await dbGet('/fluxolab');
     if (!snap) return;
     const selfKey = selbCode.replace(/[^a-zA-Z0-9_-]/g, '_');
     const delPromises = [];

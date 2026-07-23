@@ -6,6 +6,40 @@
 // ════════════════════════════════════════════════════════════════════════
 function createSupabaseCompatShim(supa) {
 
+  // ── OTIMIZAÇÃO: cache compartilhado por blobKey ─────────────────────
+  // Elimina rajadas de GET /fluxolab_state?key=eq.<blobKey>:
+  //  • Uma única leitura (blobLoad) é reaproveitada por TODOS os listeners
+  //    e por todas as chamadas .once/.set/.push/.remove enquanto o cache
+  //    estiver "fresco".
+  //  • Toda subscrição via blobSubscribe atualiza o cache no evento
+  //    Realtime — nesse modo o cache é fonte de verdade e nunca expira.
+  //  • Sem subscrição ativa: fallback com TTL curto (2s) e coalescing
+  //    de loads concorrentes pela mesma key (dedupe in-flight).
+  const _blobCache = new Map();     // blobKey -> { data, ts, hasSub }
+  const _blobInflight = new Map();  // blobKey -> Promise
+  const BLOB_TTL_MS = 2000;
+
+  function _blobCacheGet(blobKey) {
+    const c = _blobCache.get(blobKey);
+    if (!c) return undefined;
+    if (c.hasSub) return c.data;
+    if (Date.now() - c.ts <= BLOB_TTL_MS) return c.data;
+    return undefined;
+  }
+  function _blobCacheSet(blobKey, data, opts) {
+    const prev = _blobCache.get(blobKey) || {};
+    _blobCache.set(blobKey, {
+      data: data || {},
+      ts: Date.now(),
+      hasSub: (opts && opts.hasSub) || prev.hasSub || false,
+    });
+  }
+  function _blobCacheMarkSub(blobKey) {
+    const prev = _blobCache.get(blobKey) || { data: {}, ts: 0 };
+    _blobCache.set(blobKey, { ...prev, hasSub: true });
+  }
+
+
   // ── Mapa de "raízes" do antigo Supabase Realtime DB ───────────────────
   // mode 'rows'  -> 1 linha por registro, tabela tem coluna id + raw(jsonb)
   // mode 'blob'  -> a árvore inteira fica como 1 linha em fluxolab_state
@@ -72,10 +106,25 @@ function createSupabaseCompatShim(supa) {
 
   // ── Helpers de blob (árvore inteira em fluxolab_state.data) ─────────
   async function blobLoad(blobKey) {
-    const { data } = await supa.from('fluxolab_state').select('data').eq('key', blobKey).maybeSingle();
-    return (data && data.data) || {};
+    const cached = _blobCacheGet(blobKey);
+    if (cached !== undefined) return cached;
+    let inflight = _blobInflight.get(blobKey);
+    if (inflight) return inflight;
+    inflight = (async () => {
+      try {
+        const { data } = await supa.from('fluxolab_state').select('data').eq('key', blobKey).maybeSingle();
+        const val = (data && data.data) || {};
+        _blobCacheSet(blobKey, val);
+        return val;
+      } finally {
+        _blobInflight.delete(blobKey);
+      }
+    })();
+    _blobInflight.set(blobKey, inflight);
+    return inflight;
   }
   async function blobSave(blobKey, obj) {
+    _blobCacheSet(blobKey, obj);
     await supa.from('fluxolab_state').upsert(
       { key: blobKey, data: obj, updated_at: new Date().toISOString() },
       { onConflict: 'key' }
@@ -314,14 +363,19 @@ function createSupabaseCompatShim(supa) {
   // completo — evitamos o SELECT extra usando payload.new.data.
   function blobSubscribe(cfg, p, cb) {
     const bp = p.slice(1);
+    _blobCacheMarkSub(cfg.blobKey);
     const emit = (blob) => cb(makeSnapshot(bp.length ? getIn(blob, bp) : blob));
     blobLoad(cfg.blobKey).then(emit).catch(err => console.warn('[shim] blob load falhou:', cfg.blobKey, err));
     const chanName = 'shim_blob_' + cfg.blobKey + '_' + (++_listenerSeq);
     const channel = supa.channel(chanName)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'fluxolab_state', filter: 'key=eq.' + cfg.blobKey }, (payload) => {
         try {
-          if (payload.eventType === 'DELETE') { emit({}); return; }
+          if (payload.eventType === 'DELETE') {
+            _blobCacheSet(cfg.blobKey, {}, { hasSub: true });
+            emit({}); return;
+          }
           const blob = (payload.new && payload.new.data) || {};
+          _blobCacheSet(cfg.blobKey, blob, { hasSub: true });
           emit(blob);
         } catch(e) { console.warn('[shim] blob delta erro:', e); }
       })
