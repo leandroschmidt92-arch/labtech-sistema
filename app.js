@@ -1685,10 +1685,16 @@ function showOperatorView(uid){
   // Sincroniza estado do Supabase e renderiza
   opSyncFromSupabase(uid);
 
-  // Re-sync a cada 30s — o listener onValue do Supabase já cuida das atualizações
-  // em tempo real. Polling frequente causava saltos no timer visual.
+  // OTIMIZAÇÃO EGRESS: o polling de 30 em 30s aqui era redundante — o listener
+  // onValue do Supabase (applyUserSnapshot) já sincroniza esse mesmo dado em
+  // tempo real sempre que algo muda no banco. O mesmo padrão redundante já
+  // tinha sido removido no painel do admin (ver comentário perto da linha
+  // 11100+: "Re-sync periódico removido"); esta era a cópia equivalente que
+  // ficou na tela do operador, rodando indefinidamente enquanto a tela ficasse
+  // aberta — inclusive continuando a tentar (e falhar) mesmo com o projeto já
+  // bloqueado por exceder cota, sem nenhum backoff.
   _opSyncInterval && clearInterval(_opSyncInterval);
-  _opSyncInterval = setInterval(()=>{ if(currentUser && currentUser.id===uid) opSyncFromSupabase(uid); }, 30000);
+  _opSyncInterval = null;
 }
 
 async function opSyncFromSupabase(uid){
