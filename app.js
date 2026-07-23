@@ -616,9 +616,10 @@ function startRealtimeSync(){
   function attachHistoryListener(dk){
     if(_historyListener) _db.ref('/history/'+dateKey).off('value', _historyListener);
     dateKey = dk;
-    const ref = (currentUser && !currentUser.isAdmin)
-      ? _db.ref('/history/'+dk).orderByChild('uid').equalTo(currentUser.id)
-      : _db.ref('/history/'+dk);
+    const isDashViewer = currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP' || currentUser.sector === 'DESMEMBRAMENTO' || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'));
+    const ref = isDashViewer
+      ? _db.ref('/history/'+dk)
+      : _db.ref('/history/'+dk).orderByChild('uid').equalTo(currentUser.id);
     window['_hRef_'+dk.slice(0,4)] = ref; // referência ofuscada para desconectar
     _historyListener = ref.on('value', snap => {
       if(snap.exists()){
