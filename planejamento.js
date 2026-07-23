@@ -41,15 +41,36 @@ async function fluxolabLoadPlanejamento() {
 }
 
 // Salva o estado no Supabase
+// OTIMIZAÇÃO: debounce de 5s + dedupe (não regrava se o snapshot é idêntico ao
+// último enviado) + guarda contra chamadas concorrentes. Reduz drasticamente
+// os POSTs ao fluxolab_state quando o usuário clica sem alterar de fato,
+// ou quando eventos Realtime disparam handlers redundantes.
 let _fluxolabPlanSaveTimer;
+let _fluxolabPlanLastSavedJSON = null;
+let _fluxolabPlanSaving = false;
 function fluxolabSavePlanejamentoDebounced() {
   if (!_fluxolabPlanLoaded) return;
   clearTimeout(_fluxolabPlanSaveTimer);
   _fluxolabPlanSaveTimer = setTimeout(async () => {
-    if (typeof _supa !== 'undefined') {
-      await _supa.from('fluxolab_state').upsert({ key: 'planejamento_lote_dia', data: _fluxolabPlanejamentoState }, { onConflict: 'key' });
+    if (typeof _supa === 'undefined') return;
+    if (_fluxolabPlanSaving) {
+      // Reagenda para depois do save atual terminar
+      _fluxolabPlanSaveTimer = setTimeout(fluxolabSavePlanejamentoDebounced, 1000);
+      return;
     }
-  }, 4000);
+    let snap;
+    try { snap = JSON.stringify(_fluxolabPlanejamentoState); } catch(e){ snap = null; }
+    if (snap && snap === _fluxolabPlanLastSavedJSON) return; // sem mudança real
+    _fluxolabPlanSaving = true;
+    try {
+      const { error } = await _supa.from('fluxolab_state').upsert(
+        { key: 'planejamento_lote_dia', data: _fluxolabPlanejamentoState },
+        { onConflict: 'key' }
+      );
+      if (!error) _fluxolabPlanLastSavedJSON = snap;
+    } catch(e) { console.warn('[plan] save falhou:', e); }
+    finally { _fluxolabPlanSaving = false; }
+  }, 5000);
 }
 
 // Aplica as atualizações que vieram de outros usuários (Tempo Real)

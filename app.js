@@ -1572,6 +1572,8 @@ function loginAs(u){
   // Re-enforce após applySectorTabPerms: aba admin NUNCA aparece para não-admins
   if(!isAdmin){
     document.getElementById('tab-admin').style.display = 'none';
+    const _tts = document.getElementById('tab-tempo-selb');
+    if(_tts) _tts.style.display = 'none';
   }
 
 
@@ -2039,6 +2041,10 @@ function setView(v,btn){
   }
   if(v === 'bip-mobile' && !(currentUser && (currentUser.isAdmin || getPermsFor(currentUser.sector)['bip-mobile']))){
     console.warn('[Security] setView bip-mobile bloqueado — sem permissão');
+    return;
+  }
+  if(v === 'tempo-selb' && !(currentUser && currentUser.isAdmin)){
+    console.warn('[Security] setView tempo-selb bloqueado — não é admin');
     return;
   }
   if(v==='fluxolab')    { renderFluxoLAB(); }
@@ -15717,6 +15723,9 @@ function applySectorTabPerms(u){
   // Garante que tab-admin nunca aparece para não-admins
   const tabAdmin = document.getElementById('tab-admin');
   if(tabAdmin) tabAdmin.style.display = 'none';
+  // Aba "Tempo SELB" é exclusiva do administrador
+  const tabTempoSelb = document.getElementById('tab-tempo-selb');
+  if(tabTempoSelb) tabTempoSelb.style.display = 'none';
   // Importação de planilha de Equipamentos é sempre exclusiva do administrador
   toggleEquipImportUI(u.isAdmin);
 }

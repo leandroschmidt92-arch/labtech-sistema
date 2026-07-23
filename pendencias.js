@@ -49,15 +49,32 @@ async function fluxolabLoadPendencias() {
 }
 
 // Salva o estado no Supabase
+// OTIMIZAÇÃO: debounce de 5s + dedupe por snapshot + guarda contra concorrência.
 let _fluxolabPendSaveTimer;
+let _fluxolabPendLastSavedJSON = null;
+let _fluxolabPendSaving = false;
 function fluxolabSavePendenciasDebounced() {
   if (!_fluxolabPendLoaded) return;
   clearTimeout(_fluxolabPendSaveTimer);
   _fluxolabPendSaveTimer = setTimeout(async () => {
-    if (typeof _supa !== 'undefined') {
-      await _supa.from('fluxolab_state').upsert({ key: 'pendencias_mistas_complexas', data: _fluxolabPendenciasState }, { onConflict: 'key' });
+    if (typeof _supa === 'undefined') return;
+    if (_fluxolabPendSaving) {
+      _fluxolabPendSaveTimer = setTimeout(fluxolabSavePendenciasDebounced, 1000);
+      return;
     }
-  }, 4000);
+    let snap;
+    try { snap = JSON.stringify(_fluxolabPendenciasState); } catch(e){ snap = null; }
+    if (snap && snap === _fluxolabPendLastSavedJSON) return;
+    _fluxolabPendSaving = true;
+    try {
+      const { error } = await _supa.from('fluxolab_state').upsert(
+        { key: 'pendencias_mistas_complexas', data: _fluxolabPendenciasState },
+        { onConflict: 'key' }
+      );
+      if (!error) _fluxolabPendLastSavedJSON = snap;
+    } catch(e) { console.warn('[pend] save falhou:', e); }
+    finally { _fluxolabPendSaving = false; }
+  }, 5000);
 }
 
 // Aplica as atualizações que vieram de outros usuários (Tempo Real)

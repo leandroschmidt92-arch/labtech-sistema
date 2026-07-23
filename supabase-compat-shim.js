@@ -17,7 +17,7 @@ function createSupabaseCompatShim(supa) {
   //    de loads concorrentes pela mesma key (dedupe in-flight).
   const _blobCache = new Map();     // blobKey -> { data, ts, hasSub }
   const _blobInflight = new Map();  // blobKey -> Promise
-  const BLOB_TTL_MS = 2000;
+  const BLOB_TTL_MS = 8000;
 
   function _blobCacheGet(blobKey) {
     const c = _blobCache.get(blobKey);
@@ -223,7 +223,7 @@ function createSupabaseCompatShim(supa) {
   // levemente atrasadas; a fonte de verdade é sempre a coluna `raw` que
   // o próprio RPC atualiza. Isso corta ~50% dos writes ao Supabase.
   const _pendingPatches = new Map(); // key: table|dateKey|id -> {merged, resolvers[], cfg, id, dateKey, scheduled}
-  const COALESCE_MS = 60;
+  const COALESCE_MS = 800;
 
   function _flushPatch(bucketKey) {
     const bucket = _pendingPatches.get(bucketKey);

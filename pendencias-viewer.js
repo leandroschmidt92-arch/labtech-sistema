@@ -362,7 +362,7 @@
         pvSyncButtonVisibility();
         pvSyncAdminPanelVisibility();
       } catch(e){}
-    }, 1500);
+    }, 5000);
   }
 
   if (document.readyState === 'loading'){
