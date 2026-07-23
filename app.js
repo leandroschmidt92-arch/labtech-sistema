@@ -6926,6 +6926,18 @@ async function autoSincronizarTempo(uid, btn){
   const isPaused   = schedState.type !== 'work';
   const novoStatus = isPaused ? 'paused' : 'running';
 
+  // OTIMIZAÇÃO EGRESS/REALTIME: se o valor recalculado praticamente não mudou
+  // (diferença de poucos segundos) e o status já é o mesmo, não há nada de novo
+  // pra persistir. Isso evita gravar (e, consequentemente, retransmitir via
+  // Realtime pra todos os clientes conectados) toda vez que essa rotina roda —
+  // o que acontece a cada 4 min, em CADA aba aberta, pra CADA usuário
+  // running/paused. Como normalmente o contador local já está certo, a imensa
+  // maioria dessas chamadas era um write "no-op" caro em egress.
+  if(divergencia <= 2 && s.status === novoStatus){
+    if(btn){ btn.textContent = '✅'; setTimeout(()=>{ btn.disabled=false; btn.textContent='Auto-Sinc'; }, 2000); }
+    return;
+  }
+
   try {
     await dbPatch('/users/'+uid, {
       _frozenElapsed: corrigido,
