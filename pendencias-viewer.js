@@ -341,12 +341,24 @@
     if (typeof _supa === 'undefined' || typeof users === 'undefined'){
       return setTimeout(pvBoot, 500);
     }
-    pvLoad();
+    if (typeof currentUser !== 'undefined' && currentUser) {
+      pvLoad();
+    }
     pvEnsureButton();
 
-    // Polling leve: sincroniza visibilidade do botão + lista admin
+    // Polling leve: sincroniza visibilidade do botão + lista admin + estado de conexão
     setInterval(() => {
       try {
+        if (typeof currentUser !== 'undefined' && currentUser) {
+          if (!_pvLoaded) {
+            pvLoad();
+          }
+        } else {
+          if (_pvLoaded) {
+            _pvLoaded = false;
+            _pvChannel = null;
+          }
+        }
         pvSyncButtonVisibility();
         pvSyncAdminPanelVisibility();
       } catch(e){}

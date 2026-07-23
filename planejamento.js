@@ -8,6 +8,7 @@ let _planMediaSortDir = { tabela1: null, tabela2: null, tabela3: null }; // null
 
 // Carrega o estado do Supabase
 async function fluxolabLoadPlanejamento() {
+  if (typeof currentUser === 'undefined' || !currentUser) return;
   if (typeof _supa !== 'undefined') {
     try {
       const {data, error} = await _supa.from('fluxolab_state').select('data').eq('key', 'planejamento_lote_dia').maybeSingle();

@@ -262,10 +262,15 @@ function createSupabaseCompatShim(supa) {
     let pgFilter;
     if (!isCollection) {
       pgFilter = { event: '*', schema: 'public', table: cfg.table, filter: 'id=eq.' + id };
-    } else if (dateKey) {
-      pgFilter = { event: '*', schema: 'public', table: cfg.table, filter: 'date_key=eq.' + dateKey };
     } else {
-      pgFilter = { event: '*', schema: 'public', table: cfg.table };
+      const uidFilter = filters && filters.find(f => f.field === 'uid');
+      if (uidFilter) {
+        pgFilter = { event: '*', schema: 'public', table: cfg.table, filter: 'uid=eq.' + uidFilter.value };
+      } else if (dateKey) {
+        pgFilter = { event: '*', schema: 'public', table: cfg.table, filter: 'date_key=eq.' + dateKey };
+      } else {
+        pgFilter = { event: '*', schema: 'public', table: cfg.table };
+      }
     }
 
     // Verifica filtros locais (orderByChild/equalTo) contra a coluna espelhada.

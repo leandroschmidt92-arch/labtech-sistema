@@ -13,6 +13,7 @@ const PEND_FIELDS = ['modelo', 'qtd_wms', 'sugestao', 'obs', 'pecas'];
 
 // Carrega o estado do Supabase
 async function fluxolabLoadPendencias() {
+  if (typeof currentUser === 'undefined' || !currentUser) return;
   if (typeof _supa !== 'undefined') {
     try {
       const {data, error} = await _supa.from('fluxolab_state').select('data').eq('key', 'pendencias_mistas_complexas').maybeSingle();

@@ -581,6 +581,20 @@ function rebuildOrUpdateCards(){
   updateSummary();
 }
 
+async function preloadUsersOnce(){
+  try {
+    const snap = await _db.ref('/users').once('value');
+    if(snap.exists()){
+      const val = snap.val();
+      users = Object.entries(val).map(([k,v]) => ({...v, id:k}));
+    }
+    setPinLoading(false);
+  } catch(e){
+    console.error('[boot] falha ao precarregar operadores:', e);
+    setPinLoading(false);
+  }
+}
+
 let _syncRunning = false;
 function startRealtimeSync(){
   // Evita múltiplos listeners simultâneos — desconecta o anterior antes de reconectar
@@ -600,7 +614,9 @@ function startRealtimeSync(){
   function attachHistoryListener(dk){
     if(_historyListener) _db.ref('/history/'+dateKey).off('value', _historyListener);
     dateKey = dk;
-    const ref = _db.ref('/history/'+dk);
+    const ref = (currentUser && !currentUser.isAdmin)
+      ? _db.ref('/history/'+dk).orderByChild('uid').equalTo(currentUser.id)
+      : _db.ref('/history/'+dk);
     window['_hRef_'+dk.slice(0,4)] = ref; // referência ofuscada para desconectar
     _historyListener = ref.on('value', snap => {
       if(snap.exists()){
@@ -987,8 +1003,8 @@ function bootApp(){
   _historyReady = true;
   _bootReady    = true;
 
-  // Inicia listeners em background
-  try { startRealtimeSync(); } catch(e){ console.error('sync error',e); }
+  // Pré-carrega operadores apenas uma vez para o numpad (sem conexões Realtime)
+  preloadUsersOnce().catch(()=>{});
 
   // Fallback: se Supabase demorar mais de 8s, libera o numpad com aviso
   setTimeout(() => {
@@ -4261,7 +4277,11 @@ let _pecasIdsConhecidos = null; // null = primeira carga, não toca
 async function startSolicitacoesPecasListener(){
   // Carrega dados iniciais do Supabase
   async function _reloadSolicitacoes(){
-    const { data } = await _supa.from('solicitacoes_pecas').select('*').order('ts', { ascending: false });
+    let q = _supa.from('solicitacoes_pecas').select('*').order('ts', { ascending: false });
+    if(currentUser && !currentUser.isAdmin) {
+      q = q.eq('uid', currentUser.id);
+    }
+    const { data } = await q;
     const novo = {};
     (data || []).forEach(r => { novo[r.id] = r.raw || r; });
     if(currentUser && currentUser.isAdmin && _pecasIdsConhecidos !== null){
@@ -4278,16 +4298,28 @@ async function startSolicitacoesPecasListener(){
     if(document.getElementById('view-solicitacoes')?.classList.contains('active')) renderSolicitacoesDoDia();
   }
   await _reloadSolicitacoes();
+  
+  let filterConfig = {};
+  if (currentUser && !currentUser.isAdmin) {
+    filterConfig = { event: '*', schema: 'public', table: 'solicitacoes_pecas', filter: 'uid=eq.' + currentUser.id };
+  } else {
+    filterConfig = { event: '*', schema: 'public', table: 'solicitacoes_pecas' };
+  }
+  
   _supa.channel('solicitacoes_pecas')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'solicitacoes_pecas' }, _reloadSolicitacoes)
+    .on('postgres_changes', filterConfig, _reloadSolicitacoes)
     .subscribe();
-  // Listener Supabase Realtime para config_pecas
-  _supa.channel('config_pecas')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'config_pecas' }, async () => {
-      await _reloadConfigPecas();
-    })
-    .subscribe();
+
+  // Listener Supabase Realtime para config_pecas - somente admin/PCP
   await _reloadConfigPecas();
+  const isAdminOrPcp = currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP' || currentUser.sector === 'DESMEMBRAMENTO' || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'));
+  if (isAdminOrPcp) {
+    _supa.channel('config_pecas')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'config_pecas' }, async () => {
+        await _reloadConfigPecas();
+      })
+      .subscribe();
+  }
 }
 
 async function _reloadConfigPecas() {
@@ -5228,6 +5260,9 @@ let _garantiaListener = null; // referência ao listener Supabase
 
 // ── Listener Supabase para garantia ─────────────────────────────────────────
 async function startGarantiaListener(){
+  const isAdminOrPcp = currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP' || currentUser.sector === 'DESMEMBRAMENTO' || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'));
+  if (!isAdminOrPcp) return;
+
   const { data } = await _supa.from('garantia').select('*');
   _garantiaCache = {};
   (data || []).forEach(r => { _garantiaCache[r.id] = r.raw || r; });
@@ -5520,6 +5555,9 @@ let _devolucaoListener = null; // referência ao listener Supabase
 // ── Listener Supabase ────────────────────────────────────────────────────────
 function startDevolucaoListener(){
   if(!_db || _devolucaoListener) return;
+  const isAdminOrPcp = currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP' || currentUser.sector === 'DESMEMBRAMENTO' || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'));
+  if (!isAdminOrPcp) return;
+
   _devolucaoListener = _db.ref('/devolucoes').on('value', snap => {
     _devolucaoCache = snap.val() || {};
     const aba = document.getElementById('garview-devolucao');
@@ -5753,14 +5791,18 @@ async function startMaquinasPerdidasListener(){
   _maquinasPerdidas = {};
   (data || []).forEach(r => { _maquinasPerdidas[r.id] = r.raw || r; });
   if(document.getElementById('view-perdidas')?.classList.contains('active')) renderPerdidasView();
-  _supa.channel('maquinas_perdidas')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'maquinas_perdidas' }, async () => {
-      const { data: d } = await _supa.from('maquinas_perdidas').select('*');
-      _maquinasPerdidas = {};
-      (d || []).forEach(r => { _maquinasPerdidas[r.id] = r.raw || r; });
-      if(document.getElementById('view-perdidas')?.classList.contains('active')) renderPerdidasView();
-    })
-    .subscribe();
+  
+  const isAdminOrPcp = currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP' || currentUser.sector === 'DESMEMBRAMENTO' || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'));
+  if (isAdminOrPcp) {
+    _supa.channel('maquinas_perdidas')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'maquinas_perdidas' }, async () => {
+        const { data: d } = await _supa.from('maquinas_perdidas').select('*');
+        _maquinasPerdidas = {};
+        (d || []).forEach(r => { _maquinasPerdidas[r.id] = r.raw || r; });
+        if(document.getElementById('view-perdidas')?.classList.contains('active')) renderPerdidasView();
+      })
+      .subscribe();
+  }
 }
 
 // ── Abre modal para registrar nova máquina perdida (somente admin) ─────────
@@ -11749,17 +11791,21 @@ async function startMaquinasAListener(){
     const subMaAtivo = document.getElementById('subview-maquinas-a').style.display !== 'none';
     if(subMaAtivo) renderMaquinasAView();
   }
-  _supa.channel('maquinas_a')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'maquinas_a' }, async () => {
-      const { data: d } = await _supa.from('maquinas_a').select('*');
-      _maquinasA = {};
-      (d || []).forEach(r => { _maquinasA[r.id] = r.raw || r; });
-      if(document.getElementById('view-maquinas-a')?.classList.contains('active')){
-        const subMaAtivo = document.getElementById('subview-maquinas-a').style.display !== 'none';
-        if(subMaAtivo) renderMaquinasAView();
-      }
-    })
-    .subscribe();
+  
+  const isAdminOrPcp = currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP' || currentUser.sector === 'DESMEMBRAMENTO' || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'));
+  if (isAdminOrPcp) {
+    _supa.channel('maquinas_a')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'maquinas_a' }, async () => {
+        const { data: d } = await _supa.from('maquinas_a').select('*');
+        _maquinasA = {};
+        (d || []).forEach(r => { _maquinasA[r.id] = r.raw || r; });
+        if(document.getElementById('view-maquinas-a')?.classList.contains('active')){
+          const subMaAtivo = document.getElementById('subview-maquinas-a').style.display !== 'none';
+          if(subMaAtivo) renderMaquinasAView();
+        }
+      })
+      .subscribe();
+  }
 }
 
 // ── Abre modal para registrar Máquina A (somente admin) ──────────────────
@@ -12499,6 +12545,20 @@ const ALERT_SECTORS = new Set(['COMPLEXA','MONTAGEM','LIMPEZA']);
   const _origLoginAs = window.loginAs;
   window.loginAs = function(u){
     if(_origLoginAs) _origLoginAs.apply(this, arguments);
+    
+    // Inicia o sincronismo Realtime principal de usuários e histórico para o usuário logado
+    if(!_syncRunning) {
+      try { startRealtimeSync(); } catch(e){ console.error('sync error',e); }
+    }
+
+    // Inicia o carregamento e sincronismo de planejamento e pendencias se as funções existirem
+    if (typeof fluxolabLoadPlanejamento === 'function') {
+      fluxolabLoadPlanejamento().catch(e => console.error('erro fluxolabLoadPlanejamento:', e));
+    }
+    if (typeof fluxolabLoadPendencias === 'function') {
+      fluxolabLoadPendencias().catch(e => console.error('erro fluxolabLoadPendencias:', e));
+    }
+    
     if(!_globalListenersStarted){
       _globalListenersStarted = true;
       startAlertsListener();
@@ -12520,11 +12580,41 @@ const ALERT_SECTORS = new Set(['COMPLEXA','MONTAGEM','LIMPEZA']);
     _dismissed.clear();
     _idleSince.clear();
     _maquinasA = {};
+    _maquinasPerdidas = {};
+    _solicitacoesPecas = {};
+    _garantiaCache = {};
+    _devolucaoCache = {};
+    
+    // Desconecta e remove todos os canais do Supabase Realtime
+    if (typeof _supa !== 'undefined' && typeof _supa.removeAllChannels === 'function') {
+      _supa.removeAllChannels().catch(e => console.error('[logout] erro removeAllChannels:', e));
+    }
+    
+    // Limpa listeners do shim de compatibilidade
+    if (_usersListener) {
+      _db.ref('/users').off('value', _usersListener);
+      _usersListener = null;
+    }
+    if (_historyListener) {
+      const dk = new Date().toDateString().replace(/ /g,'_');
+      _db.ref('/history/'+dk).off('value', _historyListener);
+      _historyListener = null;
+    }
+    _syncRunning = false;
+    _globalListenersStarted = false;
+    
+    // Reset dos canais especiais das outras abas
+    if (typeof _pendSyncChannel !== 'undefined') _pendSyncChannel = null;
+    if (typeof _planSyncChannel !== 'undefined') _planSyncChannel = null;
+    if (typeof _pvChannel !== 'undefined') _pvChannel = null;
+
+    if (typeof _fluxolabPendLoaded !== 'undefined') _fluxolabPendLoaded = false;
+    if (typeof _fluxolabPlanLoaded !== 'undefined') _fluxolabPlanLoaded = false;
+
     const panel = document.getElementById('selb-alert-panel');
     if(panel) panel.innerHTML = '';
     if(_origLogout) _origLogout.apply(this, arguments);
   };
-
 })();
 
 // ==========================================
