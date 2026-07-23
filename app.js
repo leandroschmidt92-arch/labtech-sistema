@@ -330,7 +330,43 @@ function _fluxolabRenderLog() {
 // ════════════════════════════════════════
 const _SB_URL = 'https://wpawjyqjrzzleojzejuw.supabase.co';
 const _SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwYXdqeXFqcnp6bGVvanplanV3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE4OTI1ODMsImV4cCI6MjA5NzQ2ODU4M30.7HRgwO-KiV5ZTCzOA2DPkFgARrcMUYoQrSGrZirIoss'; // anon public key
-const _supa   = window.supabase.createClient(_SB_URL, _SB_KEY);
+
+// ── PROXY DE RATE LIMIT + FILA ANTI-RAJADA ──────────────────────────────
+// 👉 Cole aqui a URL do seu Worker depois do "wrangler deploy" (ver DEPLOY.md).
+//    Ex: 'https://labtech-supabase-proxy.seu-usuario.workers.dev'
+//    Enquanto estiver vazia, o app chama o Supabase direto (sem proteção).
+const _PROXY_URL = ''; // <-- preencher
+
+// Fila simples: evita que o próprio app (bug, listener duplicado, muitos
+// usuários ao mesmo tempo) dispare rajadas de requisições que sobrecarregam
+// o sistema. Isso NÃO afeta o Realtime (que usa WebSocket, não fetch).
+const _MAX_CONCURRENT_REQ = 6;
+let _activeReq = 0;
+const _reqQueue = [];
+function _drainReqQueue() {
+  while (_activeReq < _MAX_CONCURRENT_REQ && _reqQueue.length) {
+    _reqQueue.shift()();
+  }
+}
+function _labtechFetch(input, init) {
+  return new Promise((resolve, reject) => {
+    _reqQueue.push(() => {
+      _activeReq++;
+      const rawUrl = typeof input === 'string' ? input : input.url;
+      // Se o Worker estiver configurado, troca o host do Supabase pelo do proxy
+      // (só afeta REST/RPC via fetch; Realtime continua direto no Supabase).
+      const finalUrl = _PROXY_URL ? rawUrl.replace(_SB_URL, _PROXY_URL) : rawUrl;
+      fetch(finalUrl, init)
+        .then(resolve, reject)
+        .finally(() => { _activeReq--; _drainReqQueue(); });
+    });
+    _drainReqQueue();
+  });
+}
+
+const _supa   = window.supabase.createClient(_SB_URL, _SB_KEY, {
+  global: { fetch: _labtechFetch },
+});
 
 // ── Client dedicado para autenticação de operadores via PIN ──────────────
 // O token do operador é um JWT ASSINADO MANUALMENTE pela Edge Function
@@ -347,6 +383,7 @@ let _operatorAccessToken = null;
 const _supaOp = window.supabase.createClient(_SB_URL, _SB_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
   accessToken: async () => _operatorAccessToken || undefined,
+  global: { fetch: _labtechFetch },
 });
 // Escolhe automaticamente o client certo: se há um operador logado via PIN,
 // usa o client com o token dele; senão usa o client principal (anônimo ou
@@ -5275,10 +5312,15 @@ async function startGarantiaListener(){
   (data || []).forEach(r => { _garantiaCache[r.id] = r.raw || r; });
   if(document.getElementById('view-garantia')?.classList.contains('active')) renderGarantiaView();
   _supa.channel('garantia')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'garantia' }, async () => {
-      const { data: d } = await _supa.from('garantia').select('*');
-      _garantiaCache = {};
-      (d || []).forEach(r => { _garantiaCache[r.id] = r.raw || r; });
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'garantia' }, (payload) => {
+      // OTIMIZAÇÃO: usa o payload do próprio evento Realtime em vez de
+      // refazer um SELECT * completo a cada mudança — isso custava 1 request
+      // extra POR cliente admin/PCP conectado, a CADA insert/update/delete.
+      if (payload.eventType === 'DELETE') {
+        delete _garantiaCache[payload.old.id];
+      } else {
+        _garantiaCache[payload.new.id] = payload.new.raw || payload.new;
+      }
       if(document.getElementById('view-garantia')?.classList.contains('active')) renderGarantiaView();
     })
     .subscribe();
@@ -5802,10 +5844,15 @@ async function startMaquinasPerdidasListener(){
   const isAdminOrPcp = currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP' || currentUser.sector === 'DESMEMBRAMENTO' || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'));
   if (isAdminOrPcp) {
     _supa.channel('maquinas_perdidas')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'maquinas_perdidas' }, async () => {
-        const { data: d } = await _supa.from('maquinas_perdidas').select('*');
-        _maquinasPerdidas = {};
-        (d || []).forEach(r => { _maquinasPerdidas[r.id] = r.raw || r; });
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'maquinas_perdidas' }, (payload) => {
+        // OTIMIZAÇÃO: atualiza o cache local direto do payload do evento,
+        // sem refazer SELECT * a cada mudança (custava 1 request extra por
+        // cliente admin/PCP conectado, a cada insert/update/delete).
+        if (payload.eventType === 'DELETE') {
+          delete _maquinasPerdidas[payload.old.id];
+        } else {
+          _maquinasPerdidas[payload.new.id] = payload.new.raw || payload.new;
+        }
         if(document.getElementById('view-perdidas')?.classList.contains('active')) renderPerdidasView();
       })
       .subscribe();
@@ -11802,10 +11849,15 @@ async function startMaquinasAListener(){
   const isAdminOrPcp = currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP' || currentUser.sector === 'DESMEMBRAMENTO' || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'));
   if (isAdminOrPcp) {
     _supa.channel('maquinas_a')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'maquinas_a' }, async () => {
-        const { data: d } = await _supa.from('maquinas_a').select('*');
-        _maquinasA = {};
-        (d || []).forEach(r => { _maquinasA[r.id] = r.raw || r; });
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'maquinas_a' }, (payload) => {
+        // OTIMIZAÇÃO: atualiza o cache local direto do payload do evento,
+        // sem refazer SELECT * a cada mudança (custava 1 request extra por
+        // cliente admin/PCP conectado, a cada insert/update/delete).
+        if (payload.eventType === 'DELETE') {
+          delete _maquinasA[payload.old.id];
+        } else {
+          _maquinasA[payload.new.id] = payload.new.raw || payload.new;
+        }
         if(document.getElementById('view-maquinas-a')?.classList.contains('active')){
           const subMaAtivo = document.getElementById('subview-maquinas-a').style.display !== 'none';
           if(subMaAtivo) renderMaquinasAView();
