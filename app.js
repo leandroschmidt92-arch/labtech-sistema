@@ -439,7 +439,9 @@ function applyUserSnapshot(freshUsers){
       users[idx] = fu;
     }
   });
-  users = users.filter(u => freshUsers.find(fu => fu.id === u.id));
+  if (freshUsers.length > 1) {
+    users = users.filter(u => freshUsers.find(fu => fu.id === u.id));
+  }
 
   // ── Sync wstate a partir do Supabase ──
   users.forEach(fu => {
@@ -706,7 +708,8 @@ function startRealtimeSync(){
   // em N clientes, causando as rajadas em /rest/v1/operadores.
   if(_usersListener) _db.ref('/users').off('value', _usersListener);
 
-  const _usersPath = (currentUser && !currentUser.isAdmin) ? ('/users/' + currentUser.id) : '/users';
+  const isDashboardViewer = currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP' || currentUser.sector === 'DESMEMBRAMENTO' || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'));
+  const _usersPath = isDashboardViewer ? '/users' : ('/users/' + currentUser.id);
 
   _usersListener = _db.ref(_usersPath).on('value', snap => {
     if(!snap.exists()){
@@ -2038,9 +2041,10 @@ function setView(v,btn){
   if(v==='consulta'){
     cFilter=''; resetStabs('cons-tabs',0);
     _initConsultaDateSelect();
-    // Se ainda não carregou nenhum range, carrega hoje
+    // Se ainda não carregou nenhum range, mostra aviso de filtro
     if(!_consultaDateKey){
-      loadConsultaRange();
+      const cBody = document.getElementById('consulta-body');
+      if (cBody) cBody.innerHTML = '<tr><td colspan="15" class="empty" style="text-align:center;padding:24px;color:var(--muted)">Selecione um período nos filtros acima para visualizar os registros.</td></tr>';
     } else {
       renderConsulta();
     }
@@ -3856,12 +3860,10 @@ function _dateKeysInRange(fromIso, toIso){
 }
 
 function _initConsultaDateSelect(){
-  const todayIso = new Date().toISOString().slice(0,10);
-  const sevenDaysAgo = new Date(Date.now() - 6 * 86400000).toISOString().slice(0,10);
   const fromEl = document.getElementById('consulta-date-from');
   const toEl   = document.getElementById('consulta-date-to');
-  if(fromEl && !fromEl.value) fromEl.value = sevenDaysAgo;
-  if(toEl   && !toEl.value)   toEl.value   = todayIso;
+  if(fromEl) fromEl.value = '';
+  if(toEl)   toEl.value   = '';
 }
 
 async function loadConsultaRange(){
@@ -3871,7 +3873,11 @@ async function loadConsultaRange(){
 
   const fromIso = fromEl.value;
   const toIso   = toEl.value;
-  if(!fromIso || !toIso) return;
+  if(!fromIso || !toIso) {
+    const cBody = document.getElementById('consulta-body');
+    if (cBody) cBody.innerHTML = '<tr><td colspan="15" class="empty" style="text-align:center;padding:24px;color:var(--muted)">Selecione um período nos filtros acima para visualizar os registros.</td></tr>';
+    return;
+  }
   if(fromIso > toIso){ toEl.value = fromIso; return loadConsultaRange(); }
 
   const todayDk  = new Date().toDateString().replace(/ /g,'_');
