@@ -16697,30 +16697,102 @@ async function fmovExecutar() {
   const erros = [];
   const b = FLUXOLAB_BOLSOES.find(x => x.key === destBolsao);
 
-  for (const item of _fmovQueue) {
-    try {
-      await fluxolabRemoveSelbGlobal(item.code);
-      const selfKey = item.code.replace(/[^a-zA-Z0-9_-]/g, '_');
-      await dbSet('/fluxolab/' + destBolsao + '/' + selfKey, {
-        selb:        item.code,
-        uid:         currentUser ? currentUser.id : '',
-        userName:    currentUser ? currentUser.name : '',
-        sector:      currentUser ? currentUser.sector : '',
-        equipamento: item.equip || 'DESCONHECIDO',
-        ts:          Date.now(),
-        movidoPor:   currentUser ? currentUser.name : '',
-      });
-      // Log de movimentação manual
-      _fluxolabLogEntry(item.code, item.bolsaoAtual || '—', destBolsao, item.equip || 'DESCONHECIDO');
-    } catch (e) {
-      erros.push(item.code + ': ' + e.message);
+  // ────────────────────────────────────────────────────────────────
+  // FIX (movimentação em lote): o padrão antigo fazia, por SELB,
+  //   await fluxolabRemoveSelbGlobal(code);   // vários dbDelete em subpath
+  //   await dbSet('/fluxolab/DEST/selfKey', ...) // dbSet em subpath
+  // Cada dbSet/dbDelete em subpath do blob "fluxolab" faz, no shim,
+  // read→mutate→write do JSON inteiro em fluxolab_state.data. Enquanto
+  // o loop roda, o listener Realtime do blobSubscribe substitui o
+  // cache local com payloads que chegam FORA DE ORDEM em relação aos
+  // writes locais (payload antigo chegando depois de um upsert novo).
+  // A iteração seguinte lia esse cache "voltado no tempo" e reescrevia
+  // o blob sem os SELBs recém-movidos — resultado: SELBs sumindo.
+  //
+  // Correção: uma única leitura do blob + todas as mutações em memória
+  // + um único upsert. Movimentação em lote vira operação atômica.
+  // ────────────────────────────────────────────────────────────────
+  try {
+    if (typeof _supa === 'undefined' || !_supa) {
+      throw new Error('Supabase indisponível');
     }
-  }
 
-  if (erros.length === 0) {
-    if (typeof toast === 'function') toast(_fmovQueue.length + ' SELB(s) movidos para ' + (b ? b.label : destBolsao));
-  } else {
-    alert('Concluído com erros:\n' + erros.join('\n'));
+    // 1) Leitura única do blob completo
+    const { data: row, error: readErr } = await _supa
+      .from('fluxolab_state').select('data').eq('key', 'fluxolab').maybeSingle();
+    if (readErr) throw readErr;
+    const blob = (row && row.data && typeof row.data === 'object') ? row.data : {};
+
+    // 2) Aplica remoções + inserções em memória para TODOS os itens
+    const nowTs   = Date.now();
+    const uid     = currentUser ? currentUser.id      : '';
+    const uName   = currentUser ? currentUser.name    : '';
+    const uSector = currentUser ? currentUser.sector  : '';
+    const applied = [];
+
+    for (const item of _fmovQueue) {
+      const code    = String(item.code || '').trim().toUpperCase();
+      if (!code) continue;
+      const selfKey = code.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+      // Remove de QUALQUER bolsão onde o SELB apareça (por selfKey OU por campo .selb)
+      Object.keys(blob).forEach(bolsao => {
+        const items = blob[bolsao];
+        if (!items || typeof items !== 'object') return;
+        if (items[selfKey]) delete items[selfKey];
+        Object.keys(items).forEach(k => {
+          const v = items[k];
+          if (v && v.selb && String(v.selb).trim().toUpperCase() === code) {
+            delete items[k];
+          }
+        });
+      });
+
+      // Insere no bolsão de destino
+      if (!blob[destBolsao] || typeof blob[destBolsao] !== 'object') blob[destBolsao] = {};
+      blob[destBolsao][selfKey] = {
+        selb:        code,
+        uid, userName: uName, sector: uSector,
+        equipamento: item.equip || 'DESCONHECIDO',
+        ts:          nowTs,
+        movidoPor:   uName,
+      };
+
+      applied.push(item);
+    }
+
+    // 3) Upsert único do blob
+    const { error: writeErr } = await _supa
+      .from('fluxolab_state')
+      .upsert({ key: 'fluxolab', data: blob, updated_at: new Date().toISOString() },
+              { onConflict: 'key' });
+    if (writeErr) throw writeErr;
+
+    // 4) Reflete no estado local imediatamente (o Realtime confirmará depois)
+    try {
+      if (typeof _fluxolabData === 'object' && _fluxolabData) {
+        Object.keys(_fluxolabData).forEach(k => { delete _fluxolabData[k]; });
+        Object.assign(_fluxolabData, blob);
+      }
+    } catch(_) {}
+
+    // 5) Logs de movimentação (um por SELB efetivamente movido)
+    applied.forEach(item => {
+      try {
+        _fluxolabLogEntry(item.code, item.bolsaoAtual || '—', destBolsao, item.equip || 'DESCONHECIDO');
+      } catch(_) {}
+    });
+
+    if (typeof toast === 'function') {
+      toast(applied.length + ' SELB(s) movidos para ' + (b ? b.label : destBolsao));
+    }
+  } catch (e) {
+    console.error('[fmovExecutar] Falha na movimentação em lote:', e);
+    erros.push(e && e.message ? e.message : String(e));
+    alert('Falha ao mover SELBs em lote:\n' + erros.join('\n') +
+          '\n\nNenhum SELB foi movido (operação atômica). Tente novamente.');
+    if (btn) { btn.disabled = false; btn.textContent = '🚀 Mover SELBs'; }
+    return;
   }
 
   // Limpa tudo
@@ -16733,6 +16805,7 @@ async function fmovExecutar() {
   _fmovOnDestChange({});
   if (btn) { btn.disabled = false; btn.textContent = '🚀 Mover SELBs'; }
 }
+
 
 // Filtro de modelo em destaque (aba Bolsões)
 let _fluxolabBolsaoModelFilter = '';
