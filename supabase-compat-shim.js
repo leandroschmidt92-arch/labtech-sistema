@@ -15,15 +15,21 @@ function createSupabaseCompatShim(supa) {
   //    Realtime — nesse modo o cache é fonte de verdade e nunca expira.
   //  • Sem subscrição ativa: fallback com TTL curto (2s) e coalescing
   //    de loads concorrentes pela mesma key (dedupe in-flight).
-  const _blobCache = new Map();     // blobKey -> { data, ts, hasSub }
+  const _blobCache = new Map();     // blobKey -> { data, ts, hasSub, loaded }
   const _blobInflight = new Map();  // blobKey -> Promise
   const BLOB_TTL_MS = 8000;
 
   function _blobCacheGet(blobKey) {
     const c = _blobCache.get(blobKey);
     if (!c) return undefined;
-    if (c.hasSub) return c.data;
-    if (Date.now() - c.ts <= BLOB_TTL_MS) return c.data;
+    // Só confia no cache "sem expiração" quando já houve uma carga real
+    // (via blobLoad bem-sucedido ou evento Realtime). Sem isso, marcar
+    // hasSub antes do primeiro load fazia o blobLoad devolver o valor
+    // default vazio ({}) sem nunca consultar o Supabase — é por isso que
+    // os bolsões do FluxoLAB apareciam vazios ao atualizar a página e só
+    // voltavam quando chegava um evento Realtime (alguém movimentando algo).
+    if (c.hasSub && c.loaded) return c.data;
+    if (!c.hasSub && (Date.now() - c.ts <= BLOB_TTL_MS)) return c.data;
     return undefined;
   }
   function _blobCacheSet(blobKey, data, opts) {
@@ -32,10 +38,11 @@ function createSupabaseCompatShim(supa) {
       data: data || {},
       ts: Date.now(),
       hasSub: (opts && opts.hasSub) || prev.hasSub || false,
+      loaded: true,
     });
   }
   function _blobCacheMarkSub(blobKey) {
-    const prev = _blobCache.get(blobKey) || { data: {}, ts: 0 };
+    const prev = _blobCache.get(blobKey) || { data: {}, ts: 0, loaded: false };
     _blobCache.set(blobKey, { ...prev, hasSub: true });
   }
 

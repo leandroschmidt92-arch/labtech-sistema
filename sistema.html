@@ -238,6 +238,23 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <button class="tab" id="tab-admin"      onclick="setView('admin',this)" style="display:none">Admin</button>
       <button class="tab" id="tab-equip"      onclick="setView('equip',this)" style="display:none">Equipamentos</button>
     </div>
+    <div id="topbar-expectativas" style="display:none;position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);align-items:center;gap:10px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:14px;padding:8px 18px;">
+      <span style="font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:0.1em;">Expectativa de Produção</span>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div title="Montagem: produção atual vs. expectativa (cards ativos × meta 8)" style="display:flex;align-items:center;gap:10px;padding:5px 14px;background:rgba(16, 185, 129, 0.06);border:1px solid rgba(16, 185, 129, 0.15);border-radius:10px;">
+          <span style="font-size:10px;font-weight:800;color:var(--accent2);letter-spacing:0.05em;">MT</span>
+          <span style="font-family:var(--mono);font-size:16px;font-weight:800;"><span id="texp-mont-atual" style="color:var(--warn);">0</span><span style="color:var(--muted);">/</span><span id="texp-mont-total" style="color:var(--muted);">0</span></span>
+        </div>
+        <div title="Limpeza: produção atual vs. expectativa (cards ativos × meta 8)" style="display:flex;align-items:center;gap:10px;padding:5px 14px;background:rgba(59, 130, 246, 0.06);border:1px solid rgba(59, 130, 246, 0.15);border-radius:10px;">
+          <span style="font-size:10px;font-weight:800;color:var(--accent);letter-spacing:0.05em;">LP</span>
+          <span style="font-family:var(--mono);font-size:16px;font-weight:800;"><span id="texp-limp-atual" style="color:var(--warn);">0</span><span style="color:var(--muted);">/</span><span id="texp-limp-total" style="color:var(--muted);">0</span></span>
+        </div>
+        <div title="Complexa: produção atual vs. expectativa (cards ativos × meta 1)" style="display:flex;align-items:center;gap:10px;padding:5px 14px;background:rgba(139, 92, 246, 0.06);border:1px solid rgba(139, 92, 246, 0.15);border-radius:10px;">
+          <span style="font-size:10px;font-weight:800;color:var(--purple);letter-spacing:0.05em;">CX</span>
+          <span style="font-family:var(--mono);font-size:16px;font-weight:800;"><span id="texp-comp-atual" style="color:var(--warn);">0</span><span style="color:var(--muted);">/</span><span id="texp-comp-total" style="color:var(--muted);">0</span></span>
+        </div>
+      </div>
+    </div>
     <div class="topbar-right">
       <div class="user-chip">
         <div class="avatar av-mont" id="u-avatar">??</div>
@@ -315,24 +332,23 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
         padding: 8px 20px; display: flex; align-items: center; gap: 14px; flex-shrink: 0;
         box-shadow: var(--shadow); backdrop-filter: blur(10px);
       ">
-        <span style="font-size: 10px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em;">Produção Equipes</span>
         <div style="display: flex; gap: 10px; align-items: center;">
-          <div style="display: flex; align-items: center; gap: 7px; padding: 5px 12px; background: rgba(16, 185, 129, 0.06); border: 1px solid rgba(16, 185, 129, 0.15); border-radius: 10px;">
-            <span style="font-size: 10px; font-weight: 800; color: var(--accent2);">MT</span>
-            <span id="t-mont" style="font-family: var(--mono); font-size: 15px; font-weight: 700; color: #fff;">0</span>
-          </div>
-          <div style="display: flex; align-items: center; gap: 7px; padding: 5px 12px; background: rgba(59, 130, 246, 0.06); border: 1px solid rgba(59, 130, 246, 0.15); border-radius: 10px;">
-            <span style="font-size: 10px; font-weight: 800; color: var(--accent);">LP</span>
-            <span id="t-limp" style="font-family: var(--mono); font-size: 15px; font-weight: 700; color: #fff;">0</span>
-          </div>
-          <div style="display: flex; align-items: center; gap: 7px; padding: 5px 12px; background: rgba(139, 92, 246, 0.06); border: 1px solid rgba(139, 92, 246, 0.15); border-radius: 10px;">
-            <span style="font-size: 10px; font-weight: 800; color: var(--purple);">CX</span>
-            <span id="t-comp" style="font-family: var(--mono); font-size: 15px; font-weight: 700; color: #fff;">0</span>
-          </div>
-          <div style="height: 24px; width: 1px; background: var(--border); margin: 0 4px;"></div>
           <div style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 10px;">
             <span style="font-size: 10px; font-weight: 800; color: #fff; letter-spacing: 0.05em;">TOTAL</span>
             <span id="t-total" style="font-family: var(--mono); font-size: 18px; font-weight: 800; color: var(--accent);">0</span>
+          </div>
+          <div style="height: 24px; width: 1px; background: var(--border); margin: 0 4px;"></div>
+          <div id="exp-mont-pill" title="Montagem: produção atual vs. expectativa (cards ativos × meta 8)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(16, 185, 129, 0.06); border: 1px solid rgba(16, 185, 129, 0.15); border-radius: 10px;">
+            <span style="font-size: 10px; font-weight: 800; color: var(--accent2); letter-spacing: 0.05em;">EXP. MT</span>
+            <span style="font-family: var(--mono); font-size: 15px; font-weight: 800;"><span id="exp-mont-atual" style="color: var(--warn);">0</span><span style="color: var(--muted);">/</span><span id="exp-mont-total" style="color: var(--muted);">0</span></span>
+          </div>
+          <div id="exp-limp-pill" title="Limpeza: produção atual vs. expectativa (cards ativos × meta 8)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(59, 130, 246, 0.06); border: 1px solid rgba(59, 130, 246, 0.15); border-radius: 10px;">
+            <span style="font-size: 10px; font-weight: 800; color: var(--accent); letter-spacing: 0.05em;">EXP. LP</span>
+            <span style="font-family: var(--mono); font-size: 15px; font-weight: 800;"><span id="exp-limp-atual" style="color: var(--warn);">0</span><span style="color: var(--muted);">/</span><span id="exp-limp-total" style="color: var(--muted);">0</span></span>
+          </div>
+          <div id="exp-comp-pill" title="Complexa: produção atual vs. expectativa (cards ativos × meta 1)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(139, 92, 246, 0.06); border: 1px solid rgba(139, 92, 246, 0.15); border-radius: 10px;">
+            <span style="font-size: 10px; font-weight: 800; color: var(--purple); letter-spacing: 0.05em;">EXP. CX</span>
+            <span style="font-family: var(--mono); font-size: 15px; font-weight: 800;"><span id="exp-comp-atual" style="color: var(--warn);">0</span><span style="color: var(--muted);">/</span><span id="exp-comp-total" style="color: var(--muted);">0</span></span>
           </div>
         </div>
       </div>

@@ -1566,6 +1566,8 @@ function loginAs(u){
 
   // Tab visibility — controlada por permissões salvas (com fallback ao padrão)
   document.getElementById('topbar-tabs').style.display    = isDisplay?'none':'';
+  const _topExpEl = document.getElementById('topbar-expectativas');
+  if(_topExpEl) _topExpEl.style.display = isDisplay ? 'flex' : 'none';
   document.getElementById('tab-admin').style.display      = isAdmin?'':'none';
   applySectorTabPerms(u);
   applyRelSubTabPerms(u);
@@ -3884,6 +3886,36 @@ function updateSummary(){
   if(elLimp) elLimp.textContent = tLimp;
   if(elComp) elComp.textContent = tComp;
   if(elTot)  elTot.textContent  = tTot;
+
+  // ── Expectativa de Produção (por setor, sempre visível — MONTAGEM, LIMPEZA e COMPLEXA) ──
+  // Cada operador ativo tem meta diária (8 na Montagem/Limpeza, 1 na Complexa),
+  // então a expectativa do setor = nº de cards ativos (usuários ativos/não
+  // ocultos) daquele setor × meta. Diferente do antigo resumo MT/LP/CX (que
+  // somava aprovações do dia inteiro, mesmo de usuários já desativados), aqui
+  // contamos só quem está com card ativo agora, para refletir a meta real do
+  // time em campo hoje. Os mesmos valores são renderizados em dois lugares:
+  // os pills do dashboard (exp-*) e a barra centralizada da topbar (texp-*),
+  // exibida apenas para o setor VISUALIZAÇÃO.
+  function _renderExpectativaSetor(sector, meta, ids){
+    const sectorUsers = users.filter(u => u.active && !u.hidden && u.sector === sector);
+    let expAtual = 0, expTotal = 0;
+    sectorUsers.forEach(u => {
+      expAtual += getTotalDia(u.id);
+      expTotal += meta;
+    });
+    const cor = (expTotal > 0 && expAtual >= expTotal) ? 'var(--accent2)' : 'var(--warn)';
+    ids.forEach(([atualId, totalId]) => {
+      const elAtual = document.getElementById(atualId);
+      const elTotal = document.getElementById(totalId);
+      if(!elAtual || !elTotal) return;
+      elAtual.textContent = expAtual;
+      elTotal.textContent = expTotal;
+      elAtual.style.color = cor;
+    });
+  }
+  _renderExpectativaSetor('MONTAGEM', 8, [['exp-mont-atual','exp-mont-total'], ['texp-mont-atual','texp-mont-total']]);
+  _renderExpectativaSetor('LIMPEZA',  8, [['exp-limp-atual','exp-limp-total'], ['texp-limp-atual','texp-limp-total']]);
+  _renderExpectativaSetor('COMPLEXA', 1, [['exp-comp-atual','exp-comp-total'], ['texp-comp-atual','texp-comp-total']]);
 }
 
 // ════ CONSULTA ════
