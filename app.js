@@ -1599,7 +1599,7 @@ function loginAs(u){
     setView('relatorios', document.getElementById('tab-relatorios'));
     
     // Oculta todas as abas de relatórios que não sejam SCRAP
-    const idsRel = ['reltab-prod','reltab-pedido','reltab-modelo','reltab-usuario','reltab-mensal','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados'];
+    const idsRel = ['reltab-prod','reltab-pedido','reltab-modelo','reltab-usuario','reltab-mensal','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados', 'reltab-linha'];
     idsRel.forEach(id => {
       const el = document.getElementById(id);
       if(el) el.style.display = 'none';
@@ -1611,7 +1611,7 @@ function loginAs(u){
     setView('consulta', document.getElementById('tab-consulta'));
     
     // Restaura exibição padrão caso Admin ou outro acesse
-    const idsRel = ['reltab-prod','reltab-pedido','reltab-modelo','reltab-usuario','reltab-mensal','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados'];
+    const idsRel = ['reltab-prod','reltab-pedido','reltab-modelo','reltab-usuario','reltab-mensal','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados', 'reltab-linha'];
     idsRel.forEach(id => {
       const el = document.getElementById(id);
       if(el) el.style.display = '';
@@ -1631,7 +1631,7 @@ function loginAs(u){
       // Setor configurado como "Visão Admin" — abre dashboard completo
       setView('dashboard', document.getElementById('tab-dashboard'));
       buildCards();
-      const idsRel = ['reltab-prod','reltab-pedido','reltab-modelo','reltab-usuario','reltab-mensal','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados'];
+      const idsRel = ['reltab-prod','reltab-pedido','reltab-modelo','reltab-usuario','reltab-mensal','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados', 'reltab-linha'];
       idsRel.forEach(id => { const el = document.getElementById(id); if(el) el.style.display = ''; });
     } else {
       // Setor configurado como "Tela do Operador" (padrão estilo Montagem)
@@ -1644,7 +1644,7 @@ function loginAs(u){
     buildCards();
     
     // Restaura abas de relatórios para Admin
-    const idsRel = ['reltab-prod','reltab-pedido','reltab-modelo','reltab-usuario','reltab-mensal','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados'];
+    const idsRel = ['reltab-prod','reltab-pedido','reltab-modelo','reltab-usuario','reltab-mensal','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados', 'reltab-linha'];
     idsRel.forEach(id => {
       const el = document.getElementById(id);
       if(el) el.style.display = '';
@@ -7421,6 +7421,10 @@ async function _reloadCurrentRelSubTab(){
     await renderModeloRel();
   } else if(tab === 'mensal'){
     renderMensalRel();
+  } else if(tab === 'linha'){
+    _relHistoryCache = null;
+    await loadRelByDate();
+    renderLinhaProdRel();
   }
 }
 
@@ -7899,6 +7903,7 @@ function refreshRelatorios(){
   else if(relSubTab==='reprov') _loadReprovByGlobalDate().then(()=>renderReprovRel());
   else if(relSubTab==='defeitos') _loadDefeitosByGlobalDate().then(()=>renderDefeitos());
   else if(relSubTab==='duplicados') _loadDuplicadosByGlobalDate().then(()=>renderDuplicados());
+  else if(relSubTab==='linha'){ _relHistoryCache=null; loadRelByDate().then(()=>renderLinhaProdRel()); }
 }
 
 function setRelSubTab(tab){
@@ -7928,8 +7933,10 @@ function setRelSubTab(tab){
   if(vb) vb.style.display = tab==='busca-modelo' ? 'block':'none';
   const vql = document.getElementById('relview-qual-liberados');
   if(vql) vql.style.display = tab==='qual-liberados' ? 'block':'none';
+  const vln = document.getElementById('relview-linha');
+  if(vln) vln.style.display = tab==='linha' ? 'block':'none';
 
-  const ids = ['reltab-prod','reltab-pedido','reltab-scrap','reltab-modelo','reltab-usuario','reltab-mensal','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados'];
+  const ids = ['reltab-prod','reltab-pedido','reltab-scrap','reltab-modelo','reltab-usuario','reltab-mensal','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados', 'reltab-linha'];
   ids.forEach(id => {
     const b = document.getElementById(id);
     if(b){
@@ -8020,6 +8027,14 @@ function setRelSubTab(tab){
     _loadQualReprovByPeriodo().then(() => {
       if (typeof renderRelatorioUsuariosQual === 'function') renderRelatorioUsuariosQual();
     });
+  } else if(tab==='linha'){
+    const b=document.getElementById('reltab-linha');
+    if(b){ b.style.background='var(--accent2)'; b.style.color='#000'; b.style.border='none'; }
+    if(_relHistoryCache === null){
+      loadRelByDate().then(()=>renderLinhaProdRel());
+    } else {
+      renderLinhaProdRel();
+    }
   }
 }
 
@@ -15816,6 +15831,7 @@ const REL_TAB_DEFS = [
   { key:'duplicados',   btnId:'reltab-duplicados',   label:'Duplicados' },
   { key:'busca-modelo', btnId:'reltab-busca-modelo', label:'Busca Modelo' },
   { key:'qual-liberados', btnId:'reltab-qual-liberados', label:'Liberados Qualidade' },
+  { key:'linha',        btnId:'reltab-linha',        label:'Produção por Linha' },
 ];
 
 function defaultRelPermsForSector(_sector){
@@ -16697,102 +16713,30 @@ async function fmovExecutar() {
   const erros = [];
   const b = FLUXOLAB_BOLSOES.find(x => x.key === destBolsao);
 
-  // ────────────────────────────────────────────────────────────────
-  // FIX (movimentação em lote): o padrão antigo fazia, por SELB,
-  //   await fluxolabRemoveSelbGlobal(code);   // vários dbDelete em subpath
-  //   await dbSet('/fluxolab/DEST/selfKey', ...) // dbSet em subpath
-  // Cada dbSet/dbDelete em subpath do blob "fluxolab" faz, no shim,
-  // read→mutate→write do JSON inteiro em fluxolab_state.data. Enquanto
-  // o loop roda, o listener Realtime do blobSubscribe substitui o
-  // cache local com payloads que chegam FORA DE ORDEM em relação aos
-  // writes locais (payload antigo chegando depois de um upsert novo).
-  // A iteração seguinte lia esse cache "voltado no tempo" e reescrevia
-  // o blob sem os SELBs recém-movidos — resultado: SELBs sumindo.
-  //
-  // Correção: uma única leitura do blob + todas as mutações em memória
-  // + um único upsert. Movimentação em lote vira operação atômica.
-  // ────────────────────────────────────────────────────────────────
-  try {
-    if (typeof _supa === 'undefined' || !_supa) {
-      throw new Error('Supabase indisponível');
-    }
-
-    // 1) Leitura única do blob completo
-    const { data: row, error: readErr } = await _supa
-      .from('fluxolab_state').select('data').eq('key', 'fluxolab').maybeSingle();
-    if (readErr) throw readErr;
-    const blob = (row && row.data && typeof row.data === 'object') ? row.data : {};
-
-    // 2) Aplica remoções + inserções em memória para TODOS os itens
-    const nowTs   = Date.now();
-    const uid     = currentUser ? currentUser.id      : '';
-    const uName   = currentUser ? currentUser.name    : '';
-    const uSector = currentUser ? currentUser.sector  : '';
-    const applied = [];
-
-    for (const item of _fmovQueue) {
-      const code    = String(item.code || '').trim().toUpperCase();
-      if (!code) continue;
-      const selfKey = code.replace(/[^a-zA-Z0-9_-]/g, '_');
-
-      // Remove de QUALQUER bolsão onde o SELB apareça (por selfKey OU por campo .selb)
-      Object.keys(blob).forEach(bolsao => {
-        const items = blob[bolsao];
-        if (!items || typeof items !== 'object') return;
-        if (items[selfKey]) delete items[selfKey];
-        Object.keys(items).forEach(k => {
-          const v = items[k];
-          if (v && v.selb && String(v.selb).trim().toUpperCase() === code) {
-            delete items[k];
-          }
-        });
-      });
-
-      // Insere no bolsão de destino
-      if (!blob[destBolsao] || typeof blob[destBolsao] !== 'object') blob[destBolsao] = {};
-      blob[destBolsao][selfKey] = {
-        selb:        code,
-        uid, userName: uName, sector: uSector,
-        equipamento: item.equip || 'DESCONHECIDO',
-        ts:          nowTs,
-        movidoPor:   uName,
-      };
-
-      applied.push(item);
-    }
-
-    // 3) Upsert único do blob
-    const { error: writeErr } = await _supa
-      .from('fluxolab_state')
-      .upsert({ key: 'fluxolab', data: blob, updated_at: new Date().toISOString() },
-              { onConflict: 'key' });
-    if (writeErr) throw writeErr;
-
-    // 4) Reflete no estado local imediatamente (o Realtime confirmará depois)
+  for (const item of _fmovQueue) {
     try {
-      if (typeof _fluxolabData === 'object' && _fluxolabData) {
-        Object.keys(_fluxolabData).forEach(k => { delete _fluxolabData[k]; });
-        Object.assign(_fluxolabData, blob);
-      }
-    } catch(_) {}
-
-    // 5) Logs de movimentação (um por SELB efetivamente movido)
-    applied.forEach(item => {
-      try {
-        _fluxolabLogEntry(item.code, item.bolsaoAtual || '—', destBolsao, item.equip || 'DESCONHECIDO');
-      } catch(_) {}
-    });
-
-    if (typeof toast === 'function') {
-      toast(applied.length + ' SELB(s) movidos para ' + (b ? b.label : destBolsao));
+      await fluxolabRemoveSelbGlobal(item.code);
+      const selfKey = item.code.replace(/[^a-zA-Z0-9_-]/g, '_');
+      await dbSet('/fluxolab/' + destBolsao + '/' + selfKey, {
+        selb:        item.code,
+        uid:         currentUser ? currentUser.id : '',
+        userName:    currentUser ? currentUser.name : '',
+        sector:      currentUser ? currentUser.sector : '',
+        equipamento: item.equip || 'DESCONHECIDO',
+        ts:          Date.now(),
+        movidoPor:   currentUser ? currentUser.name : '',
+      });
+      // Log de movimentação manual
+      _fluxolabLogEntry(item.code, item.bolsaoAtual || '—', destBolsao, item.equip || 'DESCONHECIDO');
+    } catch (e) {
+      erros.push(item.code + ': ' + e.message);
     }
-  } catch (e) {
-    console.error('[fmovExecutar] Falha na movimentação em lote:', e);
-    erros.push(e && e.message ? e.message : String(e));
-    alert('Falha ao mover SELBs em lote:\n' + erros.join('\n') +
-          '\n\nNenhum SELB foi movido (operação atômica). Tente novamente.');
-    if (btn) { btn.disabled = false; btn.textContent = '🚀 Mover SELBs'; }
-    return;
+  }
+
+  if (erros.length === 0) {
+    if (typeof toast === 'function') toast(_fmovQueue.length + ' SELB(s) movidos para ' + (b ? b.label : destBolsao));
+  } else {
+    alert('Concluído com erros:\n' + erros.join('\n'));
   }
 
   // Limpa tudo
@@ -16805,7 +16749,6 @@ async function fmovExecutar() {
   _fmovOnDestChange({});
   if (btn) { btn.disabled = false; btn.textContent = '🚀 Mover SELBs'; }
 }
-
 
 // Filtro de modelo em destaque (aba Bolsões)
 let _fluxolabBolsaoModelFilter = '';
@@ -18925,6 +18868,23 @@ async function fluxolabConsumirChecklistPorModelo(modeloTexto, meta){
     }
     return nome;
   }
+  // ── Regra: só pode virar "REVISADA" o SELB que tiver registro de
+  // liberação na Qualidade (qualidade_registros) nos últimos N dias.
+  // Reaproveita fluxolabFoiAprovadoRecente quando disponível; senão faz
+  // a checagem local diretamente em _qualRegistros.
+  const QUAL_LIB_DIAS_MIN = 5;
+  function temRegistroQualidadeRecente(selb, dias){
+    dias = dias || QUAL_LIB_DIAS_MIN;
+    const code = (selb || '').toUpperCase().trim();
+    if(!code) return false;
+    try {
+      if(typeof fluxolabFoiAprovadoRecente === 'function') return fluxolabFoiAprovadoRecente(code, dias);
+    } catch(e){}
+    const cutoff = Date.now() - dias * 24 * 60 * 60 * 1000;
+    return Object.values((typeof _qualRegistros !== 'undefined' && _qualRegistros) || {}).some(r =>
+      r && (r.selb || '').toUpperCase().trim() === code && (r.ts || 0) >= cutoff
+    );
+  }
   function updatePreview(){
     const ta = document.getElementById('qual-lib-textarea');
     const box = document.getElementById('qual-lib-preview');
@@ -18936,12 +18896,17 @@ async function fluxolabConsumirChecklistPorModelo(modeloTexto, meta){
     const jaLib = new Set();
     Object.values(liberadas).forEach(r => { if(r && r.selb) jaLib.add(String(r.selb).toUpperCase()); });
     const seen = new Set();
-    let okCount = 0, badCount = 0, dupCount = 0;
+    let okCount = 0, badCount = 0, dupCount = 0, semRegCount = 0;
     const rows = selbs.map(selb => {
       if(seen.has(selb)) return { selb, status:'dup-input', nome:'' };
       seen.add(selb);
       if(jaLib.has(selb)){ dupCount++; return { selb, status:'dup', nome: recognizeSelb(selb) }; }
       const nome = recognizeSelb(selb);
+      // Bloqueio: só pode virar REVISADA se tiver registro de liberação
+      // na Qualidade nos últimos QUAL_LIB_DIAS_MIN dias.
+      if(!temRegistroQualidadeRecente(selb, QUAL_LIB_DIAS_MIN)){
+        semRegCount++; return { selb, status:'sem-registro', nome };
+      }
       if(nome){ okCount++; return { selb, status:'ok', nome }; }
       badCount++; return { selb, status:'bad', nome:'' };
     });
@@ -18953,7 +18918,8 @@ async function fluxolabConsumirChecklistPorModelo(modeloTexto, meta){
           ok:  {bg:'rgba(74,222,128,.08)', bd:'rgba(74,222,128,.4)',  c:'#4ade80', icon:'✓', tag:'reconhecido'},
           bad: {bg:'rgba(239,68,68,.08)',  bd:'rgba(239,68,68,.4)',   c:'#ef4444', icon:'✗', tag:'desconhecido'},
           dup: {bg:'rgba(245,166,35,.08)', bd:'rgba(245,166,35,.4)',  c:'#f5a623', icon:'⚠', tag:'já liberado'},
-          'dup-input': {bg:'rgba(148,163,184,.08)', bd:'rgba(148,163,184,.4)', c:'#94a3b8', icon:'↺', tag:'duplicado'}
+          'dup-input': {bg:'rgba(148,163,184,.08)', bd:'rgba(148,163,184,.4)', c:'#94a3b8', icon:'↺', tag:'duplicado'},
+          'sem-registro': {bg:'rgba(239,68,68,.14)', bd:'rgba(239,68,68,.55)', c:'#ef4444', icon:'⛔', tag:'bloqueado'}
         }[r.status];
         if (r.status === 'bad') {
           colors.bg = 'rgba(245,166,35,.08)';
@@ -18962,10 +18928,13 @@ async function fluxolabConsumirChecklistPorModelo(modeloTexto, meta){
           colors.icon = '!';
           colors.tag = 'manual';
         }
+        const nomeExibido = (r.status === 'sem-registro')
+          ? 'EQUIPAMENTO SEM REGISTRO DE LIBERAÇÃO NA QUALIDADE'
+          : (r.nome || '—');
         return '<div style="display:flex;align-items:center;gap:10px;padding:7px 12px;border-radius:8px;background:'+colors.bg+';border:1px solid '+colors.bd+';margin-bottom:4px">'
           + '<span style="color:'+colors.c+';font-weight:900;font-size:14px;width:14px;text-align:center">'+colors.icon+'</span>'
           + '<span style="font-family:var(--mono);font-weight:700;color:var(--text);font-size:12px;min-width:120px">'+r.selb+'</span>'
-          + '<span style="color:var(--muted);font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(r.nome||'—')+'</span>'
+          + '<span style="color:'+(r.status==='sem-registro'?colors.c:'var(--muted)')+';font-weight:'+(r.status==='sem-registro'?'700':'400')+';font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+nomeExibido+'</span>'
           + '<span style="font-size:10px;font-weight:700;color:'+colors.c+';text-transform:uppercase;letter-spacing:.05em">'+colors.tag+'</span>'
           + '</div>';
       }).join('');
@@ -18973,7 +18942,8 @@ async function fluxolabConsumirChecklistPorModelo(modeloTexto, meta){
     const allowedCount = okCount + badCount;
     if(cnt) cnt.innerHTML = '<span style="color:#4ade80;font-weight:700">'+okCount+' OK</span>'
       + (badCount?' · <span style="color:#f5a623;font-weight:700">'+badCount+' manual(is)</span>':'')
-      + (dupCount?' · <span style="color:#f5a623;font-weight:700">'+dupCount+' já liberado(s)</span>':'');
+      + (dupCount?' · <span style="color:#f5a623;font-weight:700">'+dupCount+' já liberado(s)</span>':'')
+      + (semRegCount?' · <span style="color:#ef4444;font-weight:700">'+semRegCount+' sem registro na Qualidade (últimos '+QUAL_LIB_DIAS_MIN+'d)</span>':'');
     if(btn){
       btn.disabled = allowedCount === 0;
       btn.style.opacity = allowedCount === 0 ? '.5' : '1';
@@ -19168,13 +19138,29 @@ async function fluxolabConsumirChecklistPorModelo(modeloTexto, meta){
     Object.values(liberadas).forEach(r => { if(r && r.selb) jaLib.add(String(r.selb).toUpperCase()); });
     const seen = new Set();
     const novos = [];
+    const bloqueados = [];
     selbs.forEach(selb => {
       if(seen.has(selb) || jaLib.has(selb)) return;
       seen.add(selb);
+      // Bloqueio: só pode virar REVISADA o SELB com registro de liberação
+      // na Qualidade nos últimos QUAL_LIB_DIAS_MIN dias.
+      if(!temRegistroQualidadeRecente(selb, QUAL_LIB_DIAS_MIN)){
+        bloqueados.push(selb);
+        return;
+      }
       const nome = recognizeSelb(selb);
       novos.push({ selb, nome: nome || 'DESCONHECIDO' });
     });
-    if(novos.length === 0){ alert('Nenhum SELB disponível para liberar.'); return; }
+    if(bloqueados.length){
+      alert('⚠️ EQUIPAMENTO SEM REGISTRO DE LIBERAÇÃO NA QUALIDADE\n\n'
+        + 'O(s) SELB(s) abaixo não possui(em) registro de liberação na Qualidade nos últimos ' + QUAL_LIB_DIAS_MIN + ' dias e não pode(m) ser marcado(s) como REVISADO:\n\n'
+        + bloqueados.join(', ')
+        + '\n\nEles não foram liberados. Registre a Qualidade do equipamento antes de tentar novamente.');
+    }
+    if(novos.length === 0){
+      if(!bloqueados.length) alert('Nenhum SELB disponível para liberar.');
+      return;
+    }
     if(typeof _db === 'undefined' || !_db){ alert('Banco de dados indisponível.'); return; }
     const data = todayStr();
     const ts = Date.now();
@@ -23113,4 +23099,114 @@ function abrirMenuMobile() {
   if (modal) {
     modal.classList.remove('hidden');
   }
+}
+
+// ════ PRODUÇÃO POR LINHA ════
+// Regra: um SELB só conta como aprovado quando existe ao menos 1 registro
+// "ok" na LIMPEZA e 1 na MONTAGEM referentes à mesma linha. SELBs
+// duplicados (mesmo SELB registrado várias vezes) contam uma única vez.
+window._linhaProdData = null;
+
+function _linhaFromUid(uid){
+  try{
+    const u = (typeof users !== 'undefined' && Array.isArray(users)) ? users.find(x => x.id === uid) : null;
+    if(!u) return null;
+    const l = u.linha || u.line || u.linhaProducao || null;
+    if(!l) return null;
+    return String(l).trim().toUpperCase();
+  }catch(e){ return null; }
+}
+
+function _computeLinhaProdData(){
+  const src = (_relHistoryCache !== null ? _relHistoryCache : history) || [];
+  // Map<linha, { limp:Set<selb>, mont:Set<selb>, regs:number, users:Set<uid> }>
+  const byLinha = new Map();
+  src.forEach(h => {
+    if(!h || h.status !== 'ok') return;
+    const sector = (h.sector || '').toUpperCase();
+    if(sector !== 'LIMPEZA' && sector !== 'MONTAGEM') return;
+    const selb = (h.selb || '').toString().trim().toUpperCase();
+    if(!selb) return;
+    const linha = _linhaFromUid(h.uid);
+    if(!linha) return;
+    let entry = byLinha.get(linha);
+    if(!entry){
+      entry = { limp:new Set(), mont:new Set(), regs:0, users:new Set() };
+      byLinha.set(linha, entry);
+    }
+    entry.regs++;
+    if(h.uid) entry.users.add(h.uid);
+    if(sector === 'LIMPEZA') entry.limp.add(selb);
+    else entry.mont.add(selb);
+  });
+  const rows = [];
+  byLinha.forEach((v, linha) => {
+    let aprov = 0;
+    v.limp.forEach(s => { if(v.mont.has(s)) aprov++; });
+    rows.push({
+      linha,
+      aprovados: aprov,
+      limpeza:  v.limp.size,
+      montagem: v.mont.size,
+      registros: v.regs,
+      usuarios: v.users.size,
+    });
+  });
+  rows.sort((a,b) => b.aprovados - a.aprovados || b.registros - a.registros);
+  return rows;
+}
+
+function renderLinhaProdRel(){
+  const body = document.getElementById('linha-prod-body');
+  const kpi  = document.getElementById('linha-prod-kpi');
+  if(!body) return;
+  const rows = _computeLinhaProdData();
+  window._linhaProdData = rows;
+
+  const totAprov = rows.reduce((s,r)=>s+r.aprovados,0);
+  const totReg   = rows.reduce((s,r)=>s+r.registros,0);
+  const totLinhas= rows.length;
+  const topLinha = rows[0] ? rows[0].linha + ' (' + rows[0].aprovados + ')' : '—';
+  if(kpi){
+    const card = (label, val, color) =>
+      `<div style="background:var(--bg2);border:1px solid var(--border2);border-radius:12px;padding:14px 16px">
+        <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em">${label}</div>
+        <div style="font-size:22px;font-weight:700;color:${color};margin-top:6px;font-family:var(--mono)">${val}</div>
+      </div>`;
+    kpi.innerHTML =
+      card('SELBs Aprovados', totAprov, 'var(--accent2)') +
+      card('Total de Registros', totReg, 'var(--text)') +
+      card('Linhas com Produção', totLinhas, 'var(--purple)') +
+      card('Top Linha', topLinha, 'var(--warn)');
+  }
+
+  if(!rows.length){
+    body.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:26px;color:var(--muted);font-size:13px">Nenhuma produção encontrada no período (verifique se os usuários possuem "Linha" cadastrada).</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map((r,i) => `
+    <tr style="border-bottom:1px solid var(--border2)">
+      <td style="padding:11px 14px;font-family:var(--mono);color:var(--muted)">${i+1}</td>
+      <td style="padding:11px 14px;font-weight:700;color:var(--text)">${r.linha}</td>
+      <td style="padding:11px 14px;text-align:center;font-family:var(--mono);font-weight:700;color:var(--accent2);font-size:14px">${r.aprovados}</td>
+      <td style="padding:11px 14px;text-align:center;font-family:var(--mono);color:var(--limp)">${r.limpeza}</td>
+      <td style="padding:11px 14px;text-align:center;font-family:var(--mono);color:var(--mont)">${r.montagem}</td>
+      <td style="padding:11px 14px;text-align:center;font-family:var(--mono);color:var(--muted)">${r.registros}</td>
+      <td style="padding:11px 14px;text-align:center;font-family:var(--mono);color:var(--muted)">${r.usuarios}</td>
+    </tr>
+  `).join('');
+}
+
+function exportLinhaProdCSV(){
+  const rows = window._linhaProdData || _computeLinhaProdData();
+  const header = ['Linha','SELBs Aprovados','Limpeza (unicos)','Montagem (unicos)','Registros','Usuarios'];
+  const csv = [header.join(';')].concat(
+    rows.map(r => [r.linha, r.aprovados, r.limpeza, r.montagem, r.registros, r.usuarios].join(';'))
+  ).join('\n');
+  const blob = new Blob(["\ufeff"+csv], {type:'text/csv;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'producao-por-linha.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
 }

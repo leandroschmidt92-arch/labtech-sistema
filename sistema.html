@@ -735,6 +735,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <button id="reltab-duplicados" onclick="setRelSubTab('duplicados')" style="background:none;color:var(--muted);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">🔄 SELBs Duplicados</button>
       <button id="reltab-busca-modelo" onclick="setRelSubTab('busca-modelo')" style="background:none;color:var(--muted);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">🔍 Busca por Modelo</button>
       <button id="reltab-qual-liberados" onclick="setRelSubTab('qual-liberados')" style="background:none;color:var(--muted);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">✅ Liberados Qualidade</button>
+      <button id="reltab-linha" onclick="setRelSubTab('linha')" style="background:none;color:var(--muted);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">🏭 Produção por Linha</button>
       <button id="rel-refresh-badge" onclick="refreshRelatorios()" style="
         display:none;margin-left:auto;
         background:rgba(61,214,140,.15);border:1px solid rgba(61,214,140,.5);
@@ -1500,6 +1501,40 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       </div>
 
       <div id="qual-rel-detalhe" style="margin-top:20px"></div>
+    </div>
+
+    <!-- SUB-VIEW: PRODUÇÃO POR LINHA -->
+    <div id="relview-linha" style="display:none">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:12px">
+        <div>
+          <h2 style="font-size:18px;font-weight:700;color:var(--accent2);margin:0">🏭 Produção por Linha</h2>
+          <p style="font-size:12px;color:var(--muted);margin-top:4px">Um SELB só conta como <b>aprovado</b> quando existe pelo menos 1 aprovação na <b>LIMPEZA</b> e 1 na <b>MONTAGEM</b> da mesma linha (SELBs duplicados contam uma vez).</p>
+        </div>
+        <button onclick="exportLinhaProdCSV()" style="background:rgba(74,222,128,.12);border:1px solid rgba(74,222,128,.35);border-radius:9px;color:#4ade80;font-family:var(--font);font-size:12px;font-weight:700;padding:8px 16px;cursor:pointer">⬇ Exportar CSV</button>
+      </div>
+
+      <div id="linha-prod-kpi" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:18px"></div>
+
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:12px;overflow:hidden">
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:820px">
+            <thead>
+              <tr style="background:var(--bg3)">
+                <th style="padding:12px 14px;text-align:left;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--border2);width:64px">#</th>
+                <th style="padding:12px 14px;text-align:left;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--border2)">Linha</th>
+                <th style="padding:12px 14px;text-align:center;font-size:10px;font-weight:700;color:var(--accent2);text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--border2);width:130px">SELBs Aprovados</th>
+                <th style="padding:12px 14px;text-align:center;font-size:10px;font-weight:700;color:var(--limp);text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--border2);width:130px">Limpeza (SELBs únicos)</th>
+                <th style="padding:12px 14px;text-align:center;font-size:10px;font-weight:700;color:var(--mont);text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--border2);width:130px">Montagem (SELBs únicos)</th>
+                <th style="padding:12px 14px;text-align:center;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--border2);width:110px">Registros</th>
+                <th style="padding:12px 14px;text-align:center;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--border2);width:110px">Usuários</th>
+              </tr>
+            </thead>
+            <tbody id="linha-prod-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div id="linha-prod-detalhe" style="margin-top:20px"></div>
     </div>
   </div>
 
