@@ -15675,7 +15675,7 @@ const TAB_DEFS = [
   { key:'equip',        id:'tab-equip',        label:'Equipamentos' },
   { key:'bip-mobile',   id:'tab-bip-mobile',   label:'Bip Mobile' },
 ];
-const PERM_SECTORS_FIXOS = ['MONTAGEM','LIMPEZA','COMPLEXA','ELETRÔNICA','QUALIDADE','DESMEMBRAMENTO','VISUALIZAÇÃO'];
+const PERM_SECTORS_FIXOS = ['MONTAGEM','LIMPEZA','COMPLEXA','ELETRÔNICA','QUALIDADE','DESMEMBRAMENTO','VISUALIZAÇÃO','VISU FLUXOLAB'];
 // PERM_SECTORS é uma função (não constante) para refletir setores criados dinamicamente
 function getPERMSectors(){ try { return (_setores && _setores.length) ? _setores : PERM_SECTORS_FIXOS; } catch(e) { return PERM_SECTORS_FIXOS; } }
 
@@ -15684,6 +15684,26 @@ function defaultPermsForSector(sector){
   const isQual    = sector==='QUALIDADE';
   const isDisplay = sector==='VISUALIZAÇÃO' || sector==='EXIBIÇÃO';
   const isDesMem  = sector==='DESMEMBRAMENTO';
+  const isVisuFluxo = sector==='VISU FLUXOLAB';
+  if(isVisuFluxo){
+    // Setor "somente visualização": admin escolhe quais abas ele enxerga.
+    // Por padrão libera apenas FluxoLAB e Dashboard; todo o resto começa desligado.
+    return {
+      'dashboard':    true,
+      'consulta':     false,
+      'relatorios':   false,
+      'pecas':        false,
+      'solicitacoes': false,
+      'maquinas-a':   false,
+      'gaiola-lab':   false,
+      'perdidas':     false,
+      'garantia':     false,
+      'scanner':      false,
+      'fluxolab':     true,
+      'equip':        false,
+      'bip-mobile':   false,
+    };
+  }
   return {
     'dashboard':    !isDesMem,
     'consulta':     isQual,
@@ -15947,7 +15967,7 @@ function resetRelSubTabPerms(){
 // Setores fixos (nunca removíveis): VISUALIZAÇÃO, EXIBIÇÃO
 // ════════════════════════════════════════════════════════════════
 
-const SETORES_FIXOS = ['MONTAGEM','LIMPEZA','COMPLEXA','ELETRÔNICA','QUALIDADE','DESMEMBRAMENTO','VISUALIZAÇÃO','PCP'];
+const SETORES_FIXOS = ['MONTAGEM','LIMPEZA','COMPLEXA','ELETRÔNICA','QUALIDADE','DESMEMBRAMENTO','VISUALIZAÇÃO','PCP','VISU FLUXOLAB'];
 let _setores = [...SETORES_FIXOS]; // carregado do Supabase ao iniciar
 
 // Tipo de visualização por setor: 'operador' (tela tipo Montagem) ou 'admin' (visão administrativa)
@@ -15955,7 +15975,7 @@ let _setores = [...SETORES_FIXOS]; // carregado do Supabase ao iniciar
 const SETORES_TIPOS_PADRAO = {
   'MONTAGEM':'operador', 'LIMPEZA':'operador', 'COMPLEXA':'operador',
   'ELETRÔNICA':'operador', 'DESMEMBRAMENTO':'operador',
-  'QUALIDADE':'admin', 'VISUALIZAÇÃO':'admin', 'EXIBIÇÃO':'admin', 'PCP':'admin'
+  'QUALIDADE':'admin', 'VISUALIZAÇÃO':'admin', 'EXIBIÇÃO':'admin', 'PCP':'admin', 'VISU FLUXOLAB':'admin'
 };
 let _setoresTipos = {}; // { NOME_SETOR: 'admin' | 'operador' }
 
@@ -23210,3 +23230,83 @@ function exportLinhaProdCSV(){
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(url), 1000);
 }
+
+/* ══════════════════════════════════════════════════════════════════════
+ * SETOR "VISU FLUXOLAB" — MODO SOMENTE VISUALIZAÇÃO
+ * O usuário deste setor navega pelas abas que o admin liberou
+ * (via Permissões de Setor), mas NÃO pode executar ações:
+ * cliques em botões de ação, envios de formulário e mudanças de
+ * checkboxes/rádios são bloqueados na fase de captura.
+ * Elementos permitidos: navegação (.tab, .stab, .subtab), logout,
+ * filtros/pesquisa (input/select/textarea) e qualquer elemento com
+ * o atributo data-ro-allow.
+ * ══════════════════════════════════════════════════════════════════════ */
+(function initVisuFluxolabReadOnly(){
+  const SECTOR = 'VISU FLUXOLAB';
+  function isReadOnlyUser(){
+    return typeof currentUser !== 'undefined'
+        && currentUser
+        && !currentUser.isAdmin
+        && currentUser.sector === SECTOR;
+  }
+  // Marca o <body> para permitir estilização (cursor/opacidade) via CSS
+  const _syncBodyClass = () => {
+    try {
+      if(isReadOnlyUser()) document.body.classList.add('ro-visu-fluxolab');
+      else document.body.classList.remove('ro-visu-fluxolab');
+    } catch(e){}
+  };
+  // Reavalia periodicamente (após loginAs/logout/troca de user)
+  setInterval(_syncBodyClass, 800);
+
+  const NAV_SELECTOR = '.tab, .stab, .subtab, .logout-btn, [data-ro-allow], [data-ro-allow] *';
+  function isAllowed(target){
+    if(!target || target.nodeType !== 1) return true;
+    // Permite navegação e elementos explicitamente liberados
+    if(target.closest(NAV_SELECTOR)) return true;
+    // Permite interação com campos de filtro/pesquisa (não são ações de escrita no servidor)
+    const tag = target.tagName;
+    if(tag === 'INPUT'){
+      const t = (target.type||'').toLowerCase();
+      // bloqueia checkbox/radio (mudanças de estado) e file (upload)
+      if(t === 'checkbox' || t === 'radio' || t === 'file' || t === 'submit' || t === 'button' || t === 'image' || t === 'reset') return false;
+      return true;
+    }
+    if(tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'OPTION' || tag === 'LABEL') return true;
+    // Links puros de navegação (âncora) são permitidos
+    if(tag === 'A' && !target.onclick) return true;
+    return false;
+  }
+  function blockEvent(e){
+    if(!isReadOnlyUser()) return;
+    if(isAllowed(e.target)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    // Aviso discreto (usa toast do app quando disponível)
+    if(!window.__roToastTs || (Date.now() - window.__roToastTs) > 1500){
+      window.__roToastTs = Date.now();
+      try {
+        if(typeof toast === 'function') toast('Modo somente visualização');
+        else console.info('[VISU FLUXOLAB] Ação bloqueada — modo somente visualização');
+      } catch(_){}
+    }
+  }
+  ['click','submit','change','dblclick','contextmenu'].forEach(ev => {
+    document.addEventListener(ev, blockEvent, true);
+  });
+  // Bloqueia atalhos de teclado que disparam ações (Enter em botões)
+  document.addEventListener('keydown', (e) => {
+    if(!isReadOnlyUser()) return;
+    const t = e.target;
+    if(!t || t.nodeType !== 1) return;
+    if(isAllowed(t)) return;
+    if(e.key === 'Enter' || e.key === ' '){
+      // Se estiver focado em algo que não é input/textarea, bloqueia
+      const tag = t.tagName;
+      if(tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT'){
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
+    }
+  }, true);
+})();
