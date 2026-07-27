@@ -3,10 +3,10 @@
 // Mesmo padrão da aba "Planejamento do Dia", em namespace próprio
 // para não conflitar com _fluxolabPlanejamentoState.
 // ════════════════════════════════════════════════════════════════
-let _fluxolabPendenciasState = { mistas: [], complexas: [] };
-let _fluxolabPendLoaded = false;
-let _pendSyncChannel = null;
-let _pendMediaSortDir = { mistas: null, complexas: null }; // null | 'desc' | 'asc'
+var _fluxolabPendenciasState = typeof _fluxolabPendenciasState !== 'undefined' ? _fluxolabPendenciasState : { mistas: [], complexas: [] };
+var _fluxolabPendLoaded = typeof _fluxolabPendLoaded !== 'undefined' ? _fluxolabPendLoaded : false;
+var _pendSyncChannel = typeof _pendSyncChannel !== 'undefined' ? _pendSyncChannel : null;
+var _pendMediaSortDir = typeof _pendMediaSortDir !== 'undefined' ? _pendMediaSortDir : { mistas: null, complexas: null };
 
 const PEND_ROW_MIN = { mistas: 30, complexas: 20 };
 const PEND_FIELDS = ['modelo', 'qtd_wms', 'sugestao', 'obs', 'pecas'];

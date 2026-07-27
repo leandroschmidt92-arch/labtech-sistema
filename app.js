@@ -2059,7 +2059,7 @@ function setView(v,btn){
   } else {
     _bipMobileRestoreCard();
   }
-  if(v==='gaiola-lab')   { renderQualRegistros(); }
+  if(v==='gaiola-lab' || v==='qualidade') { renderQualRegistros(); }
   if(v==='relatorios')  { showRelRefreshBadge(); }
   if(v==='pecas')       { renderPecasView(); }
   if(v==='solicitacoes'){ renderSolicitacoesDoDia(); }
@@ -18249,7 +18249,7 @@ function fluxolabStartChecklistsListener(){
     // Re-renderiza a tabela de Qualidade se estiver visível, para que o badge
     // "📋 Checklist" apareça nos registros assim que os dados chegarem do Firebase
     // (sem precisar que o usuário visite o FluxoLAB primeiro).
-    const _qualView = document.getElementById('view-gaiola-lab');
+    const _qualView = document.getElementById('view-qualidade') || document.getElementById('view-gaiola-lab');
     if (_qualView && _qualView.classList.contains('active')) {
       try { if (typeof renderQualRegistros === 'function') renderQualRegistros(); } catch(e) {}
     }
