@@ -13002,7 +13002,8 @@ let _qualRegistros = {};  // cache local
 // ── Carrega registros do Supabase e monta o listener em tempo real ──
 async function _initQualListener(){
   async function _reloadQualReg(){
-    const { data } = await _supa.from('qualidade_registros').select('*');
+    const { data, error } = await _supaAuthed().from('qualidade_registros').select('*');
+    if(error) console.warn('[Qualidade] Erro ao carregar qualidade_registros:', error);
     _qualRegistros = {};
     (data||[]).forEach(r => {
       let rec = r.raw;
@@ -13039,7 +13040,8 @@ async function _initQualListener(){
     if(view && view.classList.contains('active')) renderQualRegistros();
   }
   async function _reloadQualLib(){
-    const { data } = await _supaAuthed().from('qualidade_liberadas').select('*');
+    const { data, error } = await _supaAuthed().from('qualidade_liberadas').select('*');
+    if(error) console.warn('[Qualidade] Erro ao carregar qualidade_liberadas:', error);
     window._qualLiberadas = {};
     (data||[]).forEach(r => {
       let rec = r.raw;
@@ -13071,12 +13073,12 @@ async function _initQualListener(){
     .subscribe();
 }
 
-// Chama o listener quando o app inicializar (após bootApp)
-const _origBootApp = window.bootApp;
-window.bootApp = function(){
-  if(_origBootApp) _origBootApp.apply(this, arguments);
-  setTimeout(_initQualListener, 1500);
-};
+// Garante execução do listener na inicialização da página
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => setTimeout(_initQualListener, 500));
+} else {
+  setTimeout(_initQualListener, 500);
+}
 
 // ── Preenche equipamento automaticamente ao digitar o SELB ──
 function qualAutoFillSelb(){
