@@ -13249,8 +13249,11 @@ async function salvarQualRegistro(){
   try {
     if(btn){ btn.disabled = true; btn.textContent = 'Salvando...'; }
     const _qrObj = { id: _genUuid(), selb: registro.selb||null, equipamento: registro.equipamento||null, serie: registro.serie||null, sku: registro.sku||null, contador_pb: registro.contador_pb??null, contador_color: registro.contador_color??null, obs: registro.obs||null, responsavel: registro.responsavel||null, uid: registro.uid||null, ts: registro.ts||Date.now(), date_key: registro.dateKey||null, raw: registro };
-    const { error: _eQR } = await _supa.from('qualidade_registros').insert(_qrObj);
-    if(_eQR) throw _eQR;
+    const { error: _eQR } = await _supaAuthed().from('qualidade_registros').insert(_qrObj);
+    if(_eQR){
+      console.error('[Qualidade] Erro ao inserir registro no Supabase:', _eQR);
+      throw _eQR;
+    }
 
     // Atualiza cache local instantaneamente e re-renderiza a tabela
     if(typeof _qualRegistros !== 'undefined'){
@@ -13296,7 +13299,7 @@ async function excluirQualRegistro(id){
   if(!currentUser || !currentUser.isAdmin){ alert('Apenas administradores podem remover registros.'); return; }
   if(!confirm('Excluir este registro de qualidade?')) return;
   try {
-    await _supa.from('qualidade_registros').delete().eq('id', id);
+    await _supaAuthed().from('qualidade_registros').delete().eq('id', id);
   } catch(e){ alert('Erro ao excluir: ' + e.message); }
 }
 
@@ -13314,7 +13317,7 @@ async function toggleChamadoAberto(id, novoValor){
     if(!confirm(msg)) return;
     const _patch = { chamado_aberto: abrir, chamado_aberto_ts: novoValor ? Date.now() : null, chamado_aberto_by: novoValor && currentUser ? currentUser.name : null };
     const _rawTCA = { ...(_qualRegistros[id]||{}), ..._patch };
-    await _supa.from('qualidade_registros').update({ raw: _rawTCA }).eq('id', id);
+    await _supaAuthed().from('qualidade_registros').update({ raw: _rawTCA }).eq('id', id);
   } catch(e){ alert('Erro ao atualizar chamado: ' + e.message); }
 }
 
@@ -13354,7 +13357,7 @@ window.toggleEtiquetaImpressaManual = async function(regId, checked, el){
       ? { etiqueta_impressa: true, etiqueta_impressa_ts: Date.now(), etiqueta_impressa_by: currentUser.name || null }
       : { etiqueta_impressa: false, etiqueta_impressa_ts: null, etiqueta_revertida_ts: Date.now(), etiqueta_revertida_by: currentUser.name || null };
     const _etRaw = { ...(_qualRegistros[regId]||{}), ..._etPatch };
-    const { error: _etErr } = await _supa.from('qualidade_registros').update({ raw: _etRaw }).eq('id', regId);
+    const { error: _etErr } = await _supaAuthed().from('qualidade_registros').update({ raw: _etRaw }).eq('id', regId);
     if(_etErr) throw _etErr;
     _qualRegistros[regId] = _etRaw; // sincroniza cache local pra refletir na tela sem precisar atualizar a página
     if(typeof renderQualRegistros === 'function') renderQualRegistros();
@@ -13394,7 +13397,7 @@ async function reverterEtiquetaImpressa(id){
     if(!confirm('Reverter o status de etiqueta IMPRESSA deste registro?\n\nEle voltará a aparecer como pendente de impressão.')) return;
     const _revPatch = { etiqueta_impressa: false, etiqueta_impressa_ts: null, etiqueta_revertida_ts: Date.now(), etiqueta_revertida_by: currentUser ? currentUser.name : null };
     const _revRaw = { ...(_qualRegistros[id]||{}), ..._revPatch };
-    await _supa.from('qualidade_registros').update({ raw: _revRaw }).eq('id', id);
+    await _supaAuthed().from('qualidade_registros').update({ raw: _revRaw }).eq('id', id);
 
     // ── FluxoLAB: ao reverter, devolve SELB para bolsão LIBERADAS ──
     const reg = _qualRegistros[id] || null;
@@ -13864,7 +13867,7 @@ window.qualExcluirRegistro = function(id, selb, equipamento){
     btn.disabled = true;
     btn.textContent = 'Excluindo...';
     try {
-      await _supa.from('qualidade_registros').delete().eq('id', id);
+      await _supaAuthed().from('qualidade_registros').delete().eq('id', id);
       ov.remove();
     } catch(e) {
       btn.disabled = false;
@@ -15686,7 +15689,7 @@ async function scannerSaveRecord(){
   try {
     if(submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Registrando...'; }
     const _qrSc = { id: _genUuid(), selb: registro.selb||null, equipamento: registro.equipamento||null, serie: registro.serie||null, sku: registro.sku||null, contador_pb: registro.contador_pb??null, contador_color: registro.contador_color??null, obs: registro.obs||null, responsavel: registro.responsavel||null, uid: registro.uid||null, ts: registro.ts||Date.now(), date_key: registro.dateKey||null, raw: registro };
-    const { error: _eQRS } = await _supa.from('qualidade_registros').insert(_qrSc);
+    const { error: _eQRS } = await _supaAuthed().from('qualidade_registros').insert(_qrSc);
     if(_eQRS) throw _eQRS;
 
     // FluxoLAB: registrar via scanner também move SELB de QUALIDADE → LIBERADAS
@@ -21619,7 +21622,7 @@ window.renderSolicitacoesDoDia = function(){
           ? { etiqueta_impressa: true, etiqueta_impressa_ts: Date.now(), etiqueta_impressa_by: currentUser.name || null }
           : { etiqueta_impressa: false, etiqueta_impressa_ts: null, etiqueta_revertida_ts: Date.now(), etiqueta_revertida_by: currentUser.name || null };
         const _pcpRaw = { ...(_qualRegistros[regId]||{}), ..._pcpPatch };
-        const { error: _pcpErr } = await _supa.from('qualidade_registros').update({ raw: _pcpRaw }).eq('id', regId);
+        const { error: _pcpErr } = await _supaAuthed().from('qualidade_registros').update({ raw: _pcpRaw }).eq('id', regId);
         if(_pcpErr) throw _pcpErr;
         _qualRegistros[regId] = _pcpRaw; // sincroniza cache local pra refletir na tela sem precisar atualizar a página
 
