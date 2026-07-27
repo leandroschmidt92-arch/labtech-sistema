@@ -6397,9 +6397,26 @@ async function confirmarReprovacao(){
   const errEl  = document.getElementById('mrep-err');
   if(!motivo){ errEl.textContent='Informe o motivo da reprovação.'; return; }
 
-  // Busca o registro original — primeiro em _consultaRecords, fallback em history
-  const orig = _consultaRecords.find(h => h._docId === reprovandoDocId)
-            || history.find(h => h._docId === reprovandoDocId);
+  // Busca o registro original — primeiro em _consultaRecords, fallback em history,
+  // e por último direto no Supabase (registros de datas fora do filtro atual —
+  // ex.: reprovar a partir do painel "Quem trabalhou nesse SELB").
+  let orig = _consultaRecords.find(h => h._docId === reprovandoDocId)
+          || history.find(h => h._docId === reprovandoDocId);
+  if(!orig){
+    try {
+      const { data, error } = await _supa
+        .from('history')
+        .select('id,raw,date_key')
+        .eq('id', reprovandoDocId)
+        .maybeSingle();
+      if(error) throw error;
+      if(data){
+        orig = { ...(data.raw || {}), _docId: data.id, _dateKey: data.date_key };
+      }
+    } catch(e){
+      console.warn('[Reprovação] Falha ao buscar registro no Supabase:', e);
+    }
+  }
   if(!orig){ errEl.textContent='Registro não encontrado.'; return; }
 
   const btn = document.querySelector('#modal-reprovar .btn.bd');
@@ -12987,17 +13004,59 @@ async function _initQualListener(){
   async function _reloadQualReg(){
     const { data } = await _supa.from('qualidade_registros').select('*');
     _qualRegistros = {};
-    (data||[]).forEach(r => { _qualRegistros[r.id] = r.raw || r; });
+    (data||[]).forEach(r => {
+      let rec = r.raw;
+      if(typeof rec === 'string'){
+        try { rec = JSON.parse(rec); } catch(e){ rec = null; }
+      }
+      if(!rec || typeof rec !== 'object'){
+        rec = {
+          selb: r.selb,
+          equipamento: r.equipamento,
+          serie: r.serie,
+          sku: r.sku,
+          contador_pb: r.contador_pb,
+          contador_color: r.contador_color,
+          obs: r.obs,
+          responsavel: r.responsavel,
+          uid: r.uid,
+          ts: r.ts,
+          dateKey: r.date_key
+        };
+      }
+      rec.id = r.id || rec.id;
+      if(!rec.data){
+        const d = rec.ts ? new Date(rec.ts) : (r.created_at ? new Date(r.created_at) : new Date());
+        rec.data = d.toLocaleDateString('pt-BR');
+        if(!rec.hora) rec.hora = d.toLocaleTimeString('pt-BR');
+      }
+      if(r.etiqueta_impressa !== undefined) rec.etiqueta_impressa = r.etiqueta_impressa;
+      if(r.chamado_aberto !== undefined) rec.chamado_aberto = r.chamado_aberto;
+      _qualRegistros[r.id] = rec;
+    });
     _fluxolabScheduleSyncLiberados();
-    const view = document.getElementById('view-gaiola-lab');
+    const view = document.getElementById('view-qualidade') || document.getElementById('view-gaiola-lab');
     if(view && view.classList.contains('active')) renderQualRegistros();
   }
   async function _reloadQualLib(){
     const { data } = await _supaAuthed().from('qualidade_liberadas').select('*');
     window._qualLiberadas = {};
-    (data||[]).forEach(r => { window._qualLiberadas[r.id] = r.raw || r; });
+    (data||[]).forEach(r => {
+      let rec = r.raw;
+      if(typeof rec === 'string'){
+        try { rec = JSON.parse(rec); } catch(e){ rec = null; }
+      }
+      if(!rec || typeof rec !== 'object') rec = { ...r };
+      rec.id = r.id || rec.id;
+      if(!rec.data){
+        const d = rec.ts ? new Date(rec.ts) : (r.created_at ? new Date(r.created_at) : new Date());
+        rec.data = d.toLocaleDateString('pt-BR');
+        if(!rec.hora) rec.hora = d.toLocaleTimeString('pt-BR');
+      }
+      window._qualLiberadas[r.id] = rec;
+    });
     _fluxolabScheduleSyncLiberados();
-    const view = document.getElementById('view-gaiola-lab');
+    const view = document.getElementById('view-qualidade') || document.getElementById('view-gaiola-lab');
     if(view && view.classList.contains('active')) renderQualRegistros();
     const libPanel = document.getElementById('qual-lib-panel-overlay');
     if(libPanel && libPanel.style.display !== 'none' && typeof _qualRenderLiberadasList === 'function') _qualRenderLiberadasList();
@@ -13104,36 +13163,46 @@ async function salvarQualRegistro(){
 
   // Validação
   if(!selb){
-    errEl.textContent = '⚠️ Informe o SELB.';
-    errEl.style.display = 'block';
-    document.getElementById('qual-reg-selb').focus();
+    if(errEl){
+      errEl.textContent = '⚠️ Informe o SELB.';
+      errEl.style.display = 'block';
+    }
+    document.getElementById('qual-reg-selb')?.focus();
     return;
   }
-  if(!getEquipName(selb)){
-    errEl.textContent = '⚠️ SELB "' + selb + '" não encontrado no sistema. Importe a planilha de equipamentos primeiro.';
-    errEl.style.display = 'block';
-    document.getElementById('qual-reg-selb').focus();
+  if(!getEquipName(selb) && !equip){
+    if(errEl){
+      errEl.textContent = '⚠️ SELB "' + selb + '" não encontrado no sistema. Importe a planilha de equipamentos primeiro.';
+      errEl.style.display = 'block';
+    }
+    document.getElementById('qual-reg-selb')?.focus();
     return;
   }
   if(contador_pb === '' || isNaN(Number(contador_pb)) || Number(contador_pb) < 0){
-    errEl.textContent = '⚠️ Informe um contador PB válido (número ≥ 0).';
-    errEl.style.display = 'block';
-    document.getElementById('qual-reg-contador-pb').focus();
+    if(errEl){
+      errEl.textContent = '⚠️ Informe um contador PB válido (número ≥ 0).';
+      errEl.style.display = 'block';
+    }
+    document.getElementById('qual-reg-contador-pb')?.focus();
     return;
   }
   if(contador_color !== '' && (isNaN(Number(contador_color)) || Number(contador_color) < 0)){
-    errEl.textContent = '⚠️ Informe um contador Color válido (número ≥ 0).';
-    errEl.style.display = 'block';
-    document.getElementById('qual-reg-contador-color').focus();
+    if(errEl){
+      errEl.textContent = '⚠️ Informe um contador Color válido (número ≥ 0).';
+      errEl.style.display = 'block';
+    }
+    document.getElementById('qual-reg-contador-color')?.focus();
     return;
   }
   // ── Integridade FluxoLAB: SELB registrado como SCRAP nos últimos 20 dias não pode ser aprovado pela Qualidade ──
   if(typeof fluxolabFoiScrapRecente === 'function'){
     const _scrapRecente = await fluxolabFoiScrapRecente(selb, 20);
     if(_scrapRecente){
-      errEl.textContent = '⚠️ O SELB "' + selb + '" foi registrado como SCRAP nos últimos 20 dias e não pode ser aprovado pela Qualidade. Contate o administrador se isso for um erro.';
-      errEl.style.display = 'block';
-      document.getElementById('qual-reg-selb').focus();
+      if(errEl){
+        errEl.textContent = '⚠️ O SELB "' + selb + '" foi registrado como SCRAP nos últimos 20 dias e não pode ser aprovado pela Qualidade. Contate o administrador se isso for um erro.';
+        errEl.style.display = 'block';
+      }
+      document.getElementById('qual-reg-selb')?.focus();
       return;
     }
   }
@@ -13147,18 +13216,20 @@ async function salvarQualRegistro(){
   );
 
   if(isDuplicate){
-    errEl.textContent = `⚠️ O SELB "${selb}" já foi registrado hoje (${todayStr}).`;
-    errEl.style.display = 'block';
-    document.getElementById('qual-reg-selb').focus();
+    if(errEl){
+      errEl.textContent = `⚠️ O SELB "${selb}" já foi registrado hoje (${todayStr}).`;
+      errEl.style.display = 'block';
+    }
+    document.getElementById('qual-reg-selb')?.focus();
     return;
   }
 
-  errEl.style.display = 'none';
+  if(errEl) errEl.style.display = 'none';
   const registro = {
     selb,
-    equipamento : equip || '—',
-    serie       : serie || '',
-    sku         : sku || '',
+    equipamento : equip || getEquipName(selb) || '—',
+    serie       : serie || getEquipSerie(selb) || '',
+    sku         : sku || getEquipSku(selb) || '',
     contador_pb : Number(contador_pb),
     contador    : Number(contador_pb), // retrocompatibilidade
     contador_color : contador_color !== '' ? Number(contador_color) : null,
@@ -13169,40 +13240,51 @@ async function salvarQualRegistro(){
     data        : now.toLocaleDateString('pt-BR'),
     hora        : now.toLocaleTimeString('pt-BR'),
     dateKey     : now.toDateString().replace(/ /g,'_'),
-    // Congela se este modelo tinha checklist pendente NO MOMENTO do registro — assim a informação
-    // não some depois que o checklist for consumido/concluído (fluxolabModeloTemChecklist é um cálculo
-    // ao vivo que muda conforme os checklists são consumidos).
     teve_checklist: !!(equip && typeof fluxolabModeloTemChecklist === 'function' && fluxolabModeloTemChecklist(equip)),
   };
 
+  const btn = document.querySelector('#view-qualidade button[onclick*="salvarQualRegistro"]') || document.querySelector('#view-gaiola-lab .bp');
   try {
-    const btn = document.querySelector('#view-gaiola-lab .bp');
     if(btn){ btn.disabled = true; btn.textContent = 'Salvando...'; }
     const _qrObj = { id: _genUuid(), selb: registro.selb||null, equipamento: registro.equipamento||null, serie: registro.serie||null, sku: registro.sku||null, contador_pb: registro.contador_pb??null, contador_color: registro.contador_color??null, obs: registro.obs||null, responsavel: registro.responsavel||null, uid: registro.uid||null, ts: registro.ts||Date.now(), date_key: registro.dateKey||null, raw: registro };
     const { error: _eQR } = await _supa.from('qualidade_registros').insert(_qrObj);
     if(_eQR) throw _eQR;
 
+    // Atualiza cache local instantaneamente e re-renderiza a tabela
+    if(typeof _qualRegistros !== 'undefined'){
+      _qualRegistros[_qrObj.id] = registro;
+    }
+    if(typeof renderQualRegistros === 'function'){
+      renderQualRegistros();
+    }
+
     // FluxoLAB: ao incluir registro na Qualidade, move o SELB de QUALIDADE → LIBERADAS.
-    // O SELB sai de LIBERADAS definitivamente quando a etiqueta for marcada como concluída.
-    if(selb){
+    if(selb && typeof fluxolabFinalizarSelb === 'function'){
       fluxolabFinalizarSelb(selb, 'QUALIDADE', 'ok').catch(e => console.warn('[FluxoLAB] Erro ao mover SELB para LIBERADAS:', e));
     }
 
     // Limpa form
-    document.getElementById('qual-reg-selb').value     = '';
-    document.getElementById('qual-reg-equip').value    = '';
+    const selbInput = document.getElementById('qual-reg-selb');
+    if(selbInput) selbInput.value = '';
+    const equipInput = document.getElementById('qual-reg-equip');
+    if(equipInput) equipInput.value = '';
     const serEl = document.getElementById('qual-reg-serie');
     if(serEl){ serEl.value = ''; serEl.style.color = 'var(--muted)'; }
     const skuEl = document.getElementById('qual-reg-sku');
     if(skuEl){ skuEl.value = ''; skuEl.style.color = 'var(--muted)'; }
-    document.getElementById('qual-reg-contador-pb').value = '';
-    document.getElementById('qual-reg-contador-color').value = '';
-    document.getElementById('qual-reg-obs').value      = '';
+    const cPbInput = document.getElementById('qual-reg-contador-pb');
+    if(cPbInput) cPbInput.value = '';
+    const cColInput = document.getElementById('qual-reg-contador-color');
+    if(cColInput) cColInput.value = '';
+    const obsInput = document.getElementById('qual-reg-obs');
+    if(obsInput) obsInput.value = '';
+
     if(btn){ btn.disabled = false; btn.textContent = '💾 Salvar'; }
   } catch(e){
-    errEl.textContent = 'Erro ao salvar: ' + e.message;
-    errEl.style.display = 'block';
-    const btn = document.querySelector('#view-gaiola-lab .bp');
+    if(errEl){
+      errEl.textContent = 'Erro ao salvar: ' + e.message;
+      errEl.style.display = 'block';
+    }
     if(btn){ btn.disabled = false; btn.textContent = '💾 Salvar'; }
   }
 }
@@ -23259,22 +23341,23 @@ function exportLinhaProdCSV(){
   // Reavalia periodicamente (após loginAs/logout/troca de user)
   setInterval(_syncBodyClass, 800);
 
-  const NAV_SELECTOR = '.tab, .stab, .subtab, .logout-btn, [data-ro-allow], [data-ro-allow] *';
+  // Navegação permitida: abas principais, sub-abas, sub-sub-abas (FluxoLAB usa
+  // botões com id="fluxolab-tab-*" e onclick="fluxolabSwitchTab(...)"), além
+  // de logout e elementos marcados com data-ro-allow.
+  const NAV_SELECTOR = '.tab, .stab, .subtab, .logout-btn, [id^="fluxolab-tab-"], [data-ro-allow], [data-ro-allow] *';
+  // Padrões de onclick que representam apenas troca de aba/filtro (leitura)
+  const NAV_ONCLICK_RE = /^\s*(setView|setSector|setCFilter|setQualFilter|setAdmFilter|setRelFilter|setScrapFilter|fluxolabSwitchTab|switchTab|showTab|openTab)\s*\(/;
   function isAllowed(target){
     if(!target || target.nodeType !== 1) return true;
-    // Permite navegação e elementos explicitamente liberados
+    // Permite APENAS navegação (abas/sub-abas/logout) e elementos explicitamente liberados
     if(target.closest(NAV_SELECTOR)) return true;
-    // Permite interação com campos de filtro/pesquisa (não são ações de escrita no servidor)
-    const tag = target.tagName;
-    if(tag === 'INPUT'){
-      const t = (target.type||'').toLowerCase();
-      // bloqueia checkbox/radio (mudanças de estado) e file (upload)
-      if(t === 'checkbox' || t === 'radio' || t === 'file' || t === 'submit' || t === 'button' || t === 'image' || t === 'reset') return false;
-      return true;
+    // Botão cujo onclick apenas troca de aba/filtro (navegação)
+    const navBtn = target.closest('button,a');
+    if(navBtn){
+      const oc = navBtn.getAttribute('onclick') || '';
+      if(oc && NAV_ONCLICK_RE.test(oc)) return true;
     }
-    if(tag === 'SELECT' || tag === 'TEXTAREA' || tag === 'OPTION' || tag === 'LABEL') return true;
-    // Links puros de navegação (âncora) são permitidos
-    if(tag === 'A' && !target.onclick) return true;
+    // TUDO o mais é bloqueado: inputs, selects, textareas, checkboxes, botões de ação, etc.
     return false;
   }
   function blockEvent(e){
@@ -23291,22 +23374,227 @@ function exportLinhaProdCSV(){
       } catch(_){}
     }
   }
-  ['click','submit','change','dblclick','contextmenu'].forEach(ev => {
-    document.addEventListener(ev, blockEvent, true);
-  });
-  // Bloqueia atalhos de teclado que disparam ações (Enter em botões)
+  // Bloqueia TODOS os eventos de interação em fase de captura
+  ['click','mousedown','mouseup','submit','change','input','paste','cut','drop',
+   'dblclick','contextmenu','pointerdown','touchstart']
+    .forEach(ev => { document.addEventListener(ev, blockEvent, true); });
+  // Bloqueia digitação em qualquer campo (Enter, letras, backspace, etc.)
   document.addEventListener('keydown', (e) => {
     if(!isReadOnlyUser()) return;
-    const t = e.target;
-    if(!t || t.nodeType !== 1) return;
-    if(isAllowed(t)) return;
-    if(e.key === 'Enter' || e.key === ' '){
-      // Se estiver focado em algo que não é input/textarea, bloqueia
-      const tag = t.tagName;
-      if(tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT'){
-        e.preventDefault();
-        e.stopImmediatePropagation();
-      }
-    }
+    if(isAllowed(e.target)) return;
+    // Permite apenas teclas de navegação inofensivas
+    const nav = ['Tab','Escape','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','PageUp','PageDown','Home','End'];
+    if(nav.includes(e.key)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
   }, true);
+  // Marca todos os campos como readOnly/disabled para o setor (defesa em profundidade)
+  const _hardenInputs = () => {
+    if(!isReadOnlyUser()) return;
+    document.querySelectorAll('input, textarea, select').forEach(el => {
+      if(el.closest('[data-ro-allow]')) return;
+      try {
+        if(el.tagName === 'SELECT') el.setAttribute('disabled','disabled');
+        else el.setAttribute('readonly','readonly');
+        el.setAttribute('tabindex','-1');
+      } catch(_){}
+    });
+  };
+  setInterval(_hardenInputs, 700);
+})();
+
+// ═══════════════════════════════════════════════════════════════════════
+// AUDIT LOG — Registro de ações críticas (exclusões, edições, reprovações)
+// Boas práticas:
+//   • Escrita assíncrona fire-and-forget (nunca bloqueia UI)
+//   • Buffer com flush por lote (evita 1 request por ação → economiza custo)
+//   • Falha silenciosa (nunca quebra fluxo do usuário se tabela não existir)
+//   • Não loga PII sensível — só id/nome/setor + resumo curto da ação
+//   • Registra automaticamente todo dbDelete/dbDeleteUser via wrapper
+//
+// Requer (uma vez, no Supabase):
+//   create table if not exists public.audit_log (
+//     id uuid primary key default gen_random_uuid(),
+//     ts timestamptz not null default now(),
+//     user_id text, user_name text, user_sector text,
+//     action text not null, entity text, entity_id text,
+//     details jsonb, ua text
+//   );
+//   create index if not exists audit_log_ts_idx on public.audit_log (ts desc);
+//   alter table public.audit_log enable row level security;
+//   create policy "audit insert authenticated" on public.audit_log
+//     for insert to authenticated with check (true);
+//   create policy "audit read admins" on public.audit_log
+//     for select to authenticated using (true); -- ajuste p/ has_role('admin') se preferir
+// ═══════════════════════════════════════════════════════════════════════
+(function initAuditLog(){
+  if(window.auditLog) return;
+  const BUFFER = [];
+  let flushTimer = null;
+  const MAX_BATCH = 20;
+  const FLUSH_MS  = 1500;
+
+  function actor(){
+    const u = (typeof currentUser !== 'undefined' && currentUser) ? currentUser : {};
+    return {
+      user_id:     u.id || u.uid || null,
+      user_name:   u.name || u.username || 'desconhecido',
+      user_sector: u.sector || null
+    };
+  }
+
+  function shortUA(){
+    try { return (navigator.userAgent || '').slice(0, 140); } catch(_){ return null; }
+  }
+
+  async function flush(){
+    if(!BUFFER.length) return;
+    if(typeof _supa === 'undefined' || !_supa) { BUFFER.length = 0; return; }
+    const batch = BUFFER.splice(0, MAX_BATCH);
+    try {
+      const { error } = await _supa.from('audit_log').insert(batch);
+      if(error) throw error;
+    } catch(e){
+      // Falha silenciosa — não re-enfileira p/ evitar loop se a tabela não existir
+      console.warn('[audit] flush falhou:', e.message || e);
+    }
+    if(BUFFER.length) scheduleFlush();
+  }
+  function scheduleFlush(){
+    if(flushTimer) return;
+    flushTimer = setTimeout(() => { flushTimer = null; flush(); }, FLUSH_MS);
+  }
+
+  // API pública: auditLog(action, entity, entityId, details)
+  window.auditLog = function(action, entity, entityId, details){
+    try {
+      const a = actor();
+      BUFFER.push({
+        ts: new Date().toISOString(),
+        ...a,
+        action: String(action || '').slice(0, 60),
+        entity: entity ? String(entity).slice(0, 60) : null,
+        entity_id: entityId ? String(entityId).slice(0, 120) : null,
+        details: (details && typeof details === 'object') ? details : (details ? { info: String(details).slice(0, 500) } : null),
+        ua: shortUA()
+      });
+      if(BUFFER.length >= MAX_BATCH) flush();
+      else scheduleFlush();
+    } catch(_){ /* nunca propaga */ }
+  };
+
+  // Garante flush ao sair da página
+  window.addEventListener('beforeunload', () => { try { flush(); } catch(_){} });
+  window.addEventListener('visibilitychange', () => { if(document.visibilityState === 'hidden') flush(); });
+
+  // ── Hooks automáticos: dbDelete / dbDeleteUser ──
+  try {
+    if(typeof dbDelete === 'function' && !dbDelete.__audited){
+      const _orig = dbDelete;
+      window.dbDelete = async function(path){
+        window.auditLog('db_delete', 'path', path, null);
+        return _orig.apply(this, arguments);
+      };
+      window.dbDelete.__audited = true;
+    }
+    if(typeof dbDeleteUser === 'function' && !dbDeleteUser.__audited){
+      const _orig = dbDeleteUser;
+      window.dbDeleteUser = async function(id){
+        const u = (typeof users !== 'undefined') ? (users.find(x => x.id === id) || {}) : {};
+        window.auditLog('delete_user', 'user', id, { name: u.name || null, sector: u.sector || null });
+        return _orig.apply(this, arguments);
+      };
+      window.dbDeleteUser.__audited = true;
+    }
+  } catch(e){ console.warn('[audit] hooks:', e); }
+
+  // ── Viewer simples (modal) — abre via window.abrirAuditoria() ──
+  window.abrirAuditoria = async function(){
+    let modal = document.getElementById('modal-audit');
+    if(!modal){
+      modal = document.createElement('div');
+      modal.id = 'modal-audit';
+      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px';
+      modal.innerHTML = `
+        <div style="background:var(--bg2,#12161d);border:1px solid var(--border2,#1f2733);border-radius:12px;max-width:1100px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden">
+          <div style="padding:14px 18px;border-bottom:1px solid var(--border2,#1f2733);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+            <div style="font-weight:700;color:var(--text,#e5e7eb)">📋 Auditoria — ações críticas</div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <input id="audit-filter" placeholder="Filtrar por usuário, ação, entidade..." style="background:var(--bg3,#0d1117);border:1px solid var(--border2,#1f2733);border-radius:8px;padding:6px 10px;color:var(--text,#e5e7eb);font-size:12px;min-width:220px">
+              <button id="audit-export" class="btn bd" style="font-size:11px">📥 CSV</button>
+              <button id="audit-close" style="background:none;border:none;color:var(--muted,#7a8493);font-size:20px;cursor:pointer">✕</button>
+            </div>
+          </div>
+          <div id="audit-body" style="overflow:auto;flex:1;padding:0"></div>
+        </div>`;
+      document.body.appendChild(modal);
+      modal.addEventListener('click', e => { if(e.target === modal) modal.remove(); });
+      modal.querySelector('#audit-close').onclick = () => modal.remove();
+    }
+    const body = modal.querySelector('#audit-body');
+    body.innerHTML = '<div style="padding:20px;color:var(--muted,#7a8493);font-size:12px">Carregando…</div>';
+    let rows = [];
+    try {
+      const { data, error } = await _supa
+        .from('audit_log')
+        .select('*')
+        .order('ts', { ascending: false })
+        .limit(500);
+      if(error) throw error;
+      rows = data || [];
+    } catch(e){
+      body.innerHTML = `<div style="padding:20px;color:var(--danger,#ef4444);font-size:12px">Não foi possível ler a auditoria: ${e.message||e}<br><br>Verifique se a tabela <code>audit_log</code> existe no Supabase (SQL no topo de <code>initAuditLog</code>).</div>`;
+      return;
+    }
+    function render(list){
+      if(!list.length){ body.innerHTML = '<div style="padding:20px;color:var(--muted,#7a8493);font-size:12px">Nenhum registro.</div>'; return; }
+      body.innerHTML = `
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead style="position:sticky;top:0;background:var(--bg2,#12161d)">
+            <tr style="text-align:left;color:var(--muted,#7a8493);font-size:10px;text-transform:uppercase;letter-spacing:.05em">
+              <th style="padding:8px 12px">Quando</th>
+              <th style="padding:8px 12px">Usuário</th>
+              <th style="padding:8px 12px">Setor</th>
+              <th style="padding:8px 12px">Ação</th>
+              <th style="padding:8px 12px">Entidade</th>
+              <th style="padding:8px 12px">ID</th>
+              <th style="padding:8px 12px">Detalhes</th>
+            </tr>
+          </thead>
+          <tbody>${list.map(r => `
+            <tr style="border-top:1px solid rgba(255,255,255,0.05)">
+              <td style="padding:6px 12px;color:var(--muted,#7a8493);white-space:nowrap">${new Date(r.ts).toLocaleString('pt-BR')}</td>
+              <td style="padding:6px 12px;font-weight:600">${r.user_name||'—'}</td>
+              <td style="padding:6px 12px">${r.user_sector||'—'}</td>
+              <td style="padding:6px 12px"><code style="color:#a78bfa">${r.action||''}</code></td>
+              <td style="padding:6px 12px">${r.entity||'—'}</td>
+              <td style="padding:6px 12px;font-family:var(--mono,monospace);font-size:10px;color:var(--muted,#7a8493)">${(r.entity_id||'').slice(0,40)}</td>
+              <td style="padding:6px 12px;color:var(--muted,#7a8493);font-size:11px">${r.details ? '<code>'+JSON.stringify(r.details).replace(/</g,'&lt;').slice(0,140)+'</code>' : '—'}</td>
+            </tr>`).join('')}</tbody>
+        </table>`;
+    }
+    render(rows);
+    modal.querySelector('#audit-filter').oninput = (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      if(!q) return render(rows);
+      render(rows.filter(r =>
+        (r.user_name||'').toLowerCase().includes(q) ||
+        (r.action||'').toLowerCase().includes(q) ||
+        (r.entity||'').toLowerCase().includes(q) ||
+        (r.user_sector||'').toLowerCase().includes(q)
+      ));
+    };
+    modal.querySelector('#audit-export').onclick = () => {
+      const head = ['ts','user_name','user_sector','action','entity','entity_id','details'];
+      const csv = [head.join(';')].concat(rows.map(r => head.map(k => {
+        const v = k === 'details' ? (r[k] ? JSON.stringify(r[k]) : '') : (r[k]||'');
+        return '"' + String(v).replace(/"/g,'""') + '"';
+      }).join(';'))).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'auditoria_'+new Date().toISOString().slice(0,10)+'.csv';
+      a.click();
+    };
+  };
 })();
