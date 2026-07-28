@@ -497,11 +497,11 @@ function applyUserSnapshot(freshUsers){
     const status = fu._status || null;
     const activeHistoryStatus = status === 'aguardando' ? 'aguardando' : 'running';
     const activeHistory = history.find(h => h.uid === fu.id && h.status === activeHistoryStatus);
-    const activeSelb = fu._selb || activeHistory?.selb || null;
+    const activeSelb = (fu._selb !== undefined && fu._selb !== null) ? fu._selb : (activeHistory?.selb || null);
 
     // An active status without a SELB is stale state left after completion.
     const hasActiveStatus = status === 'running' || status === 'paused' || status === 'aguardando';
-    if (hasActiveStatus && !activeSelb && _historyReady) {
+    if (hasActiveStatus && activeSelb === null && _historyReady) {
       s.status = 'idle';
       s.selb = null;
       s.startEpoch = null;
@@ -542,6 +542,9 @@ function applyUserSnapshot(freshUsers){
         // e retoma do início do expediente de hoje (ou agora, o que for menor)
         frozen += calcLiquidDuration(activeFrom, now);
         activeFrom = Math.max(todayStart.getTime() + (SCHEDULE.work.start[0]*3600 + SCHEDULE.work.start[1]*60)*1000, now);
+        // Atualiza a referência local para não re-processar em ticks subsequentes antes do banco retornar
+        fu._activeFrom = activeFrom;
+        fu._frozenElapsed = frozen;
         // Garante que o Supabase também seja atualizado para evitar re-processamento
         dbPatch('/users/'+fu.id, {_activeFrom: activeFrom, _frozenElapsed: frozen}).catch(()=>{});
       }
@@ -13287,7 +13290,8 @@ let _qualRegistros = {};  // cache local
 // ── Carrega registros do Supabase e monta o listener em tempo real ──
 async function _initQualListener(){
   async function _reloadQualReg(){
-    const { data, error } = await _supaAuthed().from('qualidade_registros').select('*');
+    // Busca os mais recentes e garante um limite generoso explícito para não bater no limite padrão global sem ordenação
+    const { data, error } = await _supaAuthed().from('qualidade_registros').select('*').order('created_at', { ascending: false }).limit(2000);
     if(error) console.warn('[Qualidade] Erro ao carregar qualidade_registros:', error);
     _qualRegistros = {};
     (data||[]).forEach(r => {
@@ -13325,7 +13329,8 @@ async function _initQualListener(){
     if(view && view.classList.contains('active')) renderQualRegistros();
   }
   async function _reloadQualLib(){
-    const { data, error } = await _supaAuthed().from('qualidade_liberadas').select('*');
+    // Busca os mais recentes e garante um limite generoso explícito
+    const { data, error } = await _supaAuthed().from('qualidade_liberadas').select('*').order('created_at', { ascending: false }).limit(2000);
     if(error) console.warn('[Qualidade] Erro ao carregar qualidade_liberadas:', error);
     window._qualLiberadas = {};
     (data||[]).forEach(r => {
