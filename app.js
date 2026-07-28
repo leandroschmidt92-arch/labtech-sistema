@@ -379,6 +379,16 @@ const _supa   = window.supabase.createClient(_SB_URL, _SB_KEY, {
 // Por isso usamos um SEGUNDO client (_supaOp) só para as chamadas que
 // precisam da identidade do operador logado por PIN — o _supa principal
 // continua livre para o login administrativo por e-mail/senha.
+// ── Trava de acesso por e-mail (gate) ────────────────────────────────────
+// Antes de exibir o teclado de PIN, exigimos uma sessão válida do Supabase
+// Auth (qualquer e-mail/senha cadastrado). Essa sessão, por si só, NÃO
+// concede privilégios de admin — é só uma trava extra de acesso ao link.
+// A permissão de admin real é sempre reconfirmada no servidor (tabela
+// admin_users) a cada mudança de sessão — nunca fica guardada localmente,
+// pra evitar que um e-mail seja "promovido" a admin só porque em algum
+// momento passado alguém tentou o login administrativo com ele.
+let _adminLoginInProgress = false;
+
 let _operatorAccessToken = null;
 const _supaOp = window.supabase.createClient(_SB_URL, _SB_KEY, {
   auth: { persistSession: false, autoRefreshToken: false },
@@ -939,18 +949,40 @@ async function dbAddUser(u){
   return newId;
 }
 async function dbDeleteUser(id){
-  // A tabela face_auth referencia operadores(id) via FK sem CASCADE
-  // (face_auth_uid_fkey). Se o operador tiver cadastro de reconhecimento
-  // facial, o DELETE falha com 409/foreign key violation. Removemos o
-  // registro relacionado primeiro para permitir a exclusão do operador.
+  // ── 1. Remove reconhecimento facial (face_auth) ──────────────────────
+  // face_auth referencia operadores(id) sem CASCADE — deve ser removido primeiro.
   try {
     const { error } = await _supa.from('face_auth').delete().eq('uid', id);
-    if(error) console.warn('[dbDeleteUser] Falha ao limpar face_auth (pode não existir registro):', error.message || error);
+    if(error) console.warn('[dbDeleteUser] face_auth:', error.message || error);
   } catch(e) {
-    console.warn('[dbDeleteUser] Erro ao tentar limpar face_auth:', e);
+    console.warn('[dbDeleteUser] Erro face_auth:', e);
   }
+
+  // ── 2. Nullifica uid nas tabelas que têm FK para operadores ──────────
+  // Em vez de excluir os registros históricos, apenas desvinculamos o uid
+  // para que os dados anteriores sejam preservados no banco.
+  const _nullifyTables = [
+    { table: 'solicitacoes_pecas', col: 'uid' },
+    { table: 'qualidade_registros', col: 'uid' },
+    { table: 'qualidade_liberadas', col: 'uid' },
+    { table: 'maquinas_perdidas',   col: 'uid' },
+    { table: 'garantia',            col: 'uid' },
+    { table: 'logs_pecas',          col: 'uid' },
+    { table: 'fluxolab_log',        col: 'uid' },
+    { table: 'history',             col: 'uid' },
+  ];
+  for(const { table, col } of _nullifyTables){
+    try {
+      await _supaAuthed().from(table).update({ [col]: null }).eq(col, id);
+    } catch(e){
+      console.warn(`[dbDeleteUser] Erro ao nullificar ${table}.${col}:`, e);
+    }
+  }
+
+  // ── 3. Deleta o operador da tabela principal ──────────────────────────
   await dbDelete('/users/'+id);
 }
+
 
 async function dbAddHistory(h){
   const dateKey = new Date().toDateString().replace(/ /g,'_');
@@ -1161,29 +1193,117 @@ function retryWithUrl(){
   bootApp();
 }
 
+// ── Alterna entre as 3 telas do layer-login: gate-view (pedir e-mail),
+// gate-checking (spinner, estado inicial até sabermos se há sessão) e
+// pin-view (teclado de PIN, liberado após e-mail válido). ──────────────────
+function _gateShow(id){
+  ['gate-view','gate-checking','pin-view'].forEach(function(vid){
+    const el = document.getElementById(vid);
+    if(el) el.classList.toggle('hidden', vid !== id);
+  });
+}
+
+// Login da trava de e-mail — apenas libera a tela de PIN, sem privilégios.
+function gateLogin(){
+  const elUser = document.getElementById('gate-user');
+  const elPass = document.getElementById('gate-pass');
+  const errEl  = document.getElementById('gate-error');
+  const btn    = document.getElementById('gate-btn');
+  if(!elUser || !elPass) return;
+
+  const emailRaw = elUser.value.trim();
+  const p        = elPass.value;
+  if(!emailRaw || !p){ if(errEl) errEl.textContent = 'Preencha e-mail e senha.'; return; }
+
+  if(btn){ btn.textContent = 'Entrando…'; btn.disabled = true; }
+  if(errEl) errEl.textContent = '';
+
+  _supa.auth.signInWithPassword({ email: emailRaw, password: p }).then(function(res){
+    if(res.error) throw res.error;
+    // onAuthStateChange libera a tela de PIN automaticamente
+    if(elPass) elPass.value = '';
+  }).catch(function(err){
+    console.error('[Gate Auth Error]', err);
+    const msg = err.message && err.message.toLowerCase().includes('invalid')
+      ? 'E-mail ou senha incorretos.'
+      : err.message && err.message.toLowerCase().includes('email')
+      ? 'E-mail não confirmado. Verifique sua caixa de entrada.'
+      : err.message && err.message.toLowerCase().includes('rate')
+      ? 'Muitas tentativas. Tente novamente mais tarde.'
+      : err.message || 'Erro ao realizar login.';
+    if(errEl) errEl.textContent = msg;
+  }).finally(function(){
+    if(btn){ btn.textContent = 'Entrar'; btn.disabled = false; }
+  });
+}
+window.gateLogin = gateLogin;
+
 // ════ START ════
 document.addEventListener('DOMContentLoaded', function(){
   bootApp();
   liveClock();
 
   // ── Supabase Auth state listener ──────────────────────────────────────────
+  // Também é o responsável por decidir, no carregamento da página, se mostra
+  // a trava de e-mail (sem sessão), o PIN (sessão válida, sem privilégios)
+  // ou por logar como admin de verdade (sessão válida + presente na tabela
+  // admin_users). O login administrativo NUNCA é concedido só por o login
+  // no Supabase Auth ter dado certo — sempre reconfirmamos com o servidor,
+  // porque o mesmo e-mail/senha usados só pra liberar a trava do PIN também
+  // passam pelo signInWithPassword do modal "Acesso administrativo".
   _supa.auth.onAuthStateChange(function(_event, session){
     const sbUser = session && session.user;
-    if(sbUser && !currentUser){
-      const elUser = document.getElementById('al-user');
-      const elPass = document.getElementById('al-pass');
-      const elErr  = document.getElementById('al-error');
-      if(elUser) elUser.value = '';
-      if(elPass) elPass.value = '';
-      if(elErr)  elErr.textContent = '';
-      if(_bootReady){
-        // Boot already done — login immediately
-        loginAs({id: sbUser.id, name:'Laboratório', sector:'admin', isAdmin: true});
-      } else {
-        // Boot still running — queue the login for when boot finishes
-        _pendingAuthUser = sbUser;
-      }
+
+    if(!sbUser){
+      // Sem sessão no Supabase — exige e-mail/senha antes de exibir o PIN.
+      if(!currentUser) _gateShow('gate-view');
+      return;
     }
+
+    const wantsAdmin = _adminLoginInProgress; // veio explicitamente do modal "Acesso administrativo"
+    _adminLoginInProgress = false;
+
+    // Reconfirma no servidor se este usuário está autorizado como admin.
+    // (RLS da tabela só deixa cada usuário ver a própria linha.)
+    _supa.from('admin_users').select('user_id').eq('user_id', sbUser.id).maybeSingle()
+      .then(function(res){
+        const isRealAdmin = !!(res && res.data);
+
+        if(isRealAdmin){
+          if(!currentUser){
+            const elUser = document.getElementById('al-user');
+            const elPass = document.getElementById('al-pass');
+            const elErr  = document.getElementById('al-error');
+            if(elUser) elUser.value = '';
+            if(elPass) elPass.value = '';
+            if(elErr)  elErr.textContent = '';
+            if(_bootReady){
+              // Boot already done — login immediately
+              loginAs({id: sbUser.id, name:'Laboratório', sector:'admin', isAdmin: true});
+            } else {
+              // Boot still running — queue the login for when boot finishes
+              _pendingAuthUser = sbUser;
+            }
+          }
+        } else {
+          // Sessão válida no Supabase, mas sem autorização de admin — só
+          // libera a trava de e-mail (mostra o PIN normalmente).
+          if(wantsAdmin){
+            const elErr = document.getElementById('al-error');
+            if(elErr) elErr.textContent = 'Este e-mail não tem permissão de administrador.';
+          }
+          if(!currentUser) _gateShow('pin-view');
+        }
+      })
+      .catch(function(err){
+        console.error('[admin_users check]', err);
+        // Falha ao verificar — por segurança, NUNCA concede admin nesse caso.
+        if(wantsAdmin){
+          const elErr = document.getElementById('al-error');
+          if(elErr) elErr.textContent = 'Não foi possível verificar permissão. Tente novamente.';
+        }
+        if(!currentUser) _gateShow('pin-view');
+      });
   });
 
   // Event delegation — admin table buttons
@@ -1529,10 +1649,12 @@ async function adminLogin(){
   if(errEl) errEl.textContent = '';
 
   try {
+    _adminLoginInProgress = true;
     const { error } = await _supa.auth.signInWithPassword({ email: emailRaw, password: p });
-    if (error) throw error;
+    if (error) { _adminLoginInProgress = false; throw error; }
     // onAuthStateChange chamará loginAs após login bem-sucedido
   } catch(err) {
+    _adminLoginInProgress = false;
     console.error('[Supabase Auth Error]', err);
     const msg = err.message && err.message.toLowerCase().includes('invalid')
       ? 'Usuário ou senha incorretos.'
@@ -1661,6 +1783,17 @@ function loginAs(u){
   if (typeof _loadBolsaoLocksSupabase === 'function') {
     try { _loadBolsaoLocksSupabase(); } catch(e) { console.warn('[Bolsões] Falha ao carregar locks:', e); }
   }
+  // Rebusca os dados de Qualidade (registros + revisadas) já com a
+  // identidade autenticada do login que acabou de ocorrer. A carga inicial
+  // de _initQualListener roda antes do login (só com acesso anônimo do
+  // banco) e não se atualiza sozinha — sem isto, cards como "Revisadas"
+  // podem ficar presos em 0 até um evento realtime disparar.
+  if (typeof window._reloadQualReg === 'function') {
+    window._reloadQualReg().catch(e => console.warn('[Qualidade] Falha ao rebuscar registros pós-login:', e));
+  }
+  if (typeof window._reloadQualLib === 'function') {
+    window._reloadQualLib().catch(e => console.warn('[Qualidade] Falha ao rebuscar liberadas pós-login:', e));
+  }
   scheduleCheck();
   const admCred = document.getElementById('admin-cred');
   if(admCred) admCred.classList.remove('open');
@@ -1670,7 +1803,13 @@ function loginAs(u){
 function logout(){
   _operatorAccessToken = null;
   try { sessionStorage.removeItem('_opToken'); } catch(e){}
-  _supa.auth.signOut().catch(()=>{});
+  // Só encerra a sessão do Supabase (e a trava de e-mail) quando quem está
+  // saindo é o admin. Operadores logados por PIN saem só do "turno" do app —
+  // a trava de e-mail do dispositivo continua liberada, sem precisar
+  // digitar e-mail/senha de novo a cada troca de operador.
+  if(currentUser && currentUser.isAdmin){
+    _supa.auth.signOut().catch(()=>{});
+  }
   currentUser=null; pv=''; updPD();
   _consultaDateKey = null;
   _consultaRecords = [];
@@ -2014,9 +2153,18 @@ function toggleAdminCred(){
 }
 
 // keyboard support for PIN pad
+// IMPORTANTE: só intercepta teclas quando a tela de PIN (pin-view) está
+// especificamente visível — nunca quando a tela de e-mail (gate-view) ou
+// qualquer campo de texto está em foco. Antes verificava só se o container
+// #layer-login (que engloba as duas telas) estava visível, o que fazia
+// dígitos digitados na SENHA do e-mail vazarem pro sistema de PIN e um
+// Enter ali disparar um login de PIN sem o usuário perceber.
 document.addEventListener('keydown',e=>{
-  const lo=document.getElementById('layer-login');
-  if(!lo.classList.contains('hidden')){
+  const pv_el = document.getElementById('pin-view');
+  const pinViewVisible = pv_el && !pv_el.classList.contains('hidden');
+  const tag = (document.activeElement && document.activeElement.tagName) || '';
+  const focusedOnField = tag === 'INPUT' || tag === 'TEXTAREA';
+  if(pinViewVisible && !focusedOnField){
     if(e.key>='0'&&e.key<='9') pinKey(e.key);
     else if(e.key==='Backspace') pinDel();
     else if(e.key==='Enter') pinEnter();
@@ -6727,6 +6875,142 @@ function copiarSelbs(){
 }
 
 // ════ ADMIN ════
+// ── Gestão de Equipe — Saúde da Equipe ──
+function renderTeamHealth(){
+  const container = document.getElementById('admin-team-health-panel');
+  if(!container) return;
+
+  const targetSectors = [
+    { key: 'DESMEMBRAMENTO', name: 'Desmembramento', icon: '📦', color: '#38bdf8', bg: 'rgba(56,189,248,0.12)', border: 'rgba(56,189,248,0.35)' },
+    { key: 'MONTAGEM',       name: 'Montagem',       icon: '🛠️', color: '#4ade80', bg: 'rgba(74,222,128,0.12)', border: 'rgba(74,222,128,0.35)' },
+    { key: 'LIMPEZA',        name: 'Limpeza',        icon: '🧹', color: '#a78bfa', bg: 'rgba(167,139,250,0.12)', border: 'rgba(167,139,250,0.35)' },
+    { key: 'COMPLEXA',       name: 'Complexas',      icon: '🧩', color: '#f5a623', bg: 'rgba(245,166,35,0.12)', border: 'rgba(245,166,35,0.35)' },
+    { key: 'QUALIDADE',      name: 'Qualidade',      icon: '✅', color: '#22d3ee', bg: 'rgba(34,211,238,0.12)', border: 'rgba(34,211,238,0.35)' },
+    { key: 'ELETRÔNICA',     name: 'Eletrônica',     icon: '🔌', color: '#fb923c', bg: 'rgba(251,146,60,0.12)', border: 'rgba(251,146,60,0.35)' },
+  ];
+
+  const allUsers = Array.isArray(users) ? users : [];
+
+  let overallTotal = 0;
+  let overallActive = 0;
+
+  const cardsHtml = targetSectors.map(sec => {
+    const secUsers = allUsers.filter(u => {
+      const uSec = (u.sector || '').toUpperCase().trim();
+      if(sec.key === 'COMPLEXA') return uSec === 'COMPLEXA' || uSec === 'COMPLEXAS';
+      return uSec === sec.key;
+    });
+
+    const total = secUsers.length;
+    const activeUsers = secUsers.filter(u => u.active && !u.hidden);
+    const inactiveUsers = secUsers.filter(u => !u.active || u.hidden);
+    const activeCount = activeUsers.length;
+    const inactiveCount = inactiveUsers.length;
+
+    overallTotal += total;
+    overallActive += activeCount;
+
+    const pct = total > 0 ? Math.round((activeCount / total) * 100) : 0;
+
+    let healthColor = '#4ade80';
+    if(pct < 50) healthColor = '#f25757';
+    else if(pct < 80) healthColor = '#f5a623';
+
+    const activeListText = activeUsers.length > 0
+      ? activeUsers.map(u => `<span title="${u.name} (Ativo)" style="display:inline-flex;align-items:center;gap:3px;background:rgba(74,222,128,0.14);border:1px solid rgba(74,222,128,0.35);color:#4ade80;font-size:9px;font-weight:700;padding:2px 6px;border-radius:5px;margin:1px;line-height:1.4"><span style="width:5px;height:5px;border-radius:50%;background:#4ade80;display:inline-block;flex-shrink:0"></span>${u.name}</span>`).join('')
+      : '<span style="font-size:9px;color:var(--muted);font-style:italic;padding:4px">Nenhum operador ativo</span>';
+
+    const inactiveListText = inactiveUsers.length > 0
+      ? inactiveUsers.map(u => `<span title="${u.name} (Inativo/Desativado)" style="display:inline-flex;align-items:center;gap:3px;background:rgba(242,87,87,0.14);border:1px solid rgba(242,87,87,0.35);color:#f25757;font-size:9px;font-weight:700;padding:2px 6px;border-radius:5px;margin:1px;line-height:1.4;opacity:0.85"><span style="width:5px;height:5px;border-radius:50%;background:#f25757;display:inline-block;flex-shrink:0"></span>${u.name}</span>`).join('')
+      : '';
+
+    return `
+      <div style="background:var(--bg2);border:1px solid ${sec.border};border-radius:14px;padding:14px;display:flex;flex-direction:column;justify-content:space-between;gap:10px;box-shadow:0 4px 14px rgba(0,0,0,0.15);transition:transform .15s ease" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
+        <div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:15px">${sec.icon}</span>
+              <span style="font-size:12px;font-weight:800;color:var(--text);letter-spacing:.02em">${sec.name}</span>
+            </div>
+            <span style="font-size:12px;font-weight:900;color:${healthColor};background:rgba(0,0,0,0.25);border:1px solid ${healthColor}55;padding:2px 8px;border-radius:20px;font-family:var(--mono)">
+              ${pct}%
+            </span>
+          </div>
+
+          <div style="width:100%;height:6px;background:rgba(255,255,255,0.08);border-radius:10px;overflow:hidden;margin-bottom:10px">
+            <div style="width:${pct}%;height:100%;background:${healthColor};border-radius:10px;transition:width .4s ease;box-shadow:0 0 10px ${healthColor}66"></div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:8px;text-align:center">
+            <div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:7px;padding:5px 2px">
+              <div style="font-size:8px;font-weight:700;color:#4ade80;text-transform:uppercase;letter-spacing:.04em">Ativos</div>
+              <div style="font-size:13px;font-weight:800;color:#4ade80;font-family:var(--mono);margin-top:1px">${activeCount}</div>
+            </div>
+            <div style="background:rgba(242,87,87,0.08);border:1px solid rgba(242,87,87,0.2);border-radius:7px;padding:5px 2px">
+              <div style="font-size:8px;font-weight:700;color:#f25757;text-transform:uppercase;letter-spacing:.04em">Inativos</div>
+              <div style="font-size:13px;font-weight:800;color:#f25757;font-family:var(--mono);margin-top:1px">${inactiveCount}</div>
+            </div>
+            <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:7px;padding:5px 2px">
+              <div style="font-size:8px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Total</div>
+              <div style="font-size:13px;font-weight:800;color:var(--text);font-family:var(--mono);margin-top:1px">${total}</div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div style="font-size:9px;font-weight:700;color:var(--muted);margin-bottom:5px;display:flex;align-items:center;justify-content:space-between">
+            <span>Integrantes da Equipe:</span>
+            <button onclick="setAdmFilter('${sec.key}', document.querySelector('.stab.a-${sc(sec.key)}'))" style="background:none;border:none;color:var(--accent);font-size:9px;font-weight:700;cursor:pointer;padding:0">Filtrar na tabela 🔍</button>
+          </div>
+          <div style="background:rgba(0,0,0,0.2);border:1px solid var(--border2);border-radius:8px;padding:5px;display:flex;flex-wrap:wrap;gap:2px;align-content:flex-start">
+            ${activeListText}
+            ${inactiveListText}
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  const overallPct = overallTotal > 0 ? Math.round((overallActive / overallTotal) * 100) : 0;
+  let overallColor = '#4ade80';
+  if(overallPct < 50) overallColor = '#f25757';
+  else if(overallPct < 80) overallColor = '#f5a623';
+
+  container.innerHTML = `
+    <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:16px;padding:18px;box-shadow:0 6px 20px rgba(0,0,0,0.18)">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;margin-bottom:16px;border-bottom:1px solid var(--border2);padding-bottom:14px">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="width:42px;height:42px;border-radius:12px;background:rgba(167,139,250,0.15);border:1px solid rgba(167,139,250,0.35);display:flex;align-items:center;justify-content:center;font-size:22px">
+            🩺
+          </div>
+          <div>
+            <div style="font-size:15px;font-weight:800;color:var(--text);letter-spacing:-.01em">Gestão de Equipe — Saúde da Equipe</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px">
+              Indicadores de presencialidade e capacidade operacional nos setores: <b>Desmembramento, Montagem, Limpeza, Complexa, Qualidade e Eletrônica</b>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:14px;background:var(--bg3);border:1px solid var(--border2);border-radius:12px;padding:8px 16px">
+          <div style="text-align:right">
+            <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Saúde Geral dos Setores</div>
+            <div style="font-size:11px;color:var(--text);margin-top:2px">
+              <span style="color:#4ade80;font-weight:800">${overallActive} ativos</span> de <b>${overallTotal} totais</b>
+            </div>
+          </div>
+          <div style="font-size:24px;font-weight:900;color:${overallColor};font-family:var(--mono);line-height:1;background:rgba(0,0,0,0.25);border:1px solid ${overallColor}44;padding:6px 14px;border-radius:10px;box-shadow:0 0 12px ${overallColor}33">
+            ${overallPct}%
+          </div>
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(250px, 1fr));gap:14px;align-items:start">
+        ${cardsHtml}
+      </div>
+    </div>
+  `;
+}
+
 function setAdmFilter(f,btn){
   admFilter=f;
   document.getElementById('adm-tabs').querySelectorAll('.stab').forEach(b=>b.className='stab');
@@ -6734,6 +7018,7 @@ function setAdmFilter(f,btn){
   renderUsers();
 }
 function renderUsers(){
+  renderTeamHealth();
   const list=admFilter?users.filter(u=>u.sector===admFilter):users;
   document.getElementById('users-body').innerHTML=list.map(u=>{
     const s = getS(u.id);
@@ -13065,6 +13350,12 @@ async function _initQualListener(){
   }
   window._qualLiberadas = window._qualLiberadas || {};
   await Promise.all([_reloadQualReg(), _reloadQualLib()]);
+  // Expostas globalmente para serem re-executadas após o login (PIN ou admin),
+  // já que a carga inicial acima roda 500ms após o DOMContentLoaded — ou seja,
+  // ANTES do operador logar. Sem isso, o cache fica preso ao resultado da
+  // consulta anônima (pré-login) e só se atualiza por evento realtime.
+  window._reloadQualReg = _reloadQualReg;
+  window._reloadQualLib = _reloadQualLib;
   _supa.channel('qualidade_registros')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'qualidade_registros' }, _reloadQualReg)
     .subscribe();

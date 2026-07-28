@@ -359,8 +359,29 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
      LOGIN LAYER
 ═══════════════════════════════════════════════ -->
 <div id="layer-login">
+  <!-- Gate view (trava de acesso por e-mail — login do Supabase, sem privilégios, só segurança extra) -->
+  <div id="gate-view" class="lp-wrap hidden" style="text-align:left;">
+    <div class="lp-icon" style="text-align:center;">🔐</div>
+    <div class="lp-title" style="text-align:center;">Acesso Restrito</div>
+    <div class="lp-sub" style="text-align:center;">Entre com seu e-mail para continuar</div>
+    <label class="al-label">E-mail</label>
+    <input class="al-inp" id="gate-user" placeholder="seuemail@exemplo.com" type="email" autocomplete="username">
+    <label class="al-label" style="margin-top:8px;">Senha</label>
+    <input class="al-inp" id="gate-pass" type="password" placeholder="••••••••" autocomplete="current-password"
+      onkeydown="if(event.key==='Enter'){event.preventDefault();gateLogin();}">
+    <div class="lp-error" id="gate-error" style="text-align:center;"></div>
+    <button class="al-btn" id="gate-btn" onclick="gateLogin()" style="width:100%;margin-top:4px;">Entrar</button>
+    <div class="lp-admin-link" onclick="document.getElementById('modal-admin-login').classList.remove('hidden')" style="margin-top:16px;text-align:center;">Acesso administrativo</div>
+  </div>
+
+  <!-- Checando sessão existente (evita "piscar" o PIN antes de saber se há sessão válida) -->
+  <div id="gate-checking" class="lp-wrap" style="text-align:center;">
+    <div style="width:32px;height:32px;border:3px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 14px"></div>
+    <div style="font-size:12px;color:var(--muted)">Verificando acesso...</div>
+  </div>
+
   <!-- PIN view -->
-  <div id="pin-view" class="lp-wrap">
+  <div id="pin-view" class="lp-wrap hidden">
     <!-- Botão de Guia do Sistema -->
     <button onclick="abrirGuiaSistema()" title="Guia do Sistema" style="
       position:absolute;top:20px;right:24px;
@@ -812,6 +833,9 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 
   <!-- ── ADMIN ── -->
   <div class="view" id="view-admin">
+
+    <!-- ══ GESTÃO DE EQUIPE / SAÚDE DA EQUIPE ══ -->
+    <div id="admin-team-health-panel" style="margin-bottom:16px"></div>
 
     <!-- ══ CONTROLE DE EXPEDIENTE ══ -->
     <div id="admin-sched-override-card" style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
@@ -3628,7 +3652,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="supabase-compat-shim.js?v=2"></script>
-<script src="app.js?v=12"></script>
+<script src="app.js?v=14"></script>
 <script src="planejamento.js?v=2"></script>
 <script src="pendencias.js?v=2"></script>
 
