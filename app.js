@@ -500,8 +500,17 @@ function applyUserSnapshot(freshUsers){
     const activeSelb = (fu._selb !== undefined && fu._selb !== null) ? fu._selb : (activeHistory?.selb || null);
 
     // An active status without a SELB is stale state left after completion.
+    // PROTEÇÃO contra flickering: se o snapshot chega com status ativo mas sem
+    // _selb (race condition entre listeners ou snapshot parcial do Firebase),
+    // e o wstate local JÁ tem este operador com um SELB ativo, preserva o
+    // estado local — não reseta para idle. Isso elimina o vai-e-vem visual.
     const hasActiveStatus = status === 'running' || status === 'paused' || status === 'aguardando';
+    const localAlreadyActive = s.status === 'running' || s.status === 'paused' || s.status === 'aguardando';
     if (hasActiveStatus && activeSelb === null && _historyReady) {
+      if (localAlreadyActive && s.selb) {
+        // O wstate local já tem um SELB válido rodando — snapshot parcial, preserva estado
+        return;
+      }
       s.status = 'idle';
       s.selb = null;
       s.startEpoch = null;
@@ -775,13 +784,14 @@ function startRealtimeSync(){
       const v = snap.val();
       freshUsers = [{...v, id: currentUser.id}];
     }
-    // Protege startEpoch de writes parciais do Supabase:
-    // Se o snapshot chega sem _startEpoch mas o wstate local já tem um válido
-    // e o usuário ainda está running → preserva o startEpoch local
+    // Protege startEpoch e selb de writes parciais do Supabase:
+    // Se o snapshot chega sem _startEpoch ou _selb mas o wstate local já tem um válido
+    // e o usuário ainda está ativo → preserva os dados locais para evitar flickering
     freshUsers.forEach(fu => {
       const s = wstate[fu.id];
-      if(s && s.status === 'running' && s.startEpoch && !fu._startEpoch){
-        fu._startEpoch = s.startEpoch; // protege contra snapshot parcial
+      if(s && (s.status === 'running' || s.status === 'paused' || s.status === 'aguardando')){
+        if(s.startEpoch && !fu._startEpoch) fu._startEpoch = s.startEpoch;
+        if(s.selb && (fu._selb === undefined || fu._selb === null)) fu._selb = s.selb;
       }
     });
     // Sempre atualiza users[] independente do estado do boot
