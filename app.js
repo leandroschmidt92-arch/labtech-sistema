@@ -13291,7 +13291,7 @@ let _qualRegistros = {};  // cache local
 async function _initQualListener(){
   async function _reloadQualReg(){
     // Busca os mais recentes e garante um limite generoso explícito para não bater no limite padrão global sem ordenação
-    const { data, error } = await _supaAuthed().from('qualidade_registros').select('*').order('created_at', { ascending: false }).limit(2000);
+    const { data, error } = await _supaAuthed().from('qualidade_registros').select('*').order('ts', { ascending: false }).limit(2000);
     if(error) console.warn('[Qualidade] Erro ao carregar qualidade_registros:', error);
     _qualRegistros = {};
     (data||[]).forEach(r => {
@@ -13330,7 +13330,7 @@ async function _initQualListener(){
   }
   async function _reloadQualLib(){
     // Busca os mais recentes e garante um limite generoso explícito
-    const { data, error } = await _supaAuthed().from('qualidade_liberadas').select('*').order('created_at', { ascending: false }).limit(2000);
+    const { data, error } = await _supaAuthed().from('qualidade_liberadas').select('*').order('ts', { ascending: false }).limit(2000);
     if(error) console.warn('[Qualidade] Erro ao carregar qualidade_liberadas:', error);
     window._qualLiberadas = {};
     (data||[]).forEach(r => {
