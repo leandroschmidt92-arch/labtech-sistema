@@ -116,12 +116,15 @@ function fluxolabApplyRemoteSyncPend(remoteData) {
             if (cellDoca) cellDoca.innerText = val ? (statsBol.doca || '-') : '';
             if (cellLab) cellLab.innerText = val ? (statsBol.lab || '-') : '';
             if (cellBadge) cellBadge.innerHTML = pendBadgeHtml(statsChk.count, !!val);
+            const activeBadge = document.getElementById(`pnd-${t}-r${i}-active-users`);
+            if (activeBadge) activeBadge.dataset.modelo = val || '';
           }
         }
       });
     }
     pendUpdateHeaderTotals(t);
   });
+  if (typeof updateActiveUsersInTables === 'function') updateActiveUsersInTables();
 }
 
 // Recalcula e atualiza os totais de DOCA/LAB/Checklists exibidos no cabeçalho da tabela
@@ -155,6 +158,29 @@ function fluxolabUpdateRowElemPend(elem, tableName, field) {
 
   const value = elem.value;
   _fluxolabPendenciasState[tableName][index][field] = value;
+
+  const isLastRow = index === _fluxolabPendenciasState[tableName].length - 1;
+  const rowHasData = _fluxolabPendenciasState[tableName][index].modelo.trim() !== '' ||
+                     _fluxolabPendenciasState[tableName][index].qtd_wms.trim() !== '' ||
+                     _fluxolabPendenciasState[tableName][index].sugestao.trim() !== '' ||
+                     _fluxolabPendenciasState[tableName][index].obs.trim() !== '' ||
+                     _fluxolabPendenciasState[tableName][index].pecas.trim() !== '';
+
+  if (isLastRow && rowHasData) {
+    _fluxolabPendenciasState[tableName].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
+    fluxolabSavePendenciasDebounced();
+    
+    setTimeout(() => {
+      const activeId = document.activeElement ? document.activeElement.id : null;
+      fluxolabRenderPendencias();
+      if (activeId) {
+        const el = document.getElementById(activeId);
+        if (el) el.focus();
+      }
+    }, 10);
+    return;
+  }
+
   fluxolabSavePendenciasDebounced();
 
   if (field === 'modelo') {
@@ -166,13 +192,16 @@ function fluxolabUpdateRowElemPend(elem, tableName, field) {
     const cellDoca = document.getElementById(`pnd-${tableName}-r${index}-doca`);
     const cellLab = document.getElementById(`pnd-${tableName}-r${index}-lab`);
     const cellBadge = document.getElementById(`pnd-${tableName}-r${index}-badge`);
+    const activeBadge = document.getElementById(`pnd-${tableName}-r${index}-active-users`);
 
     if (cellChk) { cellChk.innerText = value ? (statsChk.count || '-') : ''; cellChk.style.color = statsChk.count > 0 ? '#4ade80' : 'var(--muted)'; }
     if (cellMedia) { cellMedia.innerText = value ? (statsChk.media || '-') : ''; cellMedia.style.color = statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'; }
     if (cellDoca) cellDoca.innerText = value ? (statsBol.doca || '-') : '';
     if (cellLab) cellLab.innerText = value ? (statsBol.lab || '-') : '';
     if (cellBadge) cellBadge.innerHTML = pendBadgeHtml(statsChk.count, !!value);
+    if (activeBadge) activeBadge.dataset.modelo = value || '';
     pendUpdateHeaderTotals(tableName);
+    if (typeof updateActiveUsersInTables === 'function') updateActiveUsersInTables();
   }
 }
 
@@ -311,6 +340,47 @@ function pendBadgeHtml(count, filled) {
   return `<span style="background:rgba(248,113,113,0.15);color:#f87171;font-size:9px;font-weight:800;padding:3px 7px;border-radius:10px;white-space:nowrap;flex-shrink:0;letter-spacing:0.03em">✗ SEM CHECKLIST</span>`;
 }
 
+// Badge visual ao lado do modelo: mostra o(s) operador(es) que estão AGORA
+// com aquele modelo em andamento (rodando = verde) ou pausado (amarelo).
+// Lê o estado global (users/wstate/getEquipName) já usado pelo resto do app.
+// Chamada: (1) após render/re-render das tabelas, (2) sempre que o campo
+// modelo é editado localmente, (3) a partir de updateSummary() em app.js —
+// que já é disparado em todo start/pause/resume/finish, local ou remoto.
+function updateActiveUsersInTables() {
+  if (typeof users === 'undefined' || typeof wstate === 'undefined' || typeof getEquipName !== 'function') return;
+
+  const badges = document.querySelectorAll('.active-users-badge[data-modelo]');
+  if (!badges.length) return;
+
+  // Agrupa operadores ativos por modelo (normalizado em maiúsculas), uma única
+  // varredura de users/wstate para todas as linhas visíveis.
+  const porModelo = {};
+  users.forEach(u => {
+    if (!u || u.hidden) return;
+    const s = wstate[u.id];
+    if (!s || (s.status !== 'running' && s.status !== 'paused')) return;
+    const modelo = s.selb ? getEquipName(s.selb) : '';
+    if (!modelo) return;
+    const key = modelo.trim().toUpperCase();
+    if (!porModelo[key]) porModelo[key] = [];
+    porModelo[key].push({ name: u.name || 'Operador', status: s.status });
+  });
+
+  badges.forEach(badge => {
+    const modeloKey = (badge.dataset.modelo || '').trim().toUpperCase();
+    const ops = modeloKey ? porModelo[modeloKey] : null;
+    if (!ops || !ops.length) { badge.innerHTML = ''; return; }
+
+    badge.innerHTML = ops.map(op => {
+      const cor = op.status === 'running' ? '#4ade80' : '#facc15';
+      const statusLabel = op.status === 'running' ? 'running' : 'paused';
+      const primeiroNome = (op.name || 'Operador').trim().split(' ')[0] || 'Operador';
+      return `<span title="${esc(op.name)} (${statusLabel})" style="display:inline-flex;align-items:center;gap:4px;background:${cor}22;border:1px solid ${cor}55;color:${cor};font-size:9px;font-weight:800;padding:2px 6px;border-radius:10px;white-space:nowrap;margin-left:3px">` +
+        `<span style="width:6px;height:6px;border-radius:50%;background:${cor};box-shadow:0 0 5px ${cor};flex-shrink:0"></span>${esc(primeiroNome)}</span>`;
+    }).join('');
+  });
+}
+
 // Helpers de cálculo — reaproveita as funções já existentes em planejamento.js
 // (fluxolabPlanGetChecklistStats / fluxolabPlanGetBolsaoStats)
 
@@ -420,6 +490,7 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
                    onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'modelo')"
                    style="flex:1;min-width:0;height:100%;min-height:36px;border:none;background:transparent;text-align:left;font-weight:800;outline:none;font-family:var(--font);font-size:15px;color:${themeColor};transition:all .2s;padding:0" />
             <span id="pnd-${tableName}-r${idx}-badge" style="display:flex;align-items:center">${pendBadgeHtml(statsChk.count, isFilled)}</span>
+            <span class="active-users-badge" id="pnd-${tableName}-r${idx}-active-users" data-modelo="${row.modelo || ''}" style="display:flex;align-items:center"></span>
           </div>
         </td>
 
@@ -506,6 +577,7 @@ function fluxolabRenderPendencias() {
 
   panel.innerHTML = html;
   pendInitResizeObserver();
+  if (typeof updateActiveUsersInTables === 'function') updateActiveUsersInTables();
 }
 
 setTimeout(fluxolabLoadPendencias, 1500);

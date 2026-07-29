@@ -132,6 +132,29 @@ function fluxolabUpdateRowElem(elem, tableName, field) {
   
   const value = elem.value;
   _fluxolabPlanejamentoState[tableName][index][field] = value;
+  
+  const isLastRow = index === _fluxolabPlanejamentoState[tableName].length - 1;
+  const rowHasData = _fluxolabPlanejamentoState[tableName][index].modelo.trim() !== '' ||
+                     _fluxolabPlanejamentoState[tableName][index].qtd_wms.trim() !== '' ||
+                     _fluxolabPlanejamentoState[tableName][index].sugestao.trim() !== '' ||
+                     _fluxolabPlanejamentoState[tableName][index].obs.trim() !== '' ||
+                     _fluxolabPlanejamentoState[tableName][index].pecas.trim() !== '';
+
+  if (isLastRow && rowHasData) {
+    _fluxolabPlanejamentoState[tableName].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
+    fluxolabSavePlanejamentoDebounced();
+    
+    setTimeout(() => {
+      const activeId = document.activeElement ? document.activeElement.id : null;
+      fluxolabRenderPlanejamento();
+      if (activeId) {
+        const el = document.getElementById(activeId);
+        if (el) el.focus();
+      }
+    }, 10);
+    return;
+  }
+  
   fluxolabSavePlanejamentoDebounced();
   
   if (field === 'modelo') {

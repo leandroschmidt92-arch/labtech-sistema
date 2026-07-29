@@ -2256,7 +2256,7 @@ function setView(v,btn){
       renderConsulta();
     }
   }
-  if(v==='admin')     { admFilter=''; resetStabs('adm-tabs',0); renderUsers(); renderConfigPecasAdmin(); }
+  if(v==='admin')     { admFilter=''; resetStabs('adm-tabs',0); renderUsers(); renderConfigPecasAdmin(); loadTeamHealthHistory(); }
   if(v==='qualidade') { qualFilter=''; resetStabs('qual-tabs',0); _initQualDateSelect(); _qualRecords=_consultaRecords.length?_consultaRecords:history; _qualDateKey=new Date().toDateString().replace(/ /g,'_'); renderQualidade(); }
   if(v==='pecas')       { renderPecasView(); }
   if(v==='solicitacoes'){ _initSolicitacoesFilters(); renderSolicitacoesDoDia(); }
@@ -3980,6 +3980,11 @@ function updateSummary(){
     if(s.status==='running') running++; 
     if(s.status==='paused')  paused++;
   });
+  // Atualiza os mini-badges de operador (rodando/pausado) nas tabelas de
+  // Pendências Mistas & Complexas. Roda em toda mudança de status, local
+  // ou vinda de outro operador em tempo real. Não faz nada se a aba não
+  // estiver com essas tabelas renderizadas (a função checa o DOM).
+  if (typeof updateActiveUsersInTables === 'function') updateActiveUsersInTables();
   const todayDk = new Date().toDateString().replace(/ /g,'_');
 
   // Retorna o dateKey do DIA DE CONCLUSÃO do registro.
@@ -6889,9 +6894,91 @@ function copiarSelbs(){
 
 // ════ ADMIN ════
 // ── Gestão de Equipe — Saúde da Equipe ──
-function renderTeamHealth(){
+async function loadTeamHealthHistory() {
+  let datePicker = document.getElementById('team-health-date');
+  const todayISO = new Date().toISOString().slice(0,10);
+
+  // Se o painel ainda não foi renderizado (datePicker não existe),
+  // renderiza primeiro com data de hoje e sem produção para criar o DOM,
+  // depois busca a produção e re-renderiza.
+  if (!datePicker) {
+    renderTeamHealth(todayISO, null, null);
+    datePicker = document.getElementById('team-health-date');
+    if (!datePicker) return; // painel não existe no DOM — aba admin não está ativa
+  }
+
+  const dateVal = datePicker.value || todayISO;
+
+  if (dateVal === todayISO) {
+    // Hoje: usa o estado em tempo real e produção via Supabase (dateKey do dia)
+    const todayDk = new Date().toDateString().replace(/ /g,'_');
+    let totalDia = 0;
+    try {
+      const { data: _qd } = await _supaAuthed().from('qualidade_registros').select('id').eq('date_key', todayDk);
+      if (_qd) totalDia = _qd.length;
+    } catch(e) {
+      // fallback: conta pelo cache local
+      totalDia = Object.values(_qualRegistros || {}).filter(r => {
+        const dk = r.dateKey || (r.ts ? new Date(r.ts).toDateString().replace(/ /g,'_') : '');
+        return dk === todayDk;
+      }).length;
+    }
+    renderTeamHealth(dateVal, null, totalDia);
+    return;
+  }
+  
+  // Data passada: carrega history e qualidade
+  datePicker.disabled = true;
+  const origColor = datePicker.style.color;
+  datePicker.style.color = 'var(--muted)';
+  
+  try {
+    const dObj = new Date(dateVal + 'T00:00:00');
+    const dateKey = dObj.toDateString().replace(/ /g,'_');
+    const dateStr = dObj.toLocaleDateString('pt-BR');
+    
+    // Busca historico
+    const histData = await dbGet('/history/' + dateKey);
+    const customActiveUids = new Set();
+    if (histData) {
+      Object.values(histData).forEach(r => {
+        if (r.uid) customActiveUids.add(String(r.uid));
+      });
+    }
+    
+    // Busca produção da qualidade (Supabase)
+    let prodCount = 0;
+    try {
+      const { data, error } = await _supa.from('qualidade_registros').select('id').eq('date_key', dateKey);
+      if (!error && data) prodCount = data.length;
+    } catch(e) { console.warn('Erro ao buscar produção:', e); }
+    
+    renderTeamHealth(dateVal, customActiveUids, prodCount);
+  } catch(e) {
+    console.warn('Erro no histórico da equipe:', e);
+    renderTeamHealth(dateVal, new Set(), 0);
+  } finally {
+    const d2 = document.getElementById('team-health-date');
+    if(d2) { d2.disabled = false; d2.style.color = origColor; }
+  }
+}
+
+function _toggleTeamHealth(el){
+  var c = el.closest('#admin-team-health-panel');
+  var body = c.querySelector('.th-body');
+  var arrow = c.querySelector('.th-arrow');
+  var isNowCollapsed = body.style.display === 'none';
+  body.style.display = isNowCollapsed ? 'block' : 'none';
+  arrow.textContent = isNowCollapsed ? '▲' : '▼';
+  c.dataset.collapsed = isNowCollapsed ? '0' : '1';
+  el.querySelector('.th-hint') && (el.querySelector('.th-hint').textContent = 'Clique para ' + (isNowCollapsed ? 'recolher' : 'expandir') + ' • Desmembramento, Montagem, Limpeza, Complexa, Qualidade, Eletrônica');
+}
+
+function renderTeamHealth(dateVal, customActiveUids, prodCount){
+  dateVal = dateVal || null; customActiveUids = customActiveUids || null; prodCount = (prodCount !== undefined ? prodCount : null);
   const container = document.getElementById('admin-team-health-panel');
   if(!container) return;
+  var wasCollapsed = container.dataset.collapsed === '1';
 
   const targetSectors = [
     { key: 'DESMEMBRAMENTO', name: 'Desmembramento', icon: '📦', color: '#38bdf8', bg: 'rgba(56,189,248,0.12)', border: 'rgba(56,189,248,0.35)' },
@@ -6907,121 +6994,124 @@ function renderTeamHealth(){
   let overallTotal = 0;
   let overallActive = 0;
 
-  const cardsHtml = targetSectors.map(sec => {
-    const secUsers = allUsers.filter(u => {
-      const uSec = (u.sector || '').toUpperCase().trim();
+  var cardsHtml = targetSectors.map(function(sec) {
+    var secUsers = allUsers.filter(function(u) {
+      var uSec = (u.sector || '').toUpperCase().trim();
       if(sec.key === 'COMPLEXA') return uSec === 'COMPLEXA' || uSec === 'COMPLEXAS';
       return uSec === sec.key;
     });
 
-    const total = secUsers.length;
-    const activeUsers = secUsers.filter(u => u.active && !u.hidden);
-    const inactiveUsers = secUsers.filter(u => !u.active || u.hidden);
-    const activeCount = activeUsers.length;
-    const inactiveCount = inactiveUsers.length;
+    var total = secUsers.length;
+    var activeUsers, inactiveUsers;
+
+    if (customActiveUids) {
+      activeUsers = secUsers.filter(function(u){ return customActiveUids.has(String(u.id)) && !u.hidden; });
+      inactiveUsers = secUsers.filter(function(u){ return !customActiveUids.has(String(u.id)) && !u.hidden; });
+    } else {
+      activeUsers = secUsers.filter(function(u){ return u.active && !u.hidden; });
+      inactiveUsers = secUsers.filter(function(u){ return !u.active || u.hidden; });
+    }
+    
+    var activeCount = activeUsers.length;
+    var inactiveCount = inactiveUsers.length;
 
     overallTotal += total;
     overallActive += activeCount;
 
-    const pct = total > 0 ? Math.round((activeCount / total) * 100) : 0;
+    var pct = total > 0 ? Math.round((activeCount / total) * 100) : 0;
 
-    let healthColor = '#4ade80';
+    var healthColor = '#4ade80';
     if(pct < 50) healthColor = '#f25757';
     else if(pct < 80) healthColor = '#f5a623';
 
-    const activeListText = activeUsers.length > 0
-      ? activeUsers.map(u => `<span title="${u.name} (Ativo)" style="display:inline-flex;align-items:center;gap:3px;background:rgba(74,222,128,0.14);border:1px solid rgba(74,222,128,0.35);color:#4ade80;font-size:9px;font-weight:700;padding:2px 6px;border-radius:5px;margin:1px;line-height:1.4"><span style="width:5px;height:5px;border-radius:50%;background:#4ade80;display:inline-block;flex-shrink:0"></span>${u.name}</span>`).join('')
-      : '<span style="font-size:9px;color:var(--muted);font-style:italic;padding:4px">Nenhum operador ativo</span>';
+    var activeListText = activeUsers.length > 0
+      ? activeUsers.map(function(u){ return '<span style="display:inline-flex;align-items:center;gap:3px;background:rgba(74,222,128,0.14);border:1px solid rgba(74,222,128,0.35);color:#4ade80;font-size:9px;font-weight:700;padding:2px 6px;border-radius:5px;margin:1px"><span style="width:5px;height:5px;border-radius:50%;background:#4ade80;display:inline-block"></span>'+u.name+'</span>'; }).join('')
+      : '<span style="font-size:9px;color:var(--muted);font-style:italic;padding:4px">Nenhum ativo</span>';
 
-    const inactiveListText = inactiveUsers.length > 0
-      ? inactiveUsers.map(u => `<span title="${u.name} (Inativo/Desativado)" style="display:inline-flex;align-items:center;gap:3px;background:rgba(242,87,87,0.14);border:1px solid rgba(242,87,87,0.35);color:#f25757;font-size:9px;font-weight:700;padding:2px 6px;border-radius:5px;margin:1px;line-height:1.4;opacity:0.85"><span style="width:5px;height:5px;border-radius:50%;background:#f25757;display:inline-block;flex-shrink:0"></span>${u.name}</span>`).join('')
+    var inactiveListText = inactiveUsers.length > 0
+      ? inactiveUsers.map(function(u){ return '<span style="display:inline-flex;align-items:center;gap:3px;background:rgba(242,87,87,0.14);border:1px solid rgba(242,87,87,0.35);color:#f25757;font-size:9px;font-weight:700;padding:2px 6px;border-radius:5px;margin:1px;opacity:0.85"><span style="width:5px;height:5px;border-radius:50%;background:#f25757;display:inline-block"></span>'+u.name+'</span>'; }).join('')
       : '';
 
-    return `
-      <div style="background:var(--bg2);border:1px solid ${sec.border};border-radius:14px;padding:14px;display:flex;flex-direction:column;justify-content:space-between;gap:10px;box-shadow:0 4px 14px rgba(0,0,0,0.15);transition:transform .15s ease" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
-        <div>
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-            <div style="display:flex;align-items:center;gap:6px">
-              <span style="font-size:15px">${sec.icon}</span>
-              <span style="font-size:12px;font-weight:800;color:var(--text);letter-spacing:.02em">${sec.name}</span>
-            </div>
-            <span style="font-size:12px;font-weight:900;color:${healthColor};background:rgba(0,0,0,0.25);border:1px solid ${healthColor}55;padding:2px 8px;border-radius:20px;font-family:var(--mono)">
-              ${pct}%
-            </span>
-          </div>
-
-          <div style="width:100%;height:6px;background:rgba(255,255,255,0.08);border-radius:10px;overflow:hidden;margin-bottom:10px">
-            <div style="width:${pct}%;height:100%;background:${healthColor};border-radius:10px;transition:width .4s ease;box-shadow:0 0 10px ${healthColor}66"></div>
-          </div>
-
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:8px;text-align:center">
-            <div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:7px;padding:5px 2px">
-              <div style="font-size:8px;font-weight:700;color:#4ade80;text-transform:uppercase;letter-spacing:.04em">Ativos</div>
-              <div style="font-size:13px;font-weight:800;color:#4ade80;font-family:var(--mono);margin-top:1px">${activeCount}</div>
-            </div>
-            <div style="background:rgba(242,87,87,0.08);border:1px solid rgba(242,87,87,0.2);border-radius:7px;padding:5px 2px">
-              <div style="font-size:8px;font-weight:700;color:#f25757;text-transform:uppercase;letter-spacing:.04em">Inativos</div>
-              <div style="font-size:13px;font-weight:800;color:#f25757;font-family:var(--mono);margin-top:1px">${inactiveCount}</div>
-            </div>
-            <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:7px;padding:5px 2px">
-              <div style="font-size:8px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Total</div>
-              <div style="font-size:13px;font-weight:800;color:var(--text);font-family:var(--mono);margin-top:1px">${total}</div>
-            </div>
-          </div>
-        </div>
-
-        <div>
-          <div style="font-size:9px;font-weight:700;color:var(--muted);margin-bottom:5px;display:flex;align-items:center;justify-content:space-between">
-            <span>Integrantes da Equipe:</span>
-            <button onclick="setAdmFilter('${sec.key}', document.querySelector('.stab.a-${sc(sec.key)}'))" style="background:none;border:none;color:var(--accent);font-size:9px;font-weight:700;cursor:pointer;padding:0">Filtrar na tabela 🔍</button>
-          </div>
-          <div style="background:rgba(0,0,0,0.2);border:1px solid var(--border2);border-radius:8px;padding:5px;display:flex;flex-wrap:wrap;gap:2px;align-content:flex-start">
-            ${activeListText}
-            ${inactiveListText}
-          </div>
-        </div>
-      </div>
-    `;
+    var filterKey = sec.key;
+    return '<div style="background:var(--bg2);border:1px solid '+sec.border+';border-radius:14px;padding:14px;display:flex;flex-direction:column;gap:10px">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">'
+        +'<div style="display:flex;align-items:center;gap:6px"><span style="font-size:15px">'+sec.icon+'</span><span style="font-size:12px;font-weight:800;color:var(--text)">'+sec.name+'</span></div>'
+        +'<span style="font-size:12px;font-weight:900;color:'+healthColor+';background:rgba(0,0,0,0.25);border:1px solid '+healthColor+'55;padding:2px 8px;border-radius:20px;font-family:var(--mono)">'+pct+'%</span>'
+      +'</div>'
+      +'<div style="width:100%;height:5px;background:rgba(255,255,255,0.08);border-radius:10px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+healthColor+';border-radius:10px"></div></div>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;text-align:center">'
+        +'<div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:7px;padding:5px 2px"><div style="font-size:8px;font-weight:700;color:#4ade80;text-transform:uppercase">Ativos</div><div style="font-size:13px;font-weight:800;color:#4ade80;font-family:var(--mono)">'+activeCount+'</div></div>'
+        +'<div style="background:rgba(242,87,87,0.08);border:1px solid rgba(242,87,87,0.2);border-radius:7px;padding:5px 2px"><div style="font-size:8px;font-weight:700;color:#f25757;text-transform:uppercase">Inativos</div><div style="font-size:13px;font-weight:800;color:#f25757;font-family:var(--mono)">'+inactiveCount+'</div></div>'
+        +'<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:7px;padding:5px 2px"><div style="font-size:8px;font-weight:700;color:var(--muted);text-transform:uppercase">Total</div><div style="font-size:13px;font-weight:800;color:var(--text);font-family:var(--mono)">'+total+'</div></div>'
+      +'</div>'
+      +'<div>'
+        +'<div style="font-size:9px;font-weight:700;color:var(--muted);margin-bottom:5px;display:flex;align-items:center;justify-content:space-between">'
+          +'<span>Integrantes:</span>'
+          +'<button onclick="setAdmFilter(\''+filterKey+'\', document.querySelector(\'.stab.a-'+sc(filterKey)+'\'))" style="background:none;border:none;color:var(--accent);font-size:9px;font-weight:700;cursor:pointer;padding:0">Filtrar 🔍</button>'
+        +'</div>'
+        +'<div style="background:rgba(0,0,0,0.2);border:1px solid var(--border2);border-radius:8px;padding:5px;display:flex;flex-wrap:wrap;gap:2px">'
+          +activeListText+inactiveListText
+        +'</div>'
+      +'</div>'
+    +'</div>';
   }).join('');
 
-  const overallPct = overallTotal > 0 ? Math.round((overallActive / overallTotal) * 100) : 0;
-  let overallColor = '#4ade80';
+  var overallPct = overallTotal > 0 ? Math.round((overallActive / overallTotal) * 100) : 0;
+  var overallColor = '#4ade80';
   if(overallPct < 50) overallColor = '#f25757';
   else if(overallPct < 80) overallColor = '#f5a623';
 
-  container.innerHTML = `
-    <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:16px;padding:18px;box-shadow:0 6px 20px rgba(0,0,0,0.18)">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;margin-bottom:16px;border-bottom:1px solid var(--border2);padding-bottom:14px">
-        <div style="display:flex;align-items:center;gap:12px">
-          <div style="width:42px;height:42px;border-radius:12px;background:rgba(167,139,250,0.15);border:1px solid rgba(167,139,250,0.35);display:flex;align-items:center;justify-content:center;font-size:22px">
-            🩺
-          </div>
-          <div>
-            <div style="font-size:15px;font-weight:800;color:var(--text);letter-spacing:-.01em">Gestão de Equipe — Saúde da Equipe</div>
-            <div style="font-size:11px;color:var(--muted);margin-top:2px">
-              Indicadores de presencialidade e capacidade operacional nos setores: <b>Desmembramento, Montagem, Limpeza, Complexa, Qualidade e Eletrônica</b>
-            </div>
-          </div>
-        </div>
+  var prodBlock = prodCount !== null
+    ? '<div style="display:flex;align-items:center;gap:8px;background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.3);border-radius:10px;padding:6px 12px">'
+      + '<span>📦</span>'
+      + '<div><div style="font-size:9px;font-weight:700;color:#4ade80;text-transform:uppercase">Produção do Dia</div>'
+      + '<div style="font-size:16px;font-weight:900;color:#4ade80;font-family:var(--mono)">'+prodCount+' <span style="font-size:9px;color:var(--muted)">liberados</span></div></div>'
+      + '</div>'
+    : '';
 
-        <div style="display:flex;align-items:center;gap:14px;background:var(--bg3);border:1px solid var(--border2);border-radius:12px;padding:8px 16px">
-          <div style="text-align:right">
-            <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Saúde Geral dos Setores</div>
-            <div style="font-size:11px;color:var(--text);margin-top:2px">
-              <span style="color:#4ade80;font-weight:800">${overallActive} ativos</span> de <b>${overallTotal} totais</b>
-            </div>
-          </div>
-          <div style="font-size:24px;font-weight:900;color:${overallColor};font-family:var(--mono);line-height:1;background:rgba(0,0,0,0.25);border:1px solid ${overallColor}44;padding:6px 14px;border-radius:10px;box-shadow:0 0 12px ${overallColor}33">
-            ${overallPct}%
-          </div>
-        </div>
-      </div>
+  var collapsed = wasCollapsed;
+  container.dataset.collapsed = collapsed ? '1' : '0';
 
-      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(250px, 1fr));gap:14px;align-items:start">
-        ${cardsHtml}
-      </div>
-    </div>
-  `;
+  container.innerHTML =
+    '<div style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;overflow:hidden;margin-bottom:16px;">'
+    // Cabeçalho seguro (SEM onclick global que quebra inputs)
+    +'<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;padding:12px 16px;border-bottom:'+(collapsed?'none':'1px solid var(--border2)')+'">' 
+      +'<div style="display:flex;align-items:center;gap:10px">'
+        +'<div style="width:34px;height:34px;border-radius:9px;background:rgba(167,139,250,0.15);border:1px solid rgba(167,139,250,0.35);display:flex;align-items:center;justify-content:center;font-size:18px">🩺</div>'
+        +'<div>'
+          +'<div style="font-size:13px;font-weight:800;color:var(--text)">Gestão de Equipe — Saúde da Equipe</div>'
+        +'</div>'
+      +'</div>'
+      // Controles à direita (Saúde Geral, Date picker e Toggle explicitamente separados)
+      +'<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">'
+        +'<div style="display:flex;align-items:center;gap:10px;background:var(--bg3);border:1px solid var(--border2);border-radius:10px;padding:6px 12px">'
+          +'<div style="text-align:right">'
+            +'<div style="font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Saúde Geral da Equipe</div>'
+            +'<div style="font-size:10px;color:var(--text);margin-top:2px"><span style="color:#4ade80;font-weight:800">'+overallActive+' ativos</span> de <b>'+overallTotal+'</b></div>'
+          +'</div>'
+          +'<div style="font-size:18px;font-weight:900;color:'+overallColor+';font-family:var(--mono);line-height:1;background:rgba(0,0,0,0.25);border:1px solid '+overallColor+'44;padding:4px 10px;border-radius:8px;box-shadow:0 0 10px '+overallColor+'33">'+overallPct+'%</div>'
+        +'</div>'
+        +prodBlock
+        +'<div style="display:flex;align-items:center;gap:6px">'
+          +'<input type="date" id="team-health-date" value="'+(dateVal || new Date().toISOString().slice(0,10))+'"'
+            +' onchange="loadTeamHealthHistory()"'
+            +' style="background:var(--bg3);border:1px solid var(--border2);border-radius:7px;color:var(--text);padding:4px 8px;font-size:12px;font-family:var(--font);outline:none;cursor:pointer;position:relative;z-index:10;"'
+            +' onfocus="this.style.borderColor=\'var(--accent)\'" onblur="this.style.borderColor=\'var(--border2)\'"'
+          +'>'
+          +'<button onclick="_toggleTeamHealth(this)" class="btn-toggle-th" style="background:rgba(255,255,255,0.05);border:1px solid var(--border2);border-radius:7px;color:var(--text);padding:4px 8px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px">'
+            +'<span class="th-hint">'+(collapsed?'Expandir':'Recolher')+'</span>'
+            +'<span class="th-arrow">'+(collapsed?'▼':'▲')+'</span>'
+          +'</button>'
+        +'</div>'
+      +'</div>'
+    +'</div>'
+    // Corpo colapsável
+    +'<div class="th-body" style="display:'+(collapsed?'none':'block')+';padding:16px">'
+      +'<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));gap:12px">'
+        +cardsHtml
+      +'</div>'
+    +'</div>'
+  +'</div>';
 }
 
 function setAdmFilter(f,btn){
@@ -7031,7 +7121,10 @@ function setAdmFilter(f,btn){
   renderUsers();
 }
 function renderUsers(){
-  renderTeamHealth();
+  // NÃO chamar loadTeamHealthHistory() aqui — renderUsers é disparado em tempo real
+  // a cada atualização e re-renderizaria o painel quebrando a interação do usuário.
+  // O painel de saúde é inicializado em showView('admin') e atualizado pelo próprio input de data.
+
   const list=admFilter?users.filter(u=>u.sector===admFilter):users;
   document.getElementById('users-body').innerHTML=list.map(u=>{
     const s = getS(u.id);
@@ -14051,9 +14144,11 @@ function renderQualRegistros(){
     .filter(r => {
       if(window._qualFilterChamado){
         if(!r.chamado_aberto) return false;
+      } else if(window._qualFilterPendentes) {
+        if(r.etiqueta_impressa) return false;
+        // Não filtra por data para visualizar os pendentes antigos
       } else {
         if(window._qualFilterConcluidos && !r.etiqueta_impressa) return false;
-        if(window._qualFilterPendentes && r.etiqueta_impressa) return false;
         if(!q && targetDateStr && r.data !== targetDateStr) return false;
       }
       if(q && !(r.selb||'').toUpperCase().includes(q) && !(r.equipamento||'').toUpperCase().includes(q)) return false;
@@ -17838,41 +17933,6 @@ function renderRelatorioUsuariosQual() {
     porUsuario[nome].registros.push(r);
   });
 
-  // Conta reprovações por responsável no mesmo período filtrado
-  const periodo = document.getElementById('qual-rel-periodo')?.value || 'hoje';
-  const hoje0 = new Date(); hoje0.setHours(0,0,0,0);
-  const _tsInPeriodo = ts => {
-    if (!ts) return false;
-    const d = new Date(ts); d.setHours(0,0,0,0);
-    if (periodo === 'hoje') return d.getTime() === hoje0.getTime();
-    if (periodo === 'semana') { const lim = new Date(hoje0); lim.setDate(hoje0.getDate()-6); return d >= lim; }
-    if (periodo === 'mes') return d.getMonth()===hoje0.getMonth() && d.getFullYear()===hoje0.getFullYear();
-    if (periodo === 'custom') {
-      const deVal = document.getElementById('qual-rel-de')?.value;
-      const ateVal = document.getElementById('qual-rel-ate')?.value;
-      if (!deVal || !ateVal) return true;
-      const ts2 = new Date(ts);
-      return ts2 >= new Date(deVal+'T00:00:00') && ts2 <= new Date(ateVal+'T23:59:59');
-    }
-    return true;
-  };
-  // Usa _qualReprovRecs (carregado do Supabase para períodos históricos) ou history como fallback
-  const reprovSrc = (window._qualReprovRecs && window._qualReprovRecs.length)
-    ? window._qualReprovRecs
-    : (history || []).filter(h => h.status === 'rep' && h._reprovadoPor);
-
-  reprovSrc.forEach(h => {
-    const nome = h._reprovadoPor || '';
-    if (!nome) return;
-    // _reprovadoEm é string de hora (ex: "17:16:44"), não timestamp — usa h.ts ou _dateKey
-    const tsRef = h.ts || (h._dateKey ? new Date(h._dateKey.replace(/_/g,' ')).getTime() : null);
-    if (!_tsInPeriodo(tsRef)) return;
-    // Garante entrada mesmo se o reprovador não tiver liberações no período
-    if (!porUsuario[nome]) {
-      porUsuario[nome] = { nome, total: 0, etiquetas: 0, chamados: 0, auditoria: 0, reprovacoes: 0, registros: [] };
-    }
-    porUsuario[nome].reprovacoes++;
-  });
 
   const lista = Object.values(porUsuario).sort((a, b) => b.total - a.total);
   const totalGeral = registros.length;
@@ -17916,9 +17976,6 @@ function renderRelatorioUsuariosQual() {
         <div style="font-weight:600;color:var(--text);font-size:13px">${u.nome}</div>
       </td>
       <td style="padding:11px 14px;text-align:center;font-weight:800;color:#a78bfa;font-size:16px">${u.total}</td>
-      <td style="padding:11px 14px;text-align:center;font-weight:700;color:${u.reprovacoes > 0 ? '#f87171' : 'var(--muted)'}">
-        ${u.reprovacoes > 0 ? `<span style="background:rgba(242,87,87,0.18);color:#f87171;border:1px solid rgba(242,87,87,0.45);border-radius:20px;padding:2px 10px;font-weight:800;font-size:12px">✗ ${u.reprovacoes}</span>` : '—'}
-      </td>
       <td style="padding:11px 14px;text-align:center;color:#4ade80;font-weight:600">${u.etiquetas}</td>
       <td style="padding:11px 14px;text-align:center;color:#f5a623;font-weight:600">${u.chamados}</td>
       <td style="padding:11px 14px;text-align:center">${audCell}</td>
@@ -18004,12 +18061,11 @@ function exportarRelatorioUsuariosQual() {
   const totalGeral = registros.length;
 
   const linhas = [
-    ['#', 'Responsável', 'Registros', 'Reprovações', 'Etiquetas Impressas', 'Chamados Abertos', 'Auditoria', '% do Total'],
+    ['#', 'Responsável', 'Registros', 'Etiquetas Impressas', 'Chamados Abertos', 'Auditoria', '% do Total'],
     ...lista.map((u, i) => [
       i + 1,
       u.nome,
       u.total,
-      u.reprovacoes,
       u.etiquetas,
       u.chamados,
       u.auditoria,
