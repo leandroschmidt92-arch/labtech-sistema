@@ -456,6 +456,16 @@ async function dbDelete(path){
 // Fonte de verdade: Supabase Realtime Database.
 // Tempo NUNCA é armazenado como contador — sempre calculado de _startEpoch.
 // ════════════════════════════════════════
+// Encerra o listener de /users, seja ele um canal Realtime (cb registrado
+// no shim) ou um pollRef (objeto com .off próprio, não passa pelo registry
+// do shim) — necessário desde a OTIMIZAÇÃO de poll no dashboard, senão o
+// setInterval do poll continua rodando "fantasma" após reinit/logout.
+function _stopUsersListener(){
+  if(!_usersListener) return;
+  if(typeof _usersListener.off === 'function') _usersListener.off();
+  else _db.ref('/users').off('value', _usersListener);
+  _usersListener = null;
+}
 let _usersListener   = null;
 let _historyListener = null;
 let _dashboardZerado = false; // quando true, listener não repopula history[]
@@ -661,7 +671,7 @@ function startRealtimeSync(){
   // Evita múltiplos listeners simultâneos — desconecta o anterior antes de reconectar
   if(_syncRunning){
     // Desconecta listeners existentes antes de recriar
-    if(_usersListener)   _db.ref('/users').off('value', _usersListener);
+    _stopUsersListener();
     if(_historyListener){
       const hRef = window['_hRef_'+(new Date().toDateString().replace(/ /g,'_').slice(0,4))];
       if(hRef) hRef.off('value', _historyListener);
@@ -766,12 +776,21 @@ function startRealtimeSync(){
   // (filter id=eq.<uid>). Antes, todo operador logado assinava a coleção
   // inteira /users → cada UPDATE em qualquer operador disparava reload
   // em N clientes, causando as rajadas em /rest/v1/operadores.
-  if(_usersListener) _db.ref('/users').off('value', _usersListener);
+  _stopUsersListener();
 
   const isDashboardViewer = currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP' || currentUser.sector === 'DESMEMBRAMENTO' || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'));
   const _usersPath = isDashboardViewer ? '/users' : ('/users/' + currentUser.id);
 
-  _usersListener = _db.ref(_usersPath).on('value', snap => {
+  // OTIMIZAÇÃO CONSUMO REALTIME: quando é o dashboard (admin/PCP/DESMEMBRAMENTO)
+  // assinando a COLEÇÃO inteira /users, cada update de QUALQUER operador é
+  // entregue via Realtime a CADA tela de dashboard aberta. Com várias telas
+  // ligadas o dia todo + updates frequentes de status/timer dos operadores,
+  // isso pesa muito na cota. Operador comum continua em Realtime (é 1 única
+  // linha, atualização instantânea é barata e importante pro próprio cronômetro).
+  const _usersSubscribe = (_usersPath === '/users')
+    ? (path, cb, errCb) => pollRef(_db.ref(path), 4000, cb, errCb)
+    : (path, cb, errCb) => _db.ref(path).on('value', cb, errCb);
+  _usersListener = _usersSubscribe(_usersPath, snap => {
     if(!snap.exists()){
       return;
     }
@@ -1104,6 +1123,7 @@ function bootApp(){
 
   // Carrega em background — guarda a Promise para outras funções poderem aguardar
   window._equipamentosReady = loadEquipamentos().catch(()=>{});
+  loadMaquinasAEquip().catch(()=>{});
   loadSetores().catch(()=>{});
 
   // Carrega SELBs excluídos do cálculo de média (persistidos no Supabase)
@@ -1727,6 +1747,7 @@ function loginAs(u){
   const isQual    = !isAdmin && u.sector==='QUALIDADE'    && sectorTipo === 'admin';
   const isDisplay = !isAdmin && u.sector==='VISUALIZAÇÃO' && sectorTipo === 'admin';
   const isDesMem  = !isAdmin && u.sector==='DESMEMBRAMENTO' && sectorTipo === 'admin';
+  const isVisuFluxo = !isAdmin && u.sector==='VISU FLUXOLAB';
 
   // Tab visibility — controlada por permissões salvas (com fallback ao padrão)
   document.getElementById('topbar-tabs').style.display    = isDisplay?'none':'';
@@ -1773,6 +1794,10 @@ function loginAs(u){
     });
 
     setTimeout(() => setRelSubTab('scrap'), 80);
+  } else if(isVisuFluxo){
+    activeSector = 'VISU FLUXOLAB';
+    setView('fluxolab', document.getElementById('tab-fluxolab'));
+    buildCards();
   } else if(isQual){
     activeSector = 'MONTAGEM';
     setView('consulta', document.getElementById('tab-consulta'));
@@ -2293,7 +2318,7 @@ function setView(v,btn){
   if(v==='pecas')       { renderPecasView(); }
   if(v==='solicitacoes'){ _initSolicitacoesFilters(); renderSolicitacoesDoDia(); }
   if(v==='garantia')    { _garantiaFilter=''; resetStabs('garantia-tabs',0); setGarantiaSubTab('registro'); renderGarantiaView(); }
-  if(v==='maquinas-a') { renderMaquinasAView(); }
+  if(v==='maquinas-a') { loadMaquinasAEquip().then(renderMaquinasAView).catch(()=>renderMaquinasAView()); }
   if(v==='perdidas')   { renderPerdidasView(); }
   if(v==='relatorios'){ relFilter=''; resetStabs('rel-tabs',0); hideRelRefreshBadge();
     // Inicializa filtro global e local com hoje e reseta cache
@@ -3361,7 +3386,15 @@ async function confirmarInicio(){
           const tooOld       = ageHours > 18;
           const beforeLastOk = latestOkEndEpoch > 0 && runStart > 0 && runStart < latestOkEndEpoch;
           const selbMismatch = !!(fbUser._selb && runOrphanCheck.selb && fbUser._selb !== runOrphanCheck.selb);
-          const isPhantom    = hasNoStart || hasNoSelb || tooOld || beforeLastOk || selbMismatch;
+          // FIX BUG: selbMismatch removido do critério isPhantom.
+          // Divergência entre fbUser._selb e o registro pode ser race condition
+          // de propagação do Firebase — fechar o SELB nesse caso encerra um SELB
+          // legítimo em andamento. Apenas logamos para auditoria.
+          if(selbMismatch) console.warn('[SELB] selbMismatch detectado (possível race condition — não fechando automaticamente):', {
+            fbSelb: fbUser._selb, histSelb: runOrphanCheck.selb,
+            docId: runOrphanCheck._docId, uid: actionUid, ts: new Date().toISOString()
+          });
+          const isPhantom    = hasNoStart || hasNoSelb || tooOld || beforeLastOk;
 
           if(!isPhantom){
             // SELB atual válido em andamento — bloquear novo início.
@@ -3449,6 +3482,13 @@ async function confirmarInicio(){
   // Evita registros fantasma quando operador inicia novo SELB sem finalizar o anterior.
   const orphans = history.filter(x => x.uid === actionUid && x.status === 'running');
   for(const orphan of orphans){
+    // LOG DE AUDITORIA OBRIGATÓRIO: registra toda finalização automática de orphan
+    // para rastrear o bug de SELBs sendo concluídos sem motivo aparente.
+    console.warn('[AUTO-CLOSE-ORPHAN] Fechando SELB em andamento automaticamente ao iniciar novo:', {
+      uid: actionUid, selbFechado: orphan.selb, docId: orphan._docId,
+      selbNovo: selb, acaoDeQuem: currentUser ? currentUser.name : '?',
+      ts: new Date().toISOString()
+    });
     const orphanEnd  = now.toLocaleTimeString('pt-BR');
     const orphanStart = orphan.startEpoch || 0;
     // Calcula duração via sanidade: usa diff de relógio se epoch parece errado
@@ -10744,6 +10784,147 @@ function normalizeSelbCode(code) {
   return code.toUpperCase().replace(/\s+/g, '').replace(/-/g, '').replace(/^SELB/, '');
 }
 
+// ── Planilha exclusiva de Máquina A ─────────────────────────────────────────
+// Fica numa tabela própria (maquinas_a_equipamentos), totalmente separada de
+// `equipamentos`. Serve só para autopreencher o nome do equipamento ao
+// registrar uma Máquina A — a leitura NUNCA escreve/altera a aba Equipamentos,
+// e o resto do sistema (dashboard, cards, modais gerais) nunca lê esses dados.
+let _maquinasAEquip = {}; // { 'SELB-001': 'Impressora HP 1020', ... }
+
+async function loadMaquinasAEquip(){
+  try {
+    const { data } = await _supa.from('maquinas_a_equipamentos').select('id, raw');
+    const tmp = {};
+    (data || []).forEach(e => { tmp[e.id] = (e.raw && e.raw.nome) ? e.raw.nome : e.id; });
+    _maquinasAEquip = tmp;
+  } catch(e) {
+    console.warn('[Máquina A] Erro ao carregar planilha exclusiva:', e);
+  }
+}
+
+// Busca o nome do equipamento para o fluxo de registro de Máquina A:
+// 1º tenta na planilha exclusiva de Máquina A, 2º cai para a aba Equipamentos.
+// (é a única função de lookup que combina as duas fontes — getEquipName()
+// continua olhando só para `equipamentos`, sem qualquer influência daqui)
+function getMaquinaAEquipName(selbCode){
+  if(!selbCode) return null;
+  const upper = selbCode.toUpperCase().trim();
+  if (_maquinasAEquip[upper]) return _maquinasAEquip[upper];
+
+  const norm = normalizeSelbCode(upper);
+  if (norm) {
+    for (const k of Object.keys(_maquinasAEquip)) {
+      if (normalizeSelbCode(k) === norm) return _maquinasAEquip[k];
+    }
+  }
+  // Fallback: aba Equipamentos (global)
+  return (typeof getEquipName === 'function') ? getEquipName(selbCode) : null;
+}
+
+function toggleMaquinaAImportUI(isAdmin){
+  const label = document.getElementById('maquinaa-import-label');
+  if(label) label.style.display = isAdmin ? '' : 'none';
+  const clearBtn = document.getElementById('maquinaa-import-clear-btn');
+  if(clearBtn) clearBtn.style.display = isAdmin ? '' : 'none';
+}
+
+async function importMaquinaAEquipFile(input){
+  if(!currentUser || !currentUser.isAdmin){
+    alert('Apenas o administrador pode importar a planilha de Máquina A.');
+    input.value = '';
+    return;
+  }
+  const file = input.files[0];
+  if(!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  showLoader('Importando planilha (Máquina A)...');
+  try {
+    let rows = [];
+    if(ext === 'csv'){
+      rows = await parseCSV(file);
+    } else {
+      rows = await parseXLSX(file);
+    }
+    if(!rows.length){ hideLoader(); showError('Nenhum dado encontrado na planilha.'); return; }
+
+    const allHeaders = Object.keys(rows[0]);
+    const SELB_PRIORITY = ['SELB'];
+    const NOME_PRIORITY = ['Produto', 'PRODUTO', 'produto', 'Modelo', 'MODELO', 'modelo'];
+
+    function findCol(priorities, fallbackIncludes){
+      for(const p of priorities){
+        const found = allHeaders.find(h => h.trim().toLowerCase() === p.toLowerCase());
+        if(found) return found;
+      }
+      for(const inc of fallbackIncludes){
+        const found = allHeaders.find(h => h.trim().toUpperCase().includes(inc.toUpperCase()));
+        if(found) return found;
+      }
+      return null;
+    }
+
+    const selbColOrig = findCol(SELB_PRIORITY, ['SELB','COD']);
+    const nomeColOrig = findCol(NOME_PRIORITY, ['PRODUTO','MODELO','EQUIP','NOME','NAME']);
+
+    if(!selbColOrig || !nomeColOrig){
+      hideLoader();
+      alert(
+        'Colunas não encontradas automaticamente.\n\n' +
+        'Colunas detectadas na planilha:\n' + allHeaders.join(', ') + '\n\n' +
+        'A planilha precisa ter:\n' +
+        '  • Coluna SELB  (encontrado: ' + (selbColOrig||'NÃO ENCONTRADO') + ')\n' +
+        '  • Coluna Produto / Modelo  (encontrado: ' + (nomeColOrig||'NÃO ENCONTRADO') + ')'
+      );
+      return;
+    }
+
+    let count = 0;
+    const batch = {};
+    rows.forEach(row => {
+      const selb = String(row[selbColOrig]||'').trim().toUpperCase();
+      const nome = String(row[nomeColOrig]||'').trim();
+      if(selb && nome){ batch[selb] = nome; count++; }
+    });
+
+    if(!count){
+      hideLoader();
+      alert('Nenhuma linha válida encontrada.\nVerifique se as colunas "' + selbColOrig + '" e "' + nomeColOrig + '" têm dados.');
+      return;
+    }
+
+    // Substitui só a tabela exclusiva de Máquina A — não encosta em `equipamentos`.
+    await _supa.from('maquinas_a_equipamentos').delete().neq('id', '___never___');
+    const rowsToSave = Object.entries(batch).map(([id, nome]) => ({ id, raw: { nome: String(nome) } }));
+    await _supa.from('maquinas_a_equipamentos').upsert(rowsToSave);
+    _maquinasAEquip = {...batch};
+
+    hideLoader();
+    input.value = '';
+    alert('✅ ' + count + ' equipamentos importados para uso exclusivo em Máquina A!\n\nColuna SELB: "' + selbColOrig + '"\nColuna Modelo: "' + nomeColOrig + '"\n\nEssa planilha só é usada para autopreencher o nome ao registrar uma Máquina A — não afeta a aba Equipamentos nem outras partes do sistema.');
+  } catch(e){
+    hideLoader();
+    showError('Erro ao importar: ' + e.message);
+  }
+}
+
+async function limparMaquinaAEquipImport(){
+  if(!currentUser || !currentUser.isAdmin){
+    alert('Apenas o administrador pode limpar a planilha de Máquina A.');
+    return;
+  }
+  if(!confirm('Remover a planilha exclusiva de Máquina A?\n\nA aba Equipamentos não é afetada — ao registrar uma Máquina A, o sistema volta a usar só a aba Equipamentos como fonte.')) return;
+  try {
+    showLoader('Limpando planilha...');
+    await _supa.from('maquinas_a_equipamentos').delete().neq('id', '___never___');
+    _maquinasAEquip = {};
+    hideLoader();
+    alert('✅ Planilha exclusiva de Máquina A removida.');
+  } catch(e){
+    hideLoader();
+    showError('Erro ao limpar: ' + e.message);
+  }
+}
+
 function getEquipName(selbCode){
   if(!selbCode) return null;
   const upper = selbCode.toUpperCase().trim();
@@ -12429,7 +12610,7 @@ function maquinaAAutoPreencherEquip(selb) {
     return;
   }
 
-  const modelo = (typeof getEquipName === 'function') ? getEquipName(selb) : null;
+  const modelo = (typeof getMaquinaAEquipName === 'function') ? getMaquinaAEquipName(selb) : null;
 
   if (modelo) {
     if (equipInput) equipInput.value = modelo;
@@ -12456,14 +12637,18 @@ function maquinaABuscarSugestoes(query){
   const box = document.getElementById('ma-suggestions');
   if(!box) return;
   const q = (query || '').trim().toUpperCase();
-  if(q.length < 2 || typeof equipamentos === 'undefined'){
+  if(q.length < 2){
     box.classList.add('hidden');
     box.innerHTML = '';
     return;
   }
+  // Combina as duas fontes só aqui, na hora de sugerir — a planilha exclusiva
+  // de Máquina A tem prioridade sobre a aba Equipamentos quando o mesmo SELB
+  // existir nas duas (mas nenhuma delas é alterada por essa busca).
+  const merged = Object.assign({}, (typeof equipamentos === 'object' ? equipamentos : {}), _maquinasAEquip);
   const results = [];
-  for(const code in equipamentos){
-    const modelo = equipamentos[code];
+  for(const code in merged){
+    const modelo = merged[code];
     if(code.toUpperCase().includes(q) || (modelo && modelo.toUpperCase().includes(q))){
       results.push({ code, modelo });
       if(results.length >= 8) break;
@@ -12585,6 +12770,7 @@ function renderMaquinasAView(){
 
   const btnAdd = document.getElementById('btn-add-maquina-a');
   if(btnAdd) btnAdd.style.display = podeRegistrarMaquinaA ? '' : 'none';
+  toggleMaquinaAImportUI(isAdmin);
 
   const q = (document.getElementById('maquinas-a-search')?.value || '').toUpperCase().trim();
 
@@ -13179,10 +13365,7 @@ const ALERT_SECTORS = new Set(['COMPLEXA','MONTAGEM','LIMPEZA']);
     }
     
     // Limpa listeners do shim de compatibilidade
-    if (_usersListener) {
-      _db.ref('/users').off('value', _usersListener);
-      _usersListener = null;
-    }
+    _stopUsersListener();
     if (_historyListener) {
       const dk = new Date().toDateString().replace(/ /g,'_');
       _db.ref('/history/'+dk).off('value', _historyListener);
@@ -17011,6 +17194,30 @@ function _fluxolabBolsaoInicioParaUsuario(u){
 }
 
 let _fluxolabData = {};
+// ── OTIMIZAÇÃO CONSUMO REALTIME: poll em vez de subscription ───────────
+// Emula .on('value') fazendo .once('value') em intervalo fixo, em vez de
+// abrir um canal Realtime (postgres_changes). Cada canal Realtime aberto
+// entrega 1 "mensagem" faturável por MUDANÇA x POR CLIENTE conectado —
+// em nós de alta frequência de escrita e muitos clientes abertos ao
+// mesmo tempo (ex.: /fluxolab, dashboard de /users) isso multiplica
+// rápido o consumo do plano. Trocar por polling custa apenas requests
+// REST normais (não contam nessa cota) ao preço de um atraso de
+// `intervalMs` para refletir mudanças de outros usuários — aceitável
+// para telas que não precisam ser 100% instantâneas.
+function pollRef(ref, intervalMs, cb, errCb) {
+  let stopped = false, inFlight = false;
+  async function tick() {
+    if (stopped || inFlight) return;
+    inFlight = true;
+    try { await ref.once('value', cb, errCb); }
+    catch (e) { if (errCb) errCb(e); }
+    finally { inFlight = false; }
+  }
+  tick();
+  const id = setInterval(tick, intervalMs);
+  return { off(){ stopped = true; clearInterval(id); } }; // compatível com off('value', X) chamando X.off()
+}
+
 let _fluxolabListener = null;
 
 // Retorna o timestamp (ts) de entrada do SELB no bolsão atual do FluxoLAB.
@@ -17037,7 +17244,11 @@ let _fmovQueue = [];   // array de { code, equip, bolsaoAtual }
 
 function fluxolabStartListener() {
   if (_fluxolabListener) return;
-  _fluxolabListener = _db.ref('/fluxolab').on('value', snap => {
+  // Antes: _db.ref('/fluxolab').on('value', ...) — canal Realtime aberto por
+  // TODO cliente conectado, e /fluxolab é reescrito a cada movimentação de
+  // SELB no chão de fábrica (alta frequência) → maior consumidor provável
+  // de Realtime Messages. Agora: atualiza a cada 4s via poll (delay OK).
+  _fluxolabListener = pollRef(_db.ref('/fluxolab'), 4000, snap => {
     _fluxolabData = snap.val() || {};
     _fluxolabScheduleSyncLiberados();
     const viewEl = document.getElementById('view-fluxolab');
@@ -17952,8 +18163,12 @@ function _fluxolabGetSelbsParaRemover(){
   Object.values(typeof _qualRegistros !== 'undefined' ? _qualRegistros : {}).forEach(r => {
     if(r && r.selb && r.etiqueta_impressa) removidos.add(String(r.selb).toUpperCase().trim());
   });
+  // FIX BUG: Limita _qualLiberadas somente ao DIA ATUAL.
+  // Registros de dias anteriores não devem remover SELBs ativos dos bolsões,
+  // pois o mesmo código SELB pode ser reaproveitado em dias diferentes.
+  const _hojeInicioTs = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
   Object.values(window._qualLiberadas || {}).forEach(r => {
-    if(r && r.selb) removidos.add(String(r.selb).toUpperCase().trim());
+    if(r && r.selb && (r.ts || 0) >= _hojeInicioTs) removidos.add(String(r.selb).toUpperCase().trim());
   });
   return removidos;
 }
@@ -23915,7 +24130,7 @@ function exportLinhaProdCSV(){
   // Navegação permitida: abas principais, sub-abas, sub-sub-abas (FluxoLAB usa
   // botões com id="fluxolab-tab-*" e onclick="fluxolabSwitchTab(...)"), além
   // de logout e elementos marcados com data-ro-allow.
-  const NAV_SELECTOR = '.tab, .stab, .subtab, .logout-btn, [id^="fluxolab-tab-"], [data-ro-allow], [data-ro-allow] *';
+  const NAV_SELECTOR = '.tab, .stab, .subtab, .logout-btn, button[id^="fluxolab-tab-"], [data-ro-allow], [data-ro-allow] *, input:not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]):not(#fluxolab-tab-planejamento-panel *):not(#fluxolab-tab-pendencias-panel *), select:not(#fluxolab-tab-planejamento-panel *):not(#fluxolab-tab-pendencias-panel *), textarea:not(#fluxolab-tab-planejamento-panel *):not(#fluxolab-tab-pendencias-panel *)';
   // Padrões de onclick que representam apenas troca de aba/filtro (leitura)
   const NAV_ONCLICK_RE = /^\s*(setView|setSector|setCFilter|setQualFilter|setAdmFilter|setRelFilter|setScrapFilter|fluxolabSwitchTab|switchTab|showTab|openTab)\s*\(/;
   function isAllowed(target){
@@ -23963,10 +24178,14 @@ function exportLinhaProdCSV(){
   const _hardenInputs = () => {
     if(!isReadOnlyUser()) return;
     document.querySelectorAll('input, textarea, select').forEach(el => {
-      if(el.closest('[data-ro-allow]')) return;
+      if(el.closest(NAV_SELECTOR)) return;
       try {
-        if(el.tagName === 'SELECT') el.setAttribute('disabled','disabled');
-        else el.setAttribute('readonly','readonly');
+        const t = el.type ? el.type.toLowerCase() : '';
+        if(el.tagName === 'SELECT' || t === 'file' || t === 'checkbox' || t === 'radio') {
+          el.setAttribute('disabled','disabled');
+        } else {
+          el.setAttribute('readonly','readonly');
+        }
         el.setAttribute('tabindex','-1');
       } catch(_){}
     });

@@ -82,6 +82,23 @@ body.ro-visu-fluxolab input[type=radio] {
   cursor: not-allowed !important;
   opacity: .55 !important;
 }
+body.ro-visu-fluxolab #fluxolab-tab-checklists {
+  display: none !important;
+}
+body.ro-visu-fluxolab #view-fluxolab #busca-selb-box {
+  display: none !important;
+}
+body.ro-visu-fluxolab #fluxolab-tab-planejamento-panel input,
+body.ro-visu-fluxolab #fluxolab-tab-planejamento-panel textarea,
+body.ro-visu-fluxolab #fluxolab-tab-planejamento-panel select,
+body.ro-visu-fluxolab #fluxolab-tab-planejamento-panel button,
+body.ro-visu-fluxolab #fluxolab-tab-pendencias-panel input,
+body.ro-visu-fluxolab #fluxolab-tab-pendencias-panel textarea,
+body.ro-visu-fluxolab #fluxolab-tab-pendencias-panel select,
+body.ro-visu-fluxolab #fluxolab-tab-pendencias-panel button {
+  pointer-events: none !important;
+  opacity: 0.55 !important;
+}
 </style>
 </head>
 <body>
@@ -1985,6 +2002,11 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           <button onclick="renderMaquinasAView()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--muted);font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">🔄 Atualizar</button>
           <button onclick="abrirModalLogsPecas()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--text);font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">📝 Logs</button>
           <button id="btn-bipar-maquinas-a" onclick="abrirModalBiparMaquinasA()" style="background:rgba(16,185,129,.18);border:1px solid rgba(16,185,129,.5);border-radius:9px;color:#10b981;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">📥 Bipar SELBs (Pietro)</button>
+          <label id="maquinaa-import-label" title="Planilha usada só para preencher o nome do equipamento ao registrar Máquina A — não altera a aba Equipamentos" style="display:none;background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">
+            📄 Importar Planilha (Máquina A)
+            <input type="file" id="maquinaa-equip-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importMaquinaAEquipFile(this)">
+          </label>
+          <button id="maquinaa-import-clear-btn" onclick="limparMaquinaAEquipImport()" title="Remove a planilha importada exclusiva de Máquina A" style="display:none;background:rgba(242,87,87,.1);border:1px solid rgba(242,87,87,.35);border-radius:9px;color:var(--danger);font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">🗑️ Limpar Planilha</button>
           <button id="btn-add-maquina-a" onclick="abrirModalAdicionarMaquinaA()" style="background:rgba(79,142,247,.15);border:1px solid rgba(79,142,247,.4);border-radius:9px;color:var(--accent);font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer;display:none">+ Registrar Máquina A</button>
         </div>
       </div>

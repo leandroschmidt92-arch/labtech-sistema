@@ -136,6 +136,7 @@ function createSupabaseCompatShim(supa) {
       { key: blobKey, data: obj, updated_at: new Date().toISOString() },
       { onConflict: 'key' }
     );
+    pubBlob(blobKey, obj);
   }
   function getIn(obj, p) { let c = obj; for (const k of p) { if (c == null) return undefined; c = c[k]; } return c; }
   function setIn(obj, p, val) {
@@ -198,12 +199,14 @@ function createSupabaseCompatShim(supa) {
       if (dateKey) q = q.eq('date_key', dateKey);
       const { error } = await q;
       if (error) throw error;
+      pubRow(cfg.table, id, dateKey, 'del');
       return;
     }
     const row = { id, raw: value, ...mirrorCols(cfg.table, value) };
     if (dateKey) row.date_key = dateKey;
     const { error } = await supa.from(cfg.table).upsert(row, { onConflict: 'id' });
     if (error) throw error;
+    pubRow(cfg.table, id, dateKey, 'set', { raw: value });
   }
 
   async function rowsSet(cfg, p, value) {
@@ -217,6 +220,7 @@ function createSupabaseCompatShim(supa) {
     if (!entries.length) return;
     const rows = entries.map(([cid, v]) => ({ id: cid, raw: v, ...(dateKey ? { date_key: dateKey } : {}), ...mirrorCols(cfg.table, v) }));
     await supa.from(cfg.table).upsert(rows, { onConflict: 'id' });
+    pubRowsReload(cfg.table, dateKey);
   }
 
   // OTIMIZAÇÃO E: coalescing de patches concorrentes por (tabela,id).
@@ -247,6 +251,7 @@ function createSupabaseCompatShim(supa) {
         // Não relança: sob 504/timeout, o próximo save reenvia o estado.
         console.warn('[shim] rowsUpdate falhou (patch descartado, próximo save reenvia):', cfg.table, id, error.message || error);
       }
+      else pubRow(cfg.table, id, dateKey, 'patch', { patch: merged });
       resolvers.forEach(r => r());
     }).catch(err => {
       console.warn('[shim] rowsUpdate exceção:', cfg.table, id, err && err.message || err);
@@ -286,6 +291,7 @@ function createSupabaseCompatShim(supa) {
     q = dateKey ? q.eq('date_key', dateKey) : q.neq('id', '___never___');
     const { error } = await q;
     if (error) throw error;
+    pubRowsReload(cfg.table, dateKey);
   }
 
   async function rowsPush(cfg, p, key, value) {
@@ -297,6 +303,165 @@ function createSupabaseCompatShim(supa) {
   // ── Listener registry (para suportar .off) ──────────────────────────
   let _listenerSeq = 0;
   const _listeners = new Map();
+
+  // ══════════════════════════════════════════════════════════════════
+  // OTIMIZAÇÃO D: BUS DE BROADCAST (substitui postgres_changes)
+  // ------------------------------------------------------------------
+  // postgres_changes entrega TODA escrita da tabela para TODO cliente
+  // com o canal aberto — o custo é (escritas × clientes) e não dá para
+  // filtrar de verdade nas raízes sem coluna de filtro (operadores,
+  // history sem date_key, logs...).
+  //
+  // Como 100% das escritas passam por este shim, publicamos o delta
+  // num ÚNICO canal de broadcast por cliente ('shim_bus'). Resultado:
+  //  • 1 canal Realtime por sessão (em vez de 6-8 multiplexados / 18-20 antes);
+  //  • mensagens só em escrita real, com o delta já pronto (sem refetch);
+  //  • fan-out local imediato para os listeners da própria aba.
+  //
+  // Rede de segurança para escritas fora do app (SQL editor, jobs):
+  // reconciliação periódica (RECONCILE_MS) e ao voltar do modo pausado.
+  // Para voltar ao modo antigo: USE_PG_CHANGES = true.
+  // ══════════════════════════════════════════════════════════════════
+  const USE_PG_CHANGES = false;
+  const BUS_TOPIC = 'shim_bus';
+  const RECONCILE_MS = 90000;
+  const BLOB_BROADCAST_MAX = 120000; // acima disso manda "reload" em vez do JSON
+
+  let _bus = null;
+  const _busHandlers = new Set();
+
+  function _busEnsure() {
+    if (_bus) return _bus;
+    _bus = supa.channel(BUS_TOPIC, { config: { broadcast: { self: false, ack: false } } })
+      .on('broadcast', { event: 'mut' }, (msg) => _busDispatch(msg && msg.payload))
+      .subscribe();
+    return _bus;
+  }
+
+  function _busDispatch(ev) {
+    if (!ev) return;
+    _busHandlers.forEach((h) => {
+      try { h(ev); } catch (e) { console.warn('[shim] bus handler erro:', e); }
+    });
+  }
+
+  function busPublish(ev) {
+    _busDispatch(ev); // fan-out local (broadcast self:false não volta pra origem)
+    if (USE_PG_CHANGES) return;
+    try { _busEnsure().send({ type: 'broadcast', event: 'mut', payload: ev }); }
+    catch (e) { console.warn('[shim] bus publish falhou:', e); }
+  }
+
+  function pubRow(table, id, dateKey, op, extra) {
+    busPublish(Object.assign({ k: 'row', t: table, id: id, dk: dateKey || null, op: op }, extra || {}));
+  }
+  function pubRowsReload(table, dateKey) {
+    busPublish({ k: 'rows-reload', t: table, dk: dateKey || null });
+  }
+  function pubBlob(blobKey, data) {
+    let payload;
+    try { payload = JSON.stringify(data || {}); } catch (e) { payload = null; }
+    if (payload && payload.length <= BLOB_BROADCAST_MAX) busPublish({ k: 'blob', key: blobKey, data: data || {} });
+    else busPublish({ k: 'blob-reload', key: blobKey });
+  }
+
+  function busSubscribe(handler, resync) {
+    _busEnsure();
+    _busHandlers.add(handler);
+    if (resync) _resyncs.add(resync);
+    const timer = setInterval(() => { if (!_paused && resync) resync(); }, RECONCILE_MS);
+    return {
+      release() {
+        _busHandlers.delete(handler);
+        if (resync) _resyncs.delete(resync);
+        clearInterval(timer);
+        if (_busHandlers.size === 0 && _bus) { supa.removeChannel(_bus); _bus = null; }
+      },
+    };
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // OTIMIZAÇÃO C: MULTIPLEXAÇÃO DE CANAIS REALTIME
+  // ------------------------------------------------------------------
+  // Antes: cada .ref().on('value') abria UM canal próprio (~18-20 por
+  // sessão). Agora, todas as assinaturas que apontam para a mesma
+  // (tabela + filtro) compartilham UM ÚNICO canal. O fan-out passa a
+  // ser feito localmente, em memória.
+  //
+  // Também pausa TODOS os canais quando a aba fica oculta por mais de
+  // PAUSE_AFTER_MS, e re-sincroniza (refetch) ao voltar.
+  // ══════════════════════════════════════════════════════════════════
+  const _subs = new Map(); // subKey -> { pgFilter, handlers:Set, channel }
+  const _resyncs = new Set(); // fns chamadas ao retomar do modo pausado
+  let _paused = false;
+
+  function _openChannel(entry, subKey) {
+    if (entry.channel) return;
+    entry.channel = supa.channel('shim_mux_' + subKey + '_' + (++_listenerSeq))
+      .on('postgres_changes', entry.pgFilter, (payload) => {
+        entry.handlers.forEach((h) => {
+          try { h(payload); } catch (e) { console.warn('[shim] handler erro:', e); }
+        });
+      })
+      .subscribe();
+  }
+
+  function sharedSubscribe(pgFilter, handler, resync) {
+    const subKey = [pgFilter.table, pgFilter.filter || '*'].join('|');
+    let entry = _subs.get(subKey);
+    if (!entry) {
+      entry = { pgFilter, handlers: new Set(), channel: null };
+      _subs.set(subKey, entry);
+    }
+    entry.handlers.add(handler);
+    if (resync) _resyncs.add(resync);
+    if (!_paused) _openChannel(entry, subKey);
+
+    return {
+      release() {
+        entry.handlers.delete(handler);
+        if (resync) _resyncs.delete(resync);
+        if (entry.handlers.size === 0) {
+          if (entry.channel) supa.removeChannel(entry.channel);
+          _subs.delete(subKey);
+        }
+      },
+    };
+  }
+
+  // ── Pausa quando a aba fica oculta (economiza mensagens por cliente) ──
+  const PAUSE_AFTER_MS = 60000;
+  let _pauseTimer = null;
+
+  function _pauseAll() {
+    if (_paused) return;
+    _paused = true;
+    _subs.forEach((entry) => {
+      if (entry.channel) { supa.removeChannel(entry.channel); entry.channel = null; }
+    });
+    if (_bus) { supa.removeChannel(_bus); _bus = null; }
+  }
+  function _resumeAll() {
+    if (!_paused) return;
+    _paused = false;
+    _blobCache.clear();
+    _subs.forEach((entry, subKey) => _openChannel(entry, subKey));
+    if (_busHandlers.size) _busEnsure();
+    _resyncs.forEach((fn) => { try { fn(); } catch (e) {} });
+  }
+
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        clearTimeout(_pauseTimer);
+        _pauseTimer = setTimeout(_pauseAll, PAUSE_AFTER_MS);
+      } else {
+        clearTimeout(_pauseTimer);
+        _resumeAll();
+      }
+    });
+  }
+
 
   // OTIMIZAÇÃO A: em vez de refazer SELECT * a cada evento, aplicamos o
   // delta do payload Realtime no cache local. Reduz drasticamente o
@@ -310,8 +475,6 @@ function createSupabaseCompatShim(supa) {
       cache = isCollection ? (v || {}) : v;
       cb(makeSnapshot(cache));
     }).catch(err => console.warn('[shim] initial load falhou:', cfg.table, err));
-
-    const chanName = 'shim_' + cfg.table + '_' + (dateKey || 'all') + '_' + (isCollection ? 'coll' : id) + '_' + (++_listenerSeq);
 
     // Filtro server-side: se assinatura é de um único registro, filtra por id
     // (reduz eventos entregues ao cliente).
@@ -336,7 +499,7 @@ function createSupabaseCompatShim(supa) {
       return filters.every(f => raw[f.field] === f.value);
     };
 
-    const channel = supa.channel(chanName).on('postgres_changes', pgFilter, (payload) => {
+    const onPayload = (payload) => {
       try {
         if (isCollection) {
           if (cache == null) cache = {};
@@ -362,8 +525,53 @@ function createSupabaseCompatShim(supa) {
           cb(makeSnapshot(cache));
         }
       } catch(e) { console.warn('[shim] delta apply erro:', e); }
-    }).subscribe();
-    return channel;
+    };
+
+    const resync = () => {
+      rowsGet(cfg, p, filters).then(v => {
+        cache = isCollection ? (v || {}) : v;
+        cb(makeSnapshot(cache));
+      }).catch(() => {});
+    };
+
+    // Bus: aplica o delta publicado pelo autor da escrita, sem refetch.
+    const relevant = (ev) =>
+      ev.t === cfg.table &&
+      (dateKey ? ev.dk === dateKey : true) &&
+      (isCollection ? true : ev.id === id);
+
+    const onBus = (ev) => {
+      try {
+        if (ev.k === 'rows-reload') {
+          if (ev.t === cfg.table && (!dateKey || ev.dk === dateKey)) resync();
+          return;
+        }
+        if (ev.k !== 'row' || !relevant(ev)) return;
+        if (isCollection) {
+          if (cache == null) cache = {};
+          if (ev.op === 'del') {
+            if (cache[ev.id] !== undefined) { delete cache[ev.id]; cb(makeSnapshot(cache)); }
+            return;
+          }
+          const raw = ev.op === 'patch'
+            ? Object.assign({}, cache[ev.id] || {}, ev.patch)
+            : ev.raw;
+          if (!passesFilters(raw)) {
+            if (cache[ev.id] !== undefined) { delete cache[ev.id]; cb(makeSnapshot(cache)); }
+            return;
+          }
+          cache[ev.id] = raw;
+          cb(makeSnapshot(cache));
+        } else {
+          if (ev.op === 'del') { cache = null; cb(makeSnapshot(null)); return; }
+          cache = ev.op === 'patch' ? Object.assign({}, cache || {}, ev.patch) : ev.raw;
+          cb(makeSnapshot(cache));
+        }
+      } catch (e) { console.warn('[shim] bus delta erro:', e); }
+    };
+
+    if (USE_PG_CHANGES) return sharedSubscribe(pgFilter, onPayload, resync);
+    return busSubscribe(onBus, resync);
   }
 
   // Para blob (JSON inteiro em fluxolab_state) o payload NEW já traz o JSON
@@ -373,9 +581,7 @@ function createSupabaseCompatShim(supa) {
     _blobCacheMarkSub(cfg.blobKey);
     const emit = (blob) => cb(makeSnapshot(bp.length ? getIn(blob, bp) : blob));
     blobLoad(cfg.blobKey).then(emit).catch(err => console.warn('[shim] blob load falhou:', cfg.blobKey, err));
-    const chanName = 'shim_blob_' + cfg.blobKey + '_' + (++_listenerSeq);
-    const channel = supa.channel(chanName)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'fluxolab_state', filter: 'key=eq.' + cfg.blobKey }, (payload) => {
+    const onPayload = (payload) => {
         try {
           if (payload.eventType === 'DELETE') {
             _blobCacheSet(cfg.blobKey, {}, { hasSub: true });
@@ -385,9 +591,34 @@ function createSupabaseCompatShim(supa) {
           _blobCacheSet(cfg.blobKey, blob, { hasSub: true });
           emit(blob);
         } catch(e) { console.warn('[shim] blob delta erro:', e); }
-      })
-      .subscribe();
-    return channel;
+    };
+
+    const resync = () => {
+      _blobCache.delete(cfg.blobKey);           // força releitura real
+      blobLoad(cfg.blobKey).then((b) => {
+        _blobCacheSet(cfg.blobKey, b, { hasSub: true });
+        emit(b);
+      }).catch(() => {});
+    };
+
+    const onBus = (ev) => {
+      if (!ev || ev.key !== cfg.blobKey) return;
+      if (ev.k === 'blob') {
+        _blobCacheSet(cfg.blobKey, ev.data || {}, { hasSub: true });
+        emit(ev.data || {});
+      } else if (ev.k === 'blob-reload') {
+        resync();
+      }
+    };
+
+    if (USE_PG_CHANGES) {
+      return sharedSubscribe(
+        { event: '*', schema: 'public', table: 'fluxolab_state', filter: 'key=eq.' + cfg.blobKey },
+        onPayload,
+        resync,
+      );
+    }
+    return busSubscribe(onBus, resync);
   }
 
   // ── Objeto "ref" ──────────────────────────────────────────────────
@@ -444,6 +675,14 @@ function createSupabaseCompatShim(supa) {
             p_patch: patch,
           });
           if (error) throw error;
+          // O RPC muda o JSON dentro do Postgres: recarrega uma vez (só no
+          // autor da escrita) e publica o blob já consolidado no bus.
+          _blobCache.delete(cfg.blobKey);
+          try {
+            const fresh = await blobLoad(cfg.blobKey);
+            _blobCacheSet(cfg.blobKey, fresh, { hasSub: true });
+            pubBlob(cfg.blobKey, fresh);
+          } catch (e) { busPublish({ k: 'blob-reload', key: cfg.blobKey }); }
           return;
         }
         return rowsUpdate(cfg, p, patch);
@@ -501,14 +740,14 @@ function createSupabaseCompatShim(supa) {
       },
 
       on(_evt, cb) {
-        const channel = cfg.mode === 'blob' ? blobSubscribe(cfg, p, cb) : rowsSubscribe(cfg, p, cb, _filters);
-        _listeners.set(cb, channel);
+        const token = cfg.mode === 'blob' ? blobSubscribe(cfg, p, cb) : rowsSubscribe(cfg, p, cb, _filters);
+        _listeners.set(cb, token);
         return cb;
       },
 
       off(_evt, cb) {
-        const channel = _listeners.get(cb);
-        if (channel) { supa.removeChannel(channel); _listeners.delete(cb); }
+        const token = _listeners.get(cb);
+        if (token) { token.release(); _listeners.delete(cb); }
       },
 
       orderByChild(field) { _pendingField = field; return self; },
@@ -542,5 +781,14 @@ function createSupabaseCompatShim(supa) {
     return self;
   }
 
-  return { ref };
+  return {
+    ref,
+    // Diagnóstico: quantos canais Realtime estão realmente abertos.
+    _debugChannels() {
+      return { modo: USE_PG_CHANGES ? 'postgres_changes' : 'broadcast-bus',
+        bus: _bus ? 1 : 0, ouvintesBus: _busHandlers.size,
+        canais: (_bus ? 1 : 0) + _subs.size, pausado: _paused,
+        detalhe: Array.from(_subs.entries()).map(([k, v]) => ({ key: k, ouvintes: v.handlers.size })) };
+    },
+  };
 }
