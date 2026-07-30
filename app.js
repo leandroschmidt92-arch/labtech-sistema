@@ -983,6 +983,7 @@ async function dbDeleteUser(id){
     { table: 'logs_pecas',          col: 'uid' },
     { table: 'fluxolab_log',        col: 'uid' },
     { table: 'history',             col: 'uid' },
+    { table: 'operator_checkins',   col: 'uid' },
   ];
   for(const { table, col } of _nullifyTables){
     try {
@@ -1573,6 +1574,31 @@ function setPinLoading(isLoading){
 
 function pinKey(d){ if(pv.length<5){ pv+=d; updPD(); } }
 function pinDel(){ pv=pv.slice(0,-1); updPD(); document.getElementById('pin-error').textContent=''; }
+// ── Check-in do dia — presença real de "Gestão de Equipe" ────────────────────
+// Antes, "presença" no painel de Saúde da Equipe era inferida a partir de
+// registros de produção concluídos no dia (tabela history/qualidade_registros).
+// Isso falha p.ex. na Complexa, onde um equipamento pode levar mais de 1 dia:
+// o operador trabalha nele na segunda mas só conclui na terça, e a segunda
+// fica sem nenhum registro — como se ele não tivesse vindo.
+// Agora: login por PIN validado no servidor = presença registrada naquele dia,
+// independente de ter concluído algo. Um upsert idempotente por (uid, date_key)
+// garante que múltiplos logins no mesmo dia contem como 1 presença só.
+async function registrarCheckinDoDia(u){
+  if(!u || !u.id) return;
+  try {
+    const dateKey = new Date().toDateString().replace(/ /g,'_');
+    const { error } = await _supaAuthed().rpc('record_checkin', {
+      p_uid:      String(u.id),
+      p_name:     u.name   || '',
+      p_sector:   u.sector || '',
+      p_date_key: dateKey,
+    });
+    if(error) console.warn('[Checkin] Falha ao registrar check-in do dia:', error);
+  } catch(e) {
+    console.warn('[Checkin] Erro ao registrar check-in:', e);
+  }
+}
+
 // ── pinEnter: autenticação real via Edge Function ────────────────────────────
 // O PIN digitado vai para o servidor — nunca mais comparado no cliente.
 // O servidor verifica, emite um token de sessão Supabase Auth e retorna
@@ -1636,6 +1662,9 @@ async function pinEnter(){
       sector:  data.operator.sector,
       isAdmin: data.operator.isAdmin,
     });
+    // Registra o check-in do dia (presença = logou com o PIN hoje).
+    // Não bloqueia o login: dispara em background e só loga falha no console.
+    registrarCheckinDoDia({ id: data.operator.id, name: data.operator.name, sector: data.operator.sector });
     pv=''; updPD();
 
   } catch(e) {
@@ -1712,6 +1741,9 @@ function loginAs(u){
     const _tts = document.getElementById('tab-tempo-selb');
     if(_tts) _tts.style.display = 'none';
   }
+  // Reorganiza abas principais x menu lateral (☰) já com as permissões
+  // do setor aplicadas acima, pra não mostrar/esconder nada errado.
+  loadTabsConfig();
 
 
   if(isQual)              activeSector='MONTAGEM';
@@ -6894,69 +6926,71 @@ function copiarSelbs(){
 
 // ════ ADMIN ════
 // ── Gestão de Equipe — Saúde da Equipe ──
+// Presença = check-in por PIN naquele dia (tabela operator_checkins), para
+// hoje e para datas passadas igualmente. Não depende mais de registro de
+// produção concluído (ver registrarCheckinDoDia() para o motivo da mudança).
 async function loadTeamHealthHistory() {
   let datePicker = document.getElementById('team-health-date');
   const todayISO = new Date().toISOString().slice(0,10);
 
   // Se o painel ainda não foi renderizado (datePicker não existe),
   // renderiza primeiro com data de hoje e sem produção para criar o DOM,
-  // depois busca a produção e re-renderiza.
+  // depois busca os dados e re-renderiza.
   if (!datePicker) {
-    renderTeamHealth(todayISO, null, null);
+    renderTeamHealth(todayISO, null, null, false);
     datePicker = document.getElementById('team-health-date');
     if (!datePicker) return; // painel não existe no DOM — aba admin não está ativa
   }
 
   const dateVal = datePicker.value || todayISO;
 
-  if (dateVal === todayISO) {
-    // Hoje: usa o estado em tempo real e produção via Supabase (dateKey do dia)
-    const todayDk = new Date().toDateString().replace(/ /g,'_');
-    let totalDia = 0;
-    try {
-      const { data: _qd } = await _supaAuthed().from('qualidade_registros').select('id').eq('date_key', todayDk);
-      if (_qd) totalDia = _qd.length;
-    } catch(e) {
-      // fallback: conta pelo cache local
-      totalDia = Object.values(_qualRegistros || {}).filter(r => {
-        const dk = r.dateKey || (r.ts ? new Date(r.ts).toDateString().replace(/ /g,'_') : '');
-        return dk === todayDk;
-      }).length;
-    }
-    renderTeamHealth(dateVal, null, totalDia);
-    return;
-  }
-  
-  // Data passada: carrega history e qualidade
   datePicker.disabled = true;
   const origColor = datePicker.style.color;
   datePicker.style.color = 'var(--muted)';
-  
+
   try {
     const dObj = new Date(dateVal + 'T00:00:00');
     const dateKey = dObj.toDateString().replace(/ /g,'_');
-    const dateStr = dObj.toLocaleDateString('pt-BR');
-    
-    // Busca historico
-    const histData = await dbGet('/history/' + dateKey);
-    const customActiveUids = new Set();
-    if (histData) {
-      Object.values(histData).forEach(r => {
-        if (r.uid) customActiveUids.add(String(r.uid));
-      });
+
+    // Check-ins do dia selecionado — fonte única de presença.
+    let checkinUids = new Set();
+    let noDataAtAll = false;
+    try {
+      const { data: _ci, error: _ciErr } = await _supaAuthed()
+        .from('operator_checkins')
+        .select('uid')
+        .eq('date_key', dateKey);
+      if (_ciErr) throw _ciErr;
+      checkinUids = new Set((_ci || []).map(r => String(r.uid)));
+
+      // Se não há nenhum check-in nessa data, precisa distinguir:
+      // "ninguém veio nesse dia" (ex: feriado) vs "esse recurso ainda não
+      // existia quando essa data aconteceu". Só no segundo caso mostramos
+      // o aviso de "sem dados" em vez de 0% para todo mundo.
+      if (checkinUids.size === 0) {
+        const { data: _anyCi } = await _supaAuthed()
+          .from('operator_checkins')
+          .select('uid')
+          .limit(1);
+        noDataAtAll = !_anyCi || _anyCi.length === 0;
+      }
+    } catch(e) {
+      console.warn('[TeamHealth] Erro ao buscar check-ins:', e);
+      noDataAtAll = true; // não foi possível confirmar presença — não afirmar 0%
     }
-    
-    // Busca produção da qualidade (Supabase)
+
+    // Produção do dia (Supabase) — mantido só como indicador informativo,
+    // não define mais quem estava presente.
     let prodCount = 0;
     try {
       const { data, error } = await _supa.from('qualidade_registros').select('id').eq('date_key', dateKey);
       if (!error && data) prodCount = data.length;
     } catch(e) { console.warn('Erro ao buscar produção:', e); }
-    
-    renderTeamHealth(dateVal, customActiveUids, prodCount);
+
+    renderTeamHealth(dateVal, checkinUids, prodCount, noDataAtAll);
   } catch(e) {
     console.warn('Erro no histórico da equipe:', e);
-    renderTeamHealth(dateVal, new Set(), 0);
+    renderTeamHealth(dateVal, new Set(), 0, true);
   } finally {
     const d2 = document.getElementById('team-health-date');
     if(d2) { d2.disabled = false; d2.style.color = origColor; }
@@ -6974,8 +7008,9 @@ function _toggleTeamHealth(el){
   el.querySelector('.th-hint') && (el.querySelector('.th-hint').textContent = 'Clique para ' + (isNowCollapsed ? 'recolher' : 'expandir') + ' • Desmembramento, Montagem, Limpeza, Complexa, Qualidade, Eletrônica');
 }
 
-function renderTeamHealth(dateVal, customActiveUids, prodCount){
-  dateVal = dateVal || null; customActiveUids = customActiveUids || null; prodCount = (prodCount !== undefined ? prodCount : null);
+function renderTeamHealth(dateVal, checkinUids, prodCount, noDataAtAll){
+  dateVal = dateVal || null; checkinUids = checkinUids || new Set(); prodCount = (prodCount !== undefined ? prodCount : null);
+  noDataAtAll = !!noDataAtAll;
   const container = document.getElementById('admin-team-health-panel');
   if(!container) return;
   var wasCollapsed = container.dataset.collapsed === '1';
@@ -7002,15 +7037,11 @@ function renderTeamHealth(dateVal, customActiveUids, prodCount){
     });
 
     var total = secUsers.length;
-    var activeUsers, inactiveUsers;
-
-    if (customActiveUids) {
-      activeUsers = secUsers.filter(function(u){ return customActiveUids.has(String(u.id)) && !u.hidden; });
-      inactiveUsers = secUsers.filter(function(u){ return !customActiveUids.has(String(u.id)) && !u.hidden; });
-    } else {
-      activeUsers = secUsers.filter(function(u){ return u.active && !u.hidden; });
-      inactiveUsers = secUsers.filter(function(u){ return !u.active || u.hidden; });
-    }
+    // Presença = fez check-in por PIN nessa data (não é mais o toggle
+    // manual Ativo/Inativo do cadastro, que só controla se a conta pode
+    // logar — coisas diferentes).
+    var activeUsers = secUsers.filter(function(u){ return checkinUids.has(String(u.id)) && !u.hidden; });
+    var inactiveUsers = secUsers.filter(function(u){ return !checkinUids.has(String(u.id)) && !u.hidden; });
     
     var activeCount = activeUsers.length;
     var inactiveCount = inactiveUsers.length;
@@ -7026,7 +7057,7 @@ function renderTeamHealth(dateVal, customActiveUids, prodCount){
 
     var activeListText = activeUsers.length > 0
       ? activeUsers.map(function(u){ return '<span style="display:inline-flex;align-items:center;gap:3px;background:rgba(74,222,128,0.14);border:1px solid rgba(74,222,128,0.35);color:#4ade80;font-size:9px;font-weight:700;padding:2px 6px;border-radius:5px;margin:1px"><span style="width:5px;height:5px;border-radius:50%;background:#4ade80;display:inline-block"></span>'+u.name+'</span>'; }).join('')
-      : '<span style="font-size:9px;color:var(--muted);font-style:italic;padding:4px">Nenhum ativo</span>';
+      : '<span style="font-size:9px;color:var(--muted);font-style:italic;padding:4px">Ninguém presente</span>';
 
     var inactiveListText = inactiveUsers.length > 0
       ? inactiveUsers.map(function(u){ return '<span style="display:inline-flex;align-items:center;gap:3px;background:rgba(242,87,87,0.14);border:1px solid rgba(242,87,87,0.35);color:#f25757;font-size:9px;font-weight:700;padding:2px 6px;border-radius:5px;margin:1px;opacity:0.85"><span style="width:5px;height:5px;border-radius:50%;background:#f25757;display:inline-block"></span>'+u.name+'</span>'; }).join('')
@@ -7040,8 +7071,8 @@ function renderTeamHealth(dateVal, customActiveUids, prodCount){
       +'</div>'
       +'<div style="width:100%;height:5px;background:rgba(255,255,255,0.08);border-radius:10px;overflow:hidden"><div style="width:'+pct+'%;height:100%;background:'+healthColor+';border-radius:10px"></div></div>'
       +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;text-align:center">'
-        +'<div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:7px;padding:5px 2px"><div style="font-size:8px;font-weight:700;color:#4ade80;text-transform:uppercase">Ativos</div><div style="font-size:13px;font-weight:800;color:#4ade80;font-family:var(--mono)">'+activeCount+'</div></div>'
-        +'<div style="background:rgba(242,87,87,0.08);border:1px solid rgba(242,87,87,0.2);border-radius:7px;padding:5px 2px"><div style="font-size:8px;font-weight:700;color:#f25757;text-transform:uppercase">Inativos</div><div style="font-size:13px;font-weight:800;color:#f25757;font-family:var(--mono)">'+inactiveCount+'</div></div>'
+        +'<div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:7px;padding:5px 2px"><div style="font-size:8px;font-weight:700;color:#4ade80;text-transform:uppercase">Presentes</div><div style="font-size:13px;font-weight:800;color:#4ade80;font-family:var(--mono)">'+activeCount+'</div></div>'
+        +'<div style="background:rgba(242,87,87,0.08);border:1px solid rgba(242,87,87,0.2);border-radius:7px;padding:5px 2px"><div style="font-size:8px;font-weight:700;color:#f25757;text-transform:uppercase">Ausentes</div><div style="font-size:13px;font-weight:800;color:#f25757;font-family:var(--mono)">'+inactiveCount+'</div></div>'
         +'<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:7px;padding:5px 2px"><div style="font-size:8px;font-weight:700;color:var(--muted);text-transform:uppercase">Total</div><div style="font-size:13px;font-weight:800;color:var(--text);font-family:var(--mono)">'+total+'</div></div>'
       +'</div>'
       +'<div>'
@@ -7087,7 +7118,7 @@ function renderTeamHealth(dateVal, customActiveUids, prodCount){
         +'<div style="display:flex;align-items:center;gap:10px;background:var(--bg3);border:1px solid var(--border2);border-radius:10px;padding:6px 12px">'
           +'<div style="text-align:right">'
             +'<div style="font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Saúde Geral da Equipe</div>'
-            +'<div style="font-size:10px;color:var(--text);margin-top:2px"><span style="color:#4ade80;font-weight:800">'+overallActive+' ativos</span> de <b>'+overallTotal+'</b></div>'
+            +'<div style="font-size:10px;color:var(--text);margin-top:2px"><span style="color:#4ade80;font-weight:800">'+overallActive+' presentes</span> de <b>'+overallTotal+'</b></div>'
           +'</div>'
           +'<div style="font-size:18px;font-weight:900;color:'+overallColor+';font-family:var(--mono);line-height:1;background:rgba(0,0,0,0.25);border:1px solid '+overallColor+'44;padding:4px 10px;border-radius:8px;box-shadow:0 0 10px '+overallColor+'33">'+overallPct+'%</div>'
         +'</div>'
@@ -7107,6 +7138,12 @@ function renderTeamHealth(dateVal, customActiveUids, prodCount){
     +'</div>'
     // Corpo colapsável
     +'<div class="th-body" style="display:'+(collapsed?'none':'block')+';padding:16px">'
+      +(noDataAtAll
+        ? '<div style="display:flex;align-items:center;gap:10px;background:rgba(245,166,35,0.1);border:1px solid rgba(245,166,35,0.35);border-radius:10px;padding:10px 14px;margin-bottom:12px">'
+          + '<span style="font-size:16px">ℹ️</span>'
+          + '<div style="font-size:11px;color:var(--text)">Ainda não há registros de check-in (login por PIN) para esta data — os números abaixo podem não refletir a presença real desse dia.</div>'
+          + '</div>'
+        : '')
       +'<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));gap:12px">'
         +cardsHtml
       +'</div>'
@@ -9555,6 +9592,33 @@ function renderDefeitos(){
   }
 }
 
+// ── Excluir Registro SCRAP ────────────────────────────────────────────────────
+async function excluirRegistroScrap(docId, dateKey, selb, operador) {
+  if(!currentUser || !currentUser.isAdmin) {
+    alert('Apenas administradores podem excluir registros SCRAP.');
+    return;
+  }
+  
+  const msg = `Excluir permanentemente o registro SCRAP?\n\nSELB: ${selb || '—'}\nOperador: ${operador || '—'}\n\nEsta ação não pode ser desfeita.`;
+  
+  if(!confirm(msg)) return;
+  
+  try {
+    // Registros ficam em /history/{dateKey}/{docId}
+    await dbDelete('/history/' + dateKey + '/' + docId);
+    
+    // Remove também do array em memória
+    const idx = history.findIndex(h => h._docId === docId && h._dateKey === dateKey);
+    if(idx >= 0) history.splice(idx, 1);
+    
+    alert('✅ Registro SCRAP excluído com sucesso.');
+    renderScrapRel();
+  } catch(e) {
+    console.error('Erro ao excluir SCRAP:', e);
+    alert('❌ Erro ao excluir registro: ' + e.message);
+  }
+}
+
 function renderScrapRel(){
   const src = _scrapAllRecs.length > 0 ? _scrapAllRecs : history.filter(h=>h.status==='scrap');
   const all  = src.filter(h => !scrapFilter || h.sector === scrapFilter);
@@ -9611,7 +9675,11 @@ function renderScrapRel(){
     const months = {Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'};
     const dk = dkParts.length>=4 ? dkParts[2]+'/'+(months[dkParts[1]]||'??') : '—';
     const selbEsc = (h.selb||'').replace(/'/g,"\\'");
+    const docIdEsc = (h._docId||'').replace(/'/g,"\\'");
+    const dateKeyEsc = (h._dateKey||'').replace(/'/g,"\\'");
+    const nomeEsc = (h.name||'').replace(/'/g,"\\'");
     const btnEtq = h.selb ? `<button onclick="qualGerarEtiquetaUnica('${selbEsc}')" title="Gerar etiqueta" style="background:rgba(167,139,250,0.12);border:1px solid rgba(167,139,250,0.4);border-radius:7px;color:var(--purple);font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer">🏷️ Etiqueta</button>` : '—';
+    const btnDel = (currentUser && currentUser.isAdmin) ? `<button onclick="excluirRegistroScrap('${docIdEsc}','${dateKeyEsc}','${selbEsc}','${nomeEsc}')" title="Excluir registro" style="background:rgba(242,87,87,0.12);border:1px solid rgba(242,87,87,0.4);border-radius:7px;color:var(--danger);font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer">🗑️ Excluir</button>` : '';
     return `<tr>
     <td style="font-family:var(--mono);font-size:11px;color:var(--muted)">${dk}</td>
     <td style="font-family:var(--mono);font-size:11px">${h.start||'—'}</td>
@@ -9622,7 +9690,7 @@ function renderScrapRel(){
     <td style="font-family:var(--mono);font-size:11px;color:var(--elet)">${h.osNum||'—'}</td>
     <td style="font-family:var(--mono);font-size:11px;color:${parseDuracao(h.duracao)>300?'var(--warn)':'var(--muted)'}">${h.duracao&&h.duracao!=='00:00:00'?h.duracao:'—'}</td>
     <td style="color:var(--danger);font-size:12px;max-width:200px">${esc(h.motivo||'—')}</td>
-    <td>${btnEtq}</td>
+    <td style="display:flex;gap:4px">${btnEtq}${btnDel}</td>
   </tr>`;}).join('');
 }
 
@@ -16228,9 +16296,144 @@ function _applySectorTabPermsRaw(){
   _sectorTabPerms = merged;
   if(typeof currentUser !== 'undefined' && currentUser){
     applySectorTabPerms(currentUser);
+    reorganizeTabs(); // permissões podem ter mudado em tempo real — resincroniza sidebar
   }
   renderSectorPermsUI();
 }
+
+// ════════════════════════════════════════════════════════════════
+// ABAS PRINCIPAIS x MENU LATERAL (Gestão de Abas)
+// Em vez de recriar os botões, reorganizeTabs() apenas reposiciona os
+// <button class="tab"> que já existem (mesmo id/onclick) entre
+// #topbar-tabs e #sidebar-tabs-content — toda a lógica de permissão por
+// setor (applySectorTabPerms) e o realce da aba ativa (setView) continuam
+// funcionando sem alteração, pois dependem de id/classe, não do pai no DOM.
+// ════════════════════════════════════════════════════════════════
+const MAIN_TABS_STORAGE_PATH = '/app_config/mainTabs';
+const DEFAULT_MAIN_TAB_IDS = ['tab-dashboard','tab-consulta','tab-relatorios','tab-pecas'];
+// Lista de opções pro modal de configuração — reaproveita TAB_DEFS e
+// acrescenta a única aba "extra" que não está nele (exclusiva de admin).
+const CONFIGURABLE_TABS = TAB_DEFS.concat([{ key:'tempo-selb', id:'tab-tempo-selb', label:'Tempo SELB' }]);
+
+let _mainTabIds = [...DEFAULT_MAIN_TAB_IDS];
+
+async function loadTabsConfig(){
+  try {
+    const cfg = await dbGet(MAIN_TABS_STORAGE_PATH);
+    _mainTabIds = (cfg && Array.isArray(cfg) && cfg.length >= 2) ? cfg : [...DEFAULT_MAIN_TAB_IDS];
+  } catch(e) {
+    console.warn('[Abas] Erro ao carregar configuração, usando padrão:', e);
+    _mainTabIds = [...DEFAULT_MAIN_TAB_IDS];
+  }
+  reorganizeTabs();
+}
+
+// Reposiciona cada botão .tab existente entre a barra principal e a sidebar,
+// conforme _mainTabIds. Não recria elementos — só move o nó no DOM.
+function reorganizeTabs(){
+  const topbar  = document.getElementById('topbar-tabs');
+  const sidebar = document.getElementById('sidebar-tabs-content');
+  if(!topbar || !sidebar) return;
+
+  CONFIGURABLE_TABS.forEach(t => {
+    const btn = document.getElementById(t.id);
+    if(!btn) return;
+    const isMain = _mainTabIds.includes(t.id);
+    const targetParent = isMain ? topbar : sidebar;
+    if(btn.parentElement !== targetParent) targetParent.appendChild(btn);
+  });
+
+  // Botão "☰" de mais abas só aparece se houver algo visível (permitido
+  // pelo setor do usuário) dentro da sidebar.
+  const anyVisibleInSidebar = Array.from(sidebar.children)
+    .some(el => el.tagName === 'BUTTON' && el.style.display !== 'none');
+  const menuBtn = document.getElementById('btn-open-sidebar-tabs');
+  if(menuBtn) menuBtn.dataset.empty = anyVisibleInSidebar ? '0' : '1';
+
+  if(sidebar.children.length === 0 || !anyVisibleInSidebar){
+    const hint = sidebar.querySelector('.empty-hint');
+    if(!hint){
+      const div = document.createElement('div');
+      div.className = 'empty-hint';
+      div.textContent = 'Nenhuma aba adicional disponível.';
+      sidebar.appendChild(div);
+    }
+  } else {
+    const hint = sidebar.querySelector('.empty-hint');
+    if(hint) hint.remove();
+  }
+
+  updateSidebarFooterVisibility();
+}
+
+function toggleSidebarTabs(){
+  const panel = document.getElementById('sidebar-tabs-panel');
+  if(panel && panel.classList.contains('visible')) closeSidebarTabs();
+  else openSidebarTabs();
+}
+function openSidebarTabs(){
+  const panel   = document.getElementById('sidebar-tabs-panel');
+  const overlay = document.getElementById('sidebar-overlay-tabs');
+  if(panel)   panel.classList.add('visible');
+  if(overlay) overlay.classList.add('visible');
+}
+function closeSidebarTabs(){
+  const panel   = document.getElementById('sidebar-tabs-panel');
+  const overlay = document.getElementById('sidebar-overlay-tabs');
+  if(panel)   panel.classList.remove('visible');
+  if(overlay) overlay.classList.remove('visible');
+}
+
+function updateSidebarFooterVisibility(){
+  const footer = document.getElementById('sidebar-tabs-footer');
+  if(!footer) return;
+  footer.style.display = (currentUser && currentUser.isAdmin) ? 'block' : 'none';
+}
+
+// ── Modal: escolher quais abas ficam na barra principal (ADMIN) ──────────
+function openTabsConfig(){
+  if(!currentUser || !currentUser.isAdmin){
+    alert('Apenas administradores podem configurar as abas principais.');
+    return;
+  }
+  const modal = document.getElementById('modal-tabs-config');
+  const list  = document.getElementById('tabs-config-list');
+  if(!modal || !list) return;
+
+  list.innerHTML = CONFIGURABLE_TABS.map(t => `
+    <label class="config-tab-item">
+      <input type="checkbox" value="${t.id}" ${_mainTabIds.includes(t.id) ? 'checked' : ''}>
+      <span>${t.label}</span>
+    </label>
+  `).join('');
+
+  modal.classList.remove('hidden');
+  modal.classList.add('visible');
+  closeSidebarTabs();
+}
+function closeTabsConfig(){
+  const modal = document.getElementById('modal-tabs-config');
+  if(modal){ modal.classList.remove('visible'); modal.classList.add('hidden'); }
+}
+async function salvarConfigAbas(){
+  const list = document.getElementById('tabs-config-list');
+  if(!list) return;
+  const selected = Array.from(list.querySelectorAll('input[type="checkbox"]:checked')).map(cb => cb.value);
+
+  if(selected.length < 2){ alert('Selecione pelo menos 2 abas principais.'); return; }
+  if(selected.length > 6){ alert('Selecione no máximo 6 abas principais.'); return; }
+
+  try {
+    await dbSet(MAIN_TABS_STORAGE_PATH, selected);
+    _mainTabIds = selected;
+    reorganizeTabs();
+    closeTabsConfig();
+  } catch(e) {
+    console.error('[Abas] Erro ao salvar configuração:', e);
+    alert('Erro ao salvar configuração: ' + e.message);
+  }
+}
+
 
 // Carrega do Supabase em tempo real
 (async function loadSectorTabPerms(){
@@ -23522,8 +23725,9 @@ function abrirMenuMobile() {
   if (!listContainer) return;
   listContainer.innerHTML = '';
   
-  // Coleta as abas do container principal
-  const tabs = document.querySelectorAll('#topbar-tabs .tab');
+  // Coleta as abas tanto da barra principal quanto da sidebar de "mais abas"
+  // (Gestão de Abas reposiciona os mesmos botões entre os dois containers).
+  const tabs = document.querySelectorAll('#topbar-tabs .tab, #sidebar-tabs-content .tab');
   let count = 0;
   
   tabs.forEach(tab => {

@@ -444,6 +444,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
   <div class="topbar">
     <div class="logo"><img src="logo-labtech.png" alt="LabTech" style="height:56px;vertical-align:middle;display:block"></div>
     <button id="mobile-menu-btn" onclick="abrirMenuMobile()" style="align-items:center;justify-content:center;gap:6px;background:rgba(79, 142, 247, 0.15);border:1px solid rgba(79, 142, 247, 0.4);color:var(--accent);padding:6px 12px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;height:36px;white-space:nowrap;box-sizing:border-box;">☰ Menu</button>
+    <button id="btn-open-sidebar-tabs" onclick="toggleSidebarTabs()" title="Ver mais abas" style="align-items:center;justify-content:center;background:rgba(255,255,255,0.05);border:1px solid var(--border2);border-radius:10px;color:var(--text);padding:0;cursor:pointer;width:40px;height:40px;flex-shrink:0;">☰</button>
     <div class="topbar-tabs" id="topbar-tabs">
       <button class="tab active" id="tab-dashboard"  onclick="setView('dashboard',this)">Dashboard</button>
       <button class="tab" id="tab-consulta"   onclick="setView('consulta',this)">Consulta</button>
@@ -509,6 +510,33 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <button class="logout-btn" onclick="logout()">Sair</button>
     </div>
   </div>
+
+  <!-- SIDEBAR DE ABAS SECUNDÁRIAS (desktop) -->
+  <div id="sidebar-overlay-tabs" onclick="closeSidebarTabs()"></div>
+  <div id="sidebar-tabs-panel">
+    <div class="sidebar-tabs-header">
+      <span>Mais Abas</span>
+      <button onclick="closeSidebarTabs()" title="Fechar">✕</button>
+    </div>
+    <div id="sidebar-tabs-content"></div>
+    <div id="sidebar-tabs-footer" style="display:none">
+      <button onclick="openTabsConfig()">⚙️ Configurar abas principais</button>
+    </div>
+  </div>
+
+  <!-- MODAL: Configurar abas principais (ADMIN) -->
+  <div id="modal-tabs-config" class="hidden">
+    <div class="tabs-config-box">
+      <h2>Configurar Abas Principais</h2>
+      <p>Escolha de 2 a 6 abas para ficarem fixas no topo. As demais ficam no menu lateral (☰).</p>
+      <div id="tabs-config-list"></div>
+      <div class="tabs-config-actions">
+        <button class="tcfg-cancel" onclick="closeTabsConfig()">Cancelar</button>
+        <button class="tcfg-save" onclick="salvarConfigAbas()">Salvar</button>
+      </div>
+    </div>
+  </div>
+
   <div class="status-bar">
     <div class="pulse" id="status-dot" title="Status da Conexão"></div>
     <span>Sistema ativo — <span id="live-clock"></span></span>

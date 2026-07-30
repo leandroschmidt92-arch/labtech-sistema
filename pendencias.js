@@ -8,8 +8,71 @@ var _fluxolabPendLoaded = typeof _fluxolabPendLoaded !== 'undefined' ? _fluxolab
 var _pendSyncChannel = typeof _pendSyncChannel !== 'undefined' ? _pendSyncChannel : null;
 var _pendMediaSortDir = typeof _pendMediaSortDir !== 'undefined' ? _pendMediaSortDir : { mistas: null, complexas: null };
 
-const PEND_ROW_MIN = { mistas: 30, complexas: 20 };
+// Mínimo de linhas: a tabela agora cresce e ENCOLHE conforme os registros.
+const PEND_ROW_MIN = { mistas: 1, complexas: 1 };
 const PEND_FIELDS = ['modelo', 'qtd_wms', 'sugestao', 'obs', 'pecas'];
+
+// ─── Definição das colunas (largura, largura mínima e possibilidade de ocultar) ───
+const PEND_COL_DEFS = [
+  { k: 'ord',      label: 'Ord',        rz: 'ord',    w: '50px',  min: '40px' },
+  { k: 'lote',     label: 'Lote',       rz: 'lote',   w: '50px',  min: '40px' },
+  { k: 'modelo',   label: 'Modelo',     rz: 'mod',    w: '340px', min: '120px' },
+  { k: 'chk',      label: 'Checklists', rz: 'chk-v2', w: '60px',  min: '50px' },
+  { k: 'media',    label: 'Média Dias', rz: 'media',  w: '80px',  min: '60px' },
+  { k: 'qtd_wms',  label: 'Qtd WMS',    rz: 'qtd',    w: '72px',  min: '50px' },
+  { k: 'sugestao', label: 'Sugerido',   rz: 'sug',    w: '72px',  min: '50px' },
+  { k: 'doca',     label: 'DOCA',       rz: 'doca',   w: '70px',  min: '55px' },
+  { k: 'lab',      label: 'LAB',        rz: 'lab',    w: '70px',  min: '55px' },
+  { k: 'bolsao',   label: 'Bolsão',     rz: 'bolsao', w: '160px', min: '60px' },
+  { k: 'obs',      label: 'Observação', rz: 'obs',    w: '180px', min: '70px' },
+  { k: 'pecas',    label: 'Peças',      rz: 'pecas',  w: '180px', min: '70px' },
+];
+
+let _pendColMenuOpen = {};
+
+function pendGetHiddenCols() {
+  try { return JSON.parse(localStorage.getItem('fluxolabPendHiddenCols') || '{}'); }
+  catch (e) { return {}; }
+}
+function pendIsColHidden(tableName, key) {
+  const h = pendGetHiddenCols();
+  return !!(h[tableName] && h[tableName][key]);
+}
+function pendToggleCol(tableName, key) {
+  const h = pendGetHiddenCols();
+  h[tableName] = h[tableName] || {};
+  h[tableName][key] = !h[tableName][key];
+  localStorage.setItem('fluxolabPendHiddenCols', JSON.stringify(h));
+  _pendColMenuOpen[tableName] = true;
+  fluxolabRenderPendencias();
+}
+function pendShowAllCols(tableName) {
+  const h = pendGetHiddenCols();
+  h[tableName] = {};
+  localStorage.setItem('fluxolabPendHiddenCols', JSON.stringify(h));
+  _pendColMenuOpen[tableName] = true;
+  fluxolabRenderPendencias();
+}
+function pendToggleColMenu(tableName) {
+  _pendColMenuOpen[tableName] = !_pendColMenuOpen[tableName];
+  const m = document.getElementById(`pnd-${tableName}-colmenu`);
+  if (m) m.style.display = _pendColMenuOpen[tableName] ? 'block' : 'none';
+}
+
+// Remove as linhas vazias sobrando no final: mantém apenas UMA linha vazia
+// após o último registro preenchido (a tabela encolhe sozinha).
+function pendTrimRows(tableName, keepIndex) {
+  const list = _fluxolabPendenciasState[tableName];
+  if (!Array.isArray(list)) return false;
+  const isEmpty = r => PEND_FIELDS.every(f => !String((r && r[f]) || '').trim());
+  let last = -1;
+  list.forEach((r, i) => { if (!isEmpty(r)) last = i; });
+  let target = Math.max(last + 2, PEND_ROW_MIN[tableName] || 1);
+  if (typeof keepIndex === 'number') target = Math.max(target, keepIndex + 2);
+  target = Math.min(target, list.length);
+  if (list.length > target) { list.length = target; return true; }
+  return false;
+}
 
 // Carrega o estado do Supabase
 async function fluxolabLoadPendencias() {
@@ -33,10 +96,12 @@ async function fluxolabLoadPendencias() {
     }
   }
 
-  // Garantir linhas mínimas (30 Pendências Mistas / 20 Complexas)
+  // A tabela acompanha a quantidade de registros: corta o excesso de linhas
+  // vazias no final e garante sempre uma linha livre para digitar.
   Object.keys(PEND_ROW_MIN).forEach(t => {
     if (!Array.isArray(_fluxolabPendenciasState[t])) _fluxolabPendenciasState[t] = [];
-    while (_fluxolabPendenciasState[t].length < PEND_ROW_MIN[t]) {
+    pendTrimRows(t);
+    while (_fluxolabPendenciasState[t].length < (PEND_ROW_MIN[t] || 1)) {
       _fluxolabPendenciasState[t].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
     }
   });
@@ -80,6 +145,8 @@ function fluxolabSavePendenciasDebounced() {
 // Aplica as atualizações que vieram de outros usuários (Tempo Real)
 function fluxolabApplyRemoteSyncPend(remoteData) {
   if (!_fluxolabPendLoaded) return;
+  let needRender = false;
+
 
   Object.keys(PEND_ROW_MIN).forEach(t => {
     if (!remoteData[t]) return;
@@ -109,12 +176,14 @@ function fluxolabApplyRemoteSyncPend(remoteData) {
             const cellMedia = document.getElementById(`pnd-${t}-r${i}-media`);
             const cellDoca = document.getElementById(`pnd-${t}-r${i}-doca`);
             const cellLab = document.getElementById(`pnd-${t}-r${i}-lab`);
+            const cellBolsao = document.getElementById(`pnd-${t}-r${i}-bolsao`);
             const cellBadge = document.getElementById(`pnd-${t}-r${i}-badge`);
 
             if (cellChk) { cellChk.innerText = val ? (statsChk.count || '-') : ''; cellChk.style.color = statsChk.count > 0 ? '#4ade80' : 'var(--muted)'; }
             if (cellMedia) { cellMedia.innerText = val ? (statsChk.media || '-') : ''; cellMedia.style.color = statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'; }
             if (cellDoca) cellDoca.innerText = val ? (statsBol.doca || '-') : '';
             if (cellLab) cellLab.innerText = val ? (statsBol.lab || '-') : '';
+            if (cellBolsao) cellBolsao.innerHTML = val ? pendBolsaoLocaisHtml(val) : '';
             if (cellBadge) cellBadge.innerHTML = pendBadgeHtml(statsChk.count, !!val);
             const activeBadge = document.getElementById(`pnd-${t}-r${i}-active-users`);
             if (activeBadge) activeBadge.dataset.modelo = val || '';
@@ -123,7 +192,16 @@ function fluxolabApplyRemoteSyncPend(remoteData) {
       });
     }
     pendUpdateHeaderTotals(t);
+    // Se o outro usuário removeu/adicionou linhas, ajusta a quantidade aqui também
+    if (remoteData[t].length !== _fluxolabPendenciasState[t].length) {
+      _fluxolabPendenciasState[t].length = remoteData[t].length;
+      needRender = true;
+    }
   });
+  if (needRender) {
+    const activeId = document.activeElement ? document.activeElement.id : null;
+    if (!activeId || activeId.indexOf('pnd-') !== 0) fluxolabRenderPendencias();
+  }
   if (typeof updateActiveUsersInTables === 'function') updateActiveUsersInTables();
 }
 
@@ -166,10 +244,8 @@ function fluxolabUpdateRowElemPend(elem, tableName, field) {
                      _fluxolabPendenciasState[tableName][index].obs.trim() !== '' ||
                      _fluxolabPendenciasState[tableName][index].pecas.trim() !== '';
 
-  if (isLastRow && rowHasData) {
-    _fluxolabPendenciasState[tableName].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
+  const reRender = () => {
     fluxolabSavePendenciasDebounced();
-    
     setTimeout(() => {
       const activeId = document.activeElement ? document.activeElement.id : null;
       fluxolabRenderPendencias();
@@ -178,10 +254,22 @@ function fluxolabUpdateRowElemPend(elem, tableName, field) {
         if (el) el.focus();
       }
     }, 10);
+  };
+
+  if (isLastRow && rowHasData) {
+    _fluxolabPendenciasState[tableName].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
+    reRender();
+    return;
+  }
+
+  // Linha esvaziada: a tabela encolhe removendo as linhas vazias do final
+  if (!rowHasData && pendTrimRows(tableName, index)) {
+    reRender();
     return;
   }
 
   fluxolabSavePendenciasDebounced();
+
 
   if (field === 'modelo') {
     const statsChk = value ? fluxolabPlanGetChecklistStats(value) : { count: 0, media: 0 };
@@ -191,6 +279,7 @@ function fluxolabUpdateRowElemPend(elem, tableName, field) {
     const cellMedia = document.getElementById(`pnd-${tableName}-r${index}-media`);
     const cellDoca = document.getElementById(`pnd-${tableName}-r${index}-doca`);
     const cellLab = document.getElementById(`pnd-${tableName}-r${index}-lab`);
+    const cellBolsao = document.getElementById(`pnd-${tableName}-r${index}-bolsao`);
     const cellBadge = document.getElementById(`pnd-${tableName}-r${index}-badge`);
     const activeBadge = document.getElementById(`pnd-${tableName}-r${index}-active-users`);
 
@@ -198,6 +287,7 @@ function fluxolabUpdateRowElemPend(elem, tableName, field) {
     if (cellMedia) { cellMedia.innerText = value ? (statsChk.media || '-') : ''; cellMedia.style.color = statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'; }
     if (cellDoca) cellDoca.innerText = value ? (statsBol.doca || '-') : '';
     if (cellLab) cellLab.innerText = value ? (statsBol.lab || '-') : '';
+    if (cellBolsao) cellBolsao.innerHTML = value ? pendBolsaoLocaisHtml(value) : '';
     if (cellBadge) cellBadge.innerHTML = pendBadgeHtml(statsChk.count, !!value);
     if (activeBadge) activeBadge.dataset.modelo = value || '';
     pendUpdateHeaderTotals(tableName);
@@ -208,11 +298,7 @@ function fluxolabUpdateRowElemPend(elem, tableName, field) {
 function fluxolabClearPendTable(tableName) {
   const label = tableName === 'mistas' ? 'Pendências Mistas' : 'Complexas';
   if (confirm(`Tem certeza que deseja limpar a lista ${label}? Os ajustes de tamanho da tabela não serão perdidos.`)) {
-    const size = _fluxolabPendenciasState[tableName].length;
-    _fluxolabPendenciasState[tableName] = [];
-    for (let i = 0; i < size; i++) {
-      _fluxolabPendenciasState[tableName].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
-    }
+    _fluxolabPendenciasState[tableName] = [{ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' }];
     fluxolabSavePendenciasDebounced();
     fluxolabRenderPendencias();
   }
@@ -319,6 +405,20 @@ function pendInitResizeObserver() {
         if (entry.target.classList.contains('pend-header-resizer')) {
           savedSizes[entry.target.id] = entry.target.style.width;
           changed = true;
+          // Aplica a largura na coluna imediatamente (<col>), sem esperar re-render
+          const col = document.querySelector(`col[data-rz="${entry.target.id}"]`);
+          if (col && entry.target.style.width) {
+            col.style.width = entry.target.style.width;
+            const tbl = col.closest('table');
+            if (tbl) {
+              let total = 0;
+              tbl.querySelectorAll('colgroup col').forEach(c => {
+                if (c.style.display === 'none') return;
+                total += parseInt(c.style.width, 10) || 0;
+              });
+              if (total) tbl.style.width = total + 'px';
+            }
+          }
         } else if (entry.target.tagName.toLowerCase() === 'textarea') {
           savedSizes[entry.target.id] = entry.target.style.height;
           changed = true;
@@ -338,6 +438,17 @@ function pendBadgeHtml(count, filled) {
     return `<span style="background:rgba(74,222,128,0.15);color:#4ade80;font-size:9px;font-weight:800;padding:3px 7px;border-radius:10px;white-space:nowrap;flex-shrink:0;letter-spacing:0.03em">✓ CHECKLIST</span>`;
   }
   return `<span style="background:rgba(248,113,113,0.15);color:#f87171;font-size:9px;font-weight:800;padding:3px 7px;border-radius:10px;white-space:nowrap;flex-shrink:0;letter-spacing:0.03em">✗ SEM CHECKLIST</span>`;
+}
+
+// Monta os "pills" da coluna Bolsão: em qual(is) bolsão(ões) específico(s)
+// (Complexa, Linha 3, Doca 1 etc.) o modelo está fisicamente agora.
+function pendBolsaoLocaisHtml(modeloName) {
+  if (typeof fluxolabPlanGetBolsaoLocais !== 'function') return '<span style="color:var(--muted)">-</span>';
+  const locais = fluxolabPlanGetBolsaoLocais(modeloName);
+  if (!locais.length) return '<span style="color:var(--muted)">-</span>';
+  return locais.map(l =>
+    `<span style="display:inline-block;background:${l.color}18;color:${l.color};border:1px solid ${l.color}40;font-size:13px;font-weight:800;padding:3px 9px;border-radius:8px;white-space:nowrap;margin:2px">${esc(l.label)}${l.count > 1 ? ` (${l.count})` : ''}</span>`
+  ).join(' ');
 }
 
 // Badge visual ao lado do modelo: mostra o(s) operador(es) que estão AGORA
@@ -371,12 +482,12 @@ function updateActiveUsersInTables() {
     const ops = modeloKey ? porModelo[modeloKey] : null;
     if (!ops || !ops.length) { badge.innerHTML = ''; return; }
 
+    const cor = '#00e5ff'; // azul fluorescente — mesmo tom para running e paused
     badge.innerHTML = ops.map(op => {
-      const cor = op.status === 'running' ? '#4ade80' : '#facc15';
       const statusLabel = op.status === 'running' ? 'running' : 'paused';
       const primeiroNome = (op.name || 'Operador').trim().split(' ')[0] || 'Operador';
-      return `<span title="${esc(op.name)} (${statusLabel})" style="display:inline-flex;align-items:center;gap:4px;background:${cor}22;border:1px solid ${cor}55;color:${cor};font-size:9px;font-weight:800;padding:2px 6px;border-radius:10px;white-space:nowrap;margin-left:3px">` +
-        `<span style="width:6px;height:6px;border-radius:50%;background:${cor};box-shadow:0 0 5px ${cor};flex-shrink:0"></span>${esc(primeiroNome)}</span>`;
+      return `<span title="${esc(op.name)} (${statusLabel})" style="display:inline-flex;align-items:center;gap:5px;background:${cor}22;border:1px solid ${cor}77;color:${cor};font-size:13px;font-weight:800;padding:3px 9px;border-radius:10px;white-space:nowrap;margin-left:4px;text-shadow:0 0 6px ${cor}90">` +
+        `<span style="width:8px;height:8px;border-radius:50%;background:${cor};box-shadow:0 0 6px ${cor},0 0 2px ${cor};flex-shrink:0"></span>${esc(primeiroNome)}</span>`;
     }).join('');
   });
 }
@@ -398,15 +509,23 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
     totalChk += (fluxolabPlanGetChecklistStats(row.modelo).count || 0);
   });
 
-  const tableStyle = 'width:max-content;border-collapse:separate;border-spacing:0;font-family:var(--font);font-size:14px;text-align:center;border-radius:12px;overflow:hidden;background:rgba(0,0,0,0.2);border:1px solid var(--border2);box-shadow:0 8px 32px rgba(0,0,0,0.3)';
-  const thStyle = 'border-bottom:1px solid var(--border2);border-right:1px solid var(--border2);padding:0;font-weight:800;vertical-align:middle;background:rgba(0,0,0,0.4)';
-  const thLastStyle = 'border-bottom:1px solid var(--border2);padding:0;font-weight:800;vertical-align:middle;background:rgba(0,0,0,0.4)';
-  const tdStyle = 'border-bottom:1px solid var(--border2);border-right:1px solid var(--border2);padding:0;vertical-align:middle';
-  const tdLastStyle = 'border-bottom:1px solid var(--border2);padding:0;vertical-align:middle';
+  // ── Colunas visíveis / larguras ──
+  const hid = k => (pendIsColHidden(tableName, k) ? ';display:none' : '');
+  const colId = c => `ph-pnd-${tableName}-${c.rz}`;
+  const colW = c => savedSizes[colId(c)] || c.w;
+  const visibleCols = PEND_COL_DEFS.filter(c => !pendIsColHidden(tableName, c.k));
+  const totalW = visibleCols.reduce((s, c) => s + (parseInt(colW(c), 10) || 0), 0);
+
+  // table-layout:fixed => a largura definida no cabeçalho MANDA na coluna
+  // (o conteúdo do Bolsão quebra a linha em vez de esticar a tabela).
+  const tableStyle = `width:${totalW}px;table-layout:fixed;border-collapse:separate;border-spacing:0;font-family:var(--font);font-size:14px;text-align:center;border-radius:12px;overflow:hidden;background:rgba(0,0,0,0.2);border:1px solid var(--border2);box-shadow:0 8px 32px rgba(0,0,0,0.3)`;
+  const thStyle = 'border-bottom:1px solid var(--border2);border-right:1px solid var(--border2);padding:0;font-weight:800;vertical-align:middle;background:rgba(0,0,0,0.4);overflow:hidden';
+  const tdStyle = 'border-bottom:1px solid var(--border2);border-right:1px solid var(--border2);padding:0;vertical-align:middle;overflow:hidden';
+  const tdLastStyle = tdStyle;
 
   const resizableHeader = (content, id, defWidth, minWidth, color) => {
     const savedW = savedSizes[id] || defWidth;
-    return `<div id="${id}" class="pend-header-resizer" style="resize:horizontal;overflow:hidden;width:${savedW};min-width:${minWidth};padding:12px 6px;margin:0 auto;color:${color || 'var(--muted)'};font-size:11px;text-transform:uppercase;letter-spacing:0.05em">${content}</div>`;
+    return `<div id="${id}" class="pend-header-resizer" style="resize:horizontal;overflow:hidden;width:${savedW};min-width:${minWidth};max-width:100%;padding:12px 6px;margin:0 auto;color:${color || 'var(--muted)'};font-size:11px;text-transform:uppercase;letter-spacing:0.05em">${content}</div>`;
   };
 
   const mediaSortDir = _pendMediaSortDir[tableName] || null;
@@ -416,35 +535,58 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
   const docaHeaderContent = `DOCA <span id="pnd-${tableName}-doca-total" style="font-weight:900">(${totalDoca})</span>`;
   const labHeaderContent = `LAB <span id="pnd-${tableName}-lab-total" style="font-weight:900">(${totalLab})</span>`;
 
+  const headerContent = {
+    ord: 'Ord', lote: 'Lote', modelo: 'MODELO', chk: 'Checklists',
+    media: mediaHeaderContent, qtd_wms: 'Qtd WMS', sugestao: 'Sugerido',
+    doca: docaHeaderContent, lab: labHeaderContent, bolsao: 'Bolsão',
+    obs: 'Observação', pecas: 'Peças',
+  };
+  const headerColor = { modelo: 'var(--text)', doca: '#22d3ee', lab: '#a78bfa' };
+
+  const colgroupHtml = PEND_COL_DEFS.map(c =>
+    `<col data-rz="${colId(c)}" style="width:${colW(c)}${hid(c.k)}">`
+  ).join('');
+
+  const theadColsHtml = PEND_COL_DEFS.map(c =>
+    `<th style="${thStyle}${hid(c.k)}">${resizableHeader(headerContent[c.k], colId(c), c.w, c.min, headerColor[c.k])}</th>`
+  ).join('');
+
+  // Menu "Colunas" — permite ocultar/exibir qualquer coluna
+  const colMenuDropdownHtml = `
+    <div id="pnd-${tableName}-colmenu" style="display:${_pendColMenuOpen[tableName] ? 'block' : 'none'};position:absolute;right:0;top:30px;z-index:50;background:var(--bg2);border:1px solid var(--border2);border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,0.55);padding:8px;min-width:190px;text-align:left">
+      ${PEND_COL_DEFS.map(c => `
+        <label style="display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;color:var(--text)">
+          <input type="checkbox" ${pendIsColHidden(tableName, c.k) ? '' : 'checked'} onchange="pendToggleCol('${tableName}','${c.k}')" style="width:14px;height:14px;accent-color:var(--accent);cursor:pointer" />
+          <span>${c.label}</span>
+        </label>`).join('')}
+      <button onclick="pendShowAllCols('${tableName}')" style="width:100%;margin-top:6px;background:var(--bg3);color:var(--muted);border:1px solid var(--border2);border-radius:6px;padding:5px;font-size:10px;font-weight:800;cursor:pointer;text-transform:uppercase">Mostrar todas</button>
+    </div>`;
+
   let html = `
     <div style="margin-bottom:32px;overflow-x:auto;padding-bottom:14px">
       <table style="${tableStyle}">
+        <colgroup>${colgroupHtml}</colgroup>
         <thead>
           <tr>
-            <th colspan="11" style="background:rgba(255,255,255,0.03);color:${titleColor};padding:14px;font-size:14px;font-weight:900;letter-spacing:0.08em;text-transform:uppercase;border-bottom:1px solid var(--border2);text-shadow:0 0 12px ${titleColor}50;position:relative">
+            <th colspan="${PEND_COL_DEFS.length}" style="background:rgba(255,255,255,0.03);color:${titleColor};padding:14px;font-size:14px;font-weight:900;letter-spacing:0.08em;text-transform:uppercase;border-bottom:1px solid var(--border2);text-shadow:0 0 12px ${titleColor}50;position:relative;overflow:visible">
               <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${titleColor};margin-right:8px;box-shadow:0 0 8px ${titleColor}"></span>
               ${title}
               <span style="font-size:10px;color:var(--muted);font-weight:700;margin-left:8px;text-transform:none;letter-spacing:normal">(${rows.length} registros)</span>
-              <span id="pnd-${tableName}-chk-total" style="position:absolute;right:100px;top:50%;transform:translateY(-50%);background:rgba(74,222,128,0.12);color:#4ade80;border:1px solid rgba(74,222,128,0.35);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:800;letter-spacing:0.04em;text-transform:none;text-shadow:none">Total Checklists: ${totalChk}</span>
+              <span id="pnd-${tableName}-chk-total" style="position:absolute;left:14px;top:50%;transform:translateY(-50%);background:rgba(74,222,128,0.12);color:#4ade80;border:1px solid rgba(74,222,128,0.35);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:800;letter-spacing:0.04em;text-transform:none;text-shadow:none">Total Checklists: ${totalChk}</span>
+              <span style="position:absolute;right:82px;top:10px;z-index:55">
+                <button onclick="pendToggleColMenu('${tableName}')" style="background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:6px;padding:4px 10px;font-size:10px;font-weight:800;cursor:pointer;text-transform:uppercase;letter-spacing:0.05em">⚙ Colunas</button>
+                ${colMenuDropdownHtml}
+              </span>
               <button onclick="fluxolabClearPendTable('${tableName}')" style="position:absolute;right:14px;top:10px;background:var(--danger);color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:10px;font-weight:800;cursor:pointer;text-transform:uppercase;letter-spacing:0.05em">Limpar</button>
             </th>
           </tr>
           <tr>
-            <th style="${thStyle}">${resizableHeader('Ord', `ph-pnd-${tableName}-ord`, '50px', '40px')}</th>
-            <th style="${thStyle}">${resizableHeader('Lote', `ph-pnd-${tableName}-lote`, '50px', '40px')}</th>
-            <th style="${thStyle}">${resizableHeader('MODELO', `ph-pnd-${tableName}-mod`, '340px', '120px', 'var(--text)')}</th>
-            <th style="${thStyle}">${resizableHeader('Checklists', `ph-pnd-${tableName}-chk-v2`, '60px', '50px')}</th>
-            <th style="${thStyle}">${resizableHeader(mediaHeaderContent, `ph-pnd-${tableName}-media`, '80px', '60px')}</th>
-            <th style="${thStyle};width:72px;min-width:72px;max-width:72px"><div style="padding:12px 6px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.05em">Qtd WMS</div></th>
-            <th style="${thStyle};width:72px;min-width:72px;max-width:72px"><div style="padding:12px 6px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.05em">Sugerido</div></th>
-            <th style="${thStyle}">${resizableHeader(docaHeaderContent, `ph-pnd-${tableName}-doca`, '70px', '60px', '#22d3ee')}</th>
-            <th style="${thStyle}">${resizableHeader(labHeaderContent, `ph-pnd-${tableName}-lab`, '70px', '60px', '#a78bfa')}</th>
-            <th style="${thStyle}">${resizableHeader('Observação', `ph-pnd-${tableName}-obs`, '180px', '80px')}</th>
-            <th style="${thLastStyle}">${resizableHeader('Peças', `ph-pnd-${tableName}-pecas`, '180px', '80px')}</th>
+            ${theadColsHtml}
           </tr>
         </thead>
         <tbody>
   `;
+
 
   rows.forEach((row, idx) => {
     const statsChk = row.modelo ? fluxolabPlanGetChecklistStats(row.modelo) : { count: 0, media: 0 };
@@ -474,16 +616,16 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
           onmouseover="this.style.background='rgba(255,255,255,0.04)'"
           onmouseout="this.style.background='${rowBg}'">
 
-        <td style="${tdStyle};color:var(--muted);font-weight:800;font-size:15px;${dragHandle}"
+        <td style="${tdStyle};color:var(--muted);font-weight:800;font-size:15px;${dragHandle}${hid('ord')}"
             title="Arraste para reordenar"
             onmousedown="this.parentNode.setAttribute('draggable','true')"
             onmouseup="this.parentNode.setAttribute('draggable','false')"
             onmouseleave="this.parentNode.setAttribute('draggable','false')">
           <span style="opacity:0.4;margin-right:4px">≡</span>${idx + 1}º
         </td>
-        <td style="${tdStyle};color:var(--muted);font-weight:800;font-size:15px">${idx + 1}</td>
+        <td style="${tdStyle};color:var(--muted);font-weight:800;font-size:15px${hid('lote')}">${idx + 1}</td>
 
-        <td style="${tdStyle}">
+        <td style="${tdStyle}${hid('modelo')}">
           <div style="display:flex;align-items:center;gap:6px;height:100%;padding:0 8px 0 12px">
             <input id="pnd-${tableName}-r${idx}-modelo" type="text" list="modelos-lista" placeholder="Digite..." value="${row.modelo || ''}"
                    onfocus="${inpFocus}" onblur="${inpBlur}"
@@ -494,45 +636,50 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
           </div>
         </td>
 
-        <td id="pnd-${tableName}-r${idx}-chk" class="chk-cell" style="${tdStyle};color:${statsChk.count > 0 ? '#4ade80' : 'var(--muted)'};font-weight:900;font-size:18px">
+        <td id="pnd-${tableName}-r${idx}-chk" class="chk-cell" style="${tdStyle};color:${statsChk.count > 0 ? '#4ade80' : 'var(--muted)'};font-weight:900;font-size:18px${hid('chk')}">
           ${isFilled ? (statsChk.count || '-') : ''}
         </td>
-        <td id="pnd-${tableName}-r${idx}-media" class="media-cell" style="${tdStyle};color:${statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'};font-weight:900;font-size:18px">
+        <td id="pnd-${tableName}-r${idx}-media" class="media-cell" style="${tdStyle};color:${statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'};font-weight:900;font-size:18px${hid('media')}">
           ${isFilled ? (statsChk.media || '-') : ''}
         </td>
 
-        <td style="${tdStyle};width:72px;min-width:72px;max-width:72px;background:rgba(255,255,255,0.02);overflow:hidden">
+        <td style="${tdStyle};background:rgba(255,255,255,0.02)${hid('qtd_wms')}">
           <input id="pnd-${tableName}-r${idx}-qtd_wms" type="text" value="${row.qtd_wms || ''}"
                  onfocus="${inpFocus}" onblur="${inpBlur}"
                  onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'qtd_wms')"
                  style="${inpBase};min-width:0;box-sizing:border-box" />
         </td>
-        <td style="${tdStyle};width:72px;min-width:72px;max-width:72px;background:rgba(255,255,255,0.02);overflow:hidden">
+        <td style="${tdStyle};background:rgba(255,255,255,0.02)${hid('sugestao')}">
           <input id="pnd-${tableName}-r${idx}-sugestao" type="text" value="${row.sugestao || ''}"
                  onfocus="${inpFocus}" onblur="${inpBlur}"
                  onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'sugestao')"
                  style="${inpBase};min-width:0;box-sizing:border-box;color:var(--accent)" />
         </td>
 
-        <td id="pnd-${tableName}-r${idx}-doca" class="doca-cell" style="${tdStyle};background:rgba(34,211,238,0.05);color:#22d3ee;font-weight:900;font-size:18px;text-shadow:0 0 8px rgba(34,211,238,0.4)">
+        <td id="pnd-${tableName}-r${idx}-doca" class="doca-cell" style="${tdStyle};background:rgba(34,211,238,0.05);color:#22d3ee;font-weight:900;font-size:18px;text-shadow:0 0 8px rgba(34,211,238,0.4)${hid('doca')}">
           ${isFilled ? (statsBol.doca || '-') : ''}
         </td>
-        <td id="pnd-${tableName}-r${idx}-lab" class="lab-cell" style="${tdStyle};background:rgba(167,139,250,0.05);color:#a78bfa;font-weight:900;font-size:18px;text-shadow:0 0 8px rgba(167,139,250,0.4)">
+        <td id="pnd-${tableName}-r${idx}-lab" class="lab-cell" style="${tdStyle};background:rgba(167,139,250,0.05);color:#a78bfa;font-weight:900;font-size:18px;text-shadow:0 0 8px rgba(167,139,250,0.4)${hid('lab')}">
           ${isFilled ? (statsBol.lab || '-') : ''}
         </td>
 
-        <td style="${tdStyle};padding:4px">
+        <td id="pnd-${tableName}-r${idx}-bolsao" class="bolsao-cell" style="${tdStyle};padding:4px 6px;white-space:normal;word-break:break-word${hid('bolsao')}">
+          ${isFilled ? pendBolsaoLocaisHtml(row.modelo) : ''}
+        </td>
+
+        <td style="${tdStyle};padding:4px${hid('obs')}">
           <textarea id="pnd-${tableName}-r${idx}-obs" class="pend-textarea" rows="1" placeholder="..."
                  onfocus="${inpFocus}" onblur="${inpBlur}"
                  onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'obs')"
-                 style="${inpBase};height:${hObs};padding-top:10px;font-weight:500;text-transform:uppercase;color:var(--text);resize:vertical">${esc(row.obs || '')}</textarea>
+                 style="${inpBase};height:${hObs};padding-top:10px;font-weight:500;text-transform:uppercase;color:var(--text);resize:vertical;max-width:100%">${esc(row.obs || '')}</textarea>
         </td>
-        <td style="${tdLastStyle};padding:4px">
+        <td style="${tdLastStyle};padding:4px${hid('pecas')}">
           <textarea id="pnd-${tableName}-r${idx}-pecas" class="pend-textarea" rows="1" placeholder="..."
                  onfocus="${inpFocus}" onblur="${inpBlur}"
                  onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'pecas')"
-                 style="${inpBase};height:${hPecas};padding-top:10px;font-weight:500;text-transform:uppercase;color:var(--text);resize:vertical">${esc(row.pecas || '')}</textarea>
+                 style="${inpBase};height:${hPecas};padding-top:10px;font-weight:500;text-transform:uppercase;color:var(--text);resize:vertical;max-width:100%">${esc(row.pecas || '')}</textarea>
         </td>
+
       </tr>
     `;
   });

@@ -364,6 +364,33 @@ function fluxolabPlanGetBolsaoStats(modeloName) {
   return { doca: docaCount, lab: labCount };
 }
 
+// Retorna EM QUAL(IS) bolsão(ões) específico(s) o modelo está fisicamente agora
+// (ex.: "Complexa", "Linha 3"), diferente de fluxolabPlanGetBolsaoStats que só
+// soma totais de Doca/Lab. Usado pela coluna "Bolsão" das tabelas de Pendências.
+function fluxolabPlanGetBolsaoLocais(modeloName) {
+  if (!modeloName || typeof _fluxolabData === 'undefined' || !_fluxolabData) return [];
+  const normAlvo = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(modeloName) : modeloName.toUpperCase().replace(/\s+/g,'');
+
+  const porBolsao = {}; // key -> count
+
+  Object.entries(_fluxolabData).forEach(([bolsao, items]) => {
+    if (!items) return;
+    Object.values(items).forEach(v => {
+      const code = String(v.selb || '').trim();
+      let m = (typeof getEquipName === 'function' ? getEquipName(code) : '') || '';
+      let normM = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(m) : m.toUpperCase().replace(/\s+/g,'');
+      if (normM === normAlvo) {
+        porBolsao[bolsao] = (porBolsao[bolsao] || 0) + 1;
+      }
+    });
+  });
+
+  return Object.entries(porBolsao).map(([key, count]) => {
+    const def = (typeof FLUXOLAB_BOLSOES !== 'undefined') ? FLUXOLAB_BOLSOES.find(b => b.key === key) : null;
+    return { key, label: def ? def.label : key, color: def ? def.color : 'var(--muted)', count };
+  }).sort((a, b) => b.count - a.count);
+}
+
 // Soma os checklists de todos os modelos preenchidos numa tabela (Ord, Lote, etc. não contam)
 function fluxolabCalcTotalChk(tableName) {
   const rows = _fluxolabPlanejamentoState[tableName] || [];
