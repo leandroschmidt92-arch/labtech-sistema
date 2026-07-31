@@ -1471,88 +1471,61 @@ function calcDuracaoLiquida(h){
   }
   return 0;
 }
-// Timer do SELB em andamento — contagem LOCAL após o início.
-// Depois que o operador inicia o SELB, o tempo é contado apenas no cliente
-// (não consulta nem é sobrescrito pelo Supabase). Isso elimina o "sobe e volta".
-// O Supabase só é usado para detectar pausa/intervalo do sistema (status === 'paused')
-// — nesse momento o contador local é CONGELADO e retomado de onde parou ao voltar.
-const _localTimerCache = Object.create(null); // uid -> { selb, baseSec, runningSince }
+// ════════════════════════════════════════════════════════════════════════
+// TEMPO EM ANDAMENTO DO SELB — LÓGICA ÚNICA
+// A referência de tempo é SEMPRE o registro do SELB na aba Consulta
+// (history): a data/hora de início gravada lá (startEpoch) é a única fonte
+// usada para calcular quanto tempo o SELB está em andamento — nunca um
+// cache local que pudesse desviar (drift) do valor real.
+//
+//   elapsed = calcLiquidDuration(inícioDoRegistroEmHistory, agora)
+//             − tempo acumulado em pausas manuais (s._pauseAccum)
+//
+// calcLiquidDuration já desconta os intervalos do expediente (almoço,
+// pausas programadas) entre o início e o "agora" (ou o fim, quando o SELB
+// é finalizado — ver confirmarFin, que usa esta mesma função).
+//
+// Pausa manual (botão "Pausar", admin): enquanto pausado, o relógio para —
+// s._pausedAt guarda o instante em que a pausa começou (o cálculo usa esse
+// instante como referência final em vez de "agora"). Ao retomar, o tempo
+// líquido decorrido durante a pausa é somado a s._pauseAccum, que passa a
+// ser descontado do total daí em diante.
+// ════════════════════════════════════════════════════════════════════════
 
-function _localTimerClear(uid){ delete _localTimerCache[uid]; if(typeof _lastEmittedElapsed !== 'undefined') delete _lastEmittedElapsed[uid]; }
-
-function _localTimerEnsure(uid){
+// (Mantido apenas como stub para compatibilidade com chamadas existentes em
+// outros pontos do código que "limpam a sessão" do operador — agora reseta
+// o acumulador de pausas em vez de um cache de timer, que não existe mais.)
+function _localTimerClear(uid){
   const s = getS(uid);
-  if(!s || !s.selb){ _localTimerClear(uid); return null; }
-  let c = _localTimerCache[uid];
-  // (Re)inicializa quando o SELB muda ou ainda não existe cache local.
-  // A semente vem UMA ÚNICA VEZ do estado conhecido (frozen + tempo vivo desde _activeFrom/startEpoch).
-  // Depois disso, nada mais é puxado do Supabase para o cálculo do tempo.
-  if(!c || c.selb !== s.selb){
-    const frozenSec = Math.max(0, Number(s._frozenElapsed) || 0);
-    const since = s._activeFrom || s.startEpoch;
-    const liveSec = (s.status === 'running' && since)
-      ? Math.max(0, Math.floor((Date.now() - since) / 1000))
-      : 0;
-    c = _localTimerCache[uid] = {
-      selb: s.selb,
-      baseSec: frozenSec + liveSec,
-      runningSince: s.status === 'running' ? Date.now() : null,
-    };
-  }
-  return c;
+  if(s){ s._pausedAt = null; s._pauseAccum = 0; }
 }
-
-// Anti-oscilação: guarda o último valor emitido por uid+SELB para impedir
-// que o tempo pule pra frente/trás caso o cache local seja reinicializado
-// por uma sincronização do Supabase (ex.: _frozenElapsed/_activeFrom mudam).
-const _lastEmittedElapsed = Object.create(null); // uid -> { selb, sec, ts }
-
-function _clearLastEmitted(uid){ delete _lastEmittedElapsed[uid]; }
 
 function calcElapsedRunning(uid){
   const s = getS(uid);
-  if(!s || !s.selb){ _localTimerClear(uid); _clearLastEmitted(uid); return 0; }
-  const c = _localTimerEnsure(uid);
-  if(!c) return 0;
-  let raw;
-  if(s.status === 'running'){
-    // Se voltou de uma pausa (sistema/intervalo), retoma a contagem de onde parou.
-    if(c.runningSince == null) c.runningSince = Date.now();
-    raw = c.baseSec + Math.max(0, Math.floor((Date.now() - c.runningSince) / 1000));
-  } else {
-    // Qualquer status diferente de 'running' (ex.: 'paused' por intervalo do sistema) → CONGELA.
-    if(c.runningSince != null){
-      c.baseSec += Math.max(0, Math.floor((Date.now() - c.runningSince) / 1000));
-      c.runningSince = null;
-    }
-    raw = c.baseSec;
-  }
+  if(!s || !s.selb) return 0;
 
-  // ── Trava de monotonicidade ──
-  // Entre dois ticks consecutivos do mesmo SELB, o tempo só pode crescer
-  // no máximo o delta real de relógio + 2s de tolerância. Nunca pode diminuir.
-  // Isso elimina saltos do tipo 10min → 20min causados por reseed do cache.
-  const now = Date.now();
-  const last = _lastEmittedElapsed[uid];
-  if(last && last.selb === s.selb){
-    const realDeltaSec = Math.max(0, Math.ceil((now - last.ts) / 1000)) + 2;
-    const maxAllowed = last.sec + realDeltaSec;
-    const minAllowed = last.sec;
-    let clamped = raw;
-    if(clamped > maxAllowed) clamped = maxAllowed;
-    if(clamped < minAllowed) clamped = minAllowed;
-    if(clamped !== raw){
-      // Reajusta o baseSec para que o cache fique coerente com o valor exibido
-      if(s.status === 'running' && c.runningSince != null){
-        c.baseSec = clamped - Math.max(0, Math.floor((Date.now() - c.runningSince) / 1000));
-      } else {
-        c.baseSec = clamped;
-      }
-      raw = clamped;
-    }
+  // Fonte única de verdade: o registro 'running' deste SELB na aba Consulta.
+  const hRun = history.find(h => h.uid === uid && h.selb === s.selb && h.status === 'running');
+
+  let startMs = hRun ? (hRun.startEpoch || null) : null;
+  if(!startMs && hRun && hRun.start){
+    // Fallback: reconstrói o epoch a partir do horário salvo (registros legados sem startEpoch).
+    const parts = hRun.start.split(':').map(Number);
+    const d = new Date(); d.setHours(parts[0]||0, parts[1]||0, parts[2]||0, 0);
+    startMs = d.getTime();
+    if(startMs > Date.now()) startMs -= 86400000;
   }
-  _lastEmittedElapsed[uid] = { selb: s.selb, sec: raw, ts: now };
-  return raw;
+  // Último recurso, apenas se o registro ainda não sincronizou localmente.
+  if(!startMs) startMs = s.startEpoch || null;
+  if(!startMs) return 0;
+
+  // Ponto final do cálculo: agora — ou o instante em que a pausa manual começou,
+  // se o operador estiver pausado neste momento (o relógio fica parado ali).
+  const refMs = (s.status === 'paused' && s._pausedAt) ? s._pausedAt : Date.now();
+
+  const grossLiquidSec = calcLiquidDuration(startMs, refMs);
+  const pauseAccumSec  = Math.max(0, Number(s._pauseAccum) || 0);
+  return Math.max(0, grossLiquidSec - pauseAccumSec);
 }
 
 // Tempo ocioso = soma dos intervalos entre SELBs, descontando pausas programadas do sistema.
@@ -3480,11 +3453,45 @@ async function confirmarInicio(){
   }
   // ── Fecha qualquer SELB anterior ainda em 'running' do mesmo usuário ──
   // Evita registros fantasma quando operador inicia novo SELB sem finalizar o anterior.
+  //
+  // FIX (bug "SELB some do card + é aprovado sozinho ao reiniciar"): antes, este
+  // trecho fechava QUALQUER registro 'running' do usuário sem nenhum critério —
+  // se o card tivesse sido zerado por race condition (ver "Sanity Check" no sync
+  // de /users), a checagem "SELB fantasma" acima era pulada (ela só roda quando o
+  // Supabase ainda mostra _status:'running'), e este loop aprovava silenciosamente
+  // um SELB que na verdade ainda estava em andamento de verdade. Agora só fecha
+  // automaticamente registros que também pareçam órfãos pelos mesmos critérios
+  // usados na checagem acima; caso contrário, bloqueia o novo início com alerta.
   const orphans = history.filter(x => x.uid === actionUid && x.status === 'running');
+  const _latestOkEndEpochLocal = history
+    .filter(x => x.uid === actionUid && x.status === 'ok' && x.endEpoch)
+    .reduce((max, x) => Math.max(max, x.endEpoch), 0);
+
   for(const orphan of orphans){
+    const orphStart2    = orphan.startEpoch || 0;
+    const ageHours2      = orphStart2 ? (Date.now() - orphStart2) / 3600000 : Infinity;
+    const hasNoStart2    = !orphStart2 && !orphan.start;
+    const hasNoSelb2     = !orphan.selb;
+    const tooOld2        = ageHours2 > 18;
+    const beforeLastOk2  = _latestOkEndEpochLocal > 0 && orphStart2 > 0 && orphStart2 < _latestOkEndEpochLocal;
+    const isPhantom2     = hasNoStart2 || hasNoSelb2 || tooOld2 || beforeLastOk2;
+
+    if(!isPhantom2){
+      // Não parece abandonado — provavelmente ainda está em andamento de verdade.
+      // Bloqueia o novo início em vez de fechar/aprovar automaticamente.
+      console.warn('[AUTO-CLOSE-ORPHAN] Bloqueado: SELB anterior não parece órfão, não será fechado automaticamente:', {
+        uid: actionUid, selbAnterior: orphan.selb, docId: orphan._docId,
+        selbNovo: selb, acaoDeQuem: currentUser ? currentUser.name : '?',
+        ts: new Date().toISOString()
+      });
+      alert('⚠️ Atenção: este operador já possui um SELB em andamento (' + (orphan.selb || '—') + ').\n\nFinalize o SELB atual antes de iniciar um novo.');
+      closeModal('modal-selb');
+      return;
+    }
+
     // LOG DE AUDITORIA OBRIGATÓRIO: registra toda finalização automática de orphan
     // para rastrear o bug de SELBs sendo concluídos sem motivo aparente.
-    console.warn('[AUTO-CLOSE-ORPHAN] Fechando SELB em andamento automaticamente ao iniciar novo:', {
+    console.warn('[AUTO-CLOSE-ORPHAN] Fechando SELB em andamento automaticamente ao iniciar novo (confirmado órfão):', {
       uid: actionUid, selbFechado: orphan.selb, docId: orphan._docId,
       selbNovo: selb, acaoDeQuem: currentUser ? currentUser.name : '?',
       ts: new Date().toISOString()
@@ -3950,35 +3957,31 @@ function openFollowupDetails(uid, selb, name, sector, text){
 }
 function togglePause(uid){
   const s   = getS(uid);
+  const u   = users.find(x => x.id === uid);
   const now = Date.now();
   if(s.status === 'running'){
-    // Congela: captura o valor atual do timer (líquido)
-    const frozen       = calcElapsedRunning(uid);
-    s._frozenElapsed   = frozen;
-    s._activeFrom      = null;
-    s.status           = 'paused';
-    // Força o cache local a refletir o estado pausado imediatamente,
-    // evitando que o tick do interval recalcule com runningSince ainda ativo.
-    if(_localTimerCache[uid]){
-      _localTimerCache[uid].baseSec      = frozen;
-      _localTimerCache[uid].runningSince = null;
-    }
-    // Para o interval visual — timer congelado não precisa de tick
+    // Pausa manual: apenas marca o instante em que a pausa começou.
+    // O tempo "congelado" a partir daqui é sempre recalculado por
+    // calcElapsedRunning() a partir do registro em history + s._pausedAt —
+    // não existe mais um valor separado para manter sincronizado.
+    s._pausedAt = now;
+    s.status    = 'paused';
+    // Para o interval visual — timer pausado não precisa de tick
     if(timers[uid]){ clearInterval(timers[uid]); delete timers[uid]; }
     const _writeTs = Date.now();
-    u._lastWriteTs = _writeTs;
-    dbPatch('/users/'+uid, {_status:'paused', _frozenElapsed: frozen, _activeFrom: null, _lastWriteTs: _writeTs}).catch(()=>{});
+    if(u) u._lastWriteTs = _writeTs;
+    dbPatch('/users/'+uid, {_status:'paused', _pausedAt: now, _lastWriteTs: _writeTs}).catch(()=>{});
   } else {
-    // Descongela: marca o instante de retomada
-    s._activeFrom  = now;
-    s.status       = 'running';
-    // Atualiza cache local para retomar a partir do valor congelado
-    if(_localTimerCache[uid]){
-      _localTimerCache[uid].runningSince = now;
-    }
+    // Retomar: soma o tempo líquido decorrido durante a pausa (já descontando
+    // intervalos do expediente que tenham caído dentro dela) ao acumulador,
+    // que passa a ser descontado do total a partir de agora.
+    const pausedLiquidSec = s._pausedAt ? calcLiquidDuration(s._pausedAt, now) : 0;
+    s._pauseAccum = Math.max(0, Number(s._pauseAccum) || 0) + pausedLiquidSec;
+    s._pausedAt   = null;
+    s.status      = 'running';
     const _writeTs = Date.now();
-    u._lastWriteTs = _writeTs;
-    dbPatch('/users/'+uid, {_status:'running', _activeFrom: now, _frozenElapsed: s._frozenElapsed||0, _lastWriteTs: _writeTs}).catch(()=>{});
+    if(u) u._lastWriteTs = _writeTs;
+    dbPatch('/users/'+uid, {_status:'running', _pausedAt: null, _pauseAccum: s._pauseAccum, _lastWriteTs: _writeTs}).catch(()=>{});
     startTimer(uid);
   }
   renderCard(uid); updateSummary();
@@ -7209,7 +7212,6 @@ function renderUsers(){
     const elapsedNow = busy ? fmt(calcElapsedRunning(u.id)) : null;
     const btnAjuste = busy ? `
       <button class="tbtn" id="adm-elapsed-${u.id}" onclick="abrirAjusteTempo('${u.id}')" style="border-color:var(--warn);color:var(--warn)" title="Editar tempo manualmente">⏱ ${elapsedNow}</button>
-      <button class="tbtn" onclick="autoSincronizarTempo('${u.id}', this)" style="border-color:var(--accent2);color:var(--accent2)" title="Recalcular tempo líquido pelo horário de início">↺ Sinc</button>
     ` : '';
     
     const _linhaB = u.linha ? (FLUXOLAB_BOLSOES.find(b=>b.key===u.linha)||{label:u.linha,color:'var(--muted)',bg:'rgba(255,255,255,.06)',border:'rgba(255,255,255,.12)',icon:'🔢'}) : null;
@@ -7485,170 +7487,6 @@ function sincronizarTempoAutomatico(){
   setTimeout(() => inp.style.borderColor = '', 900);
 }
 
-// ── Sincronização automática: recalcula o tempo líquido a partir do startEpoch ──
-async function autoSincronizarTempo(uid, btn){
-  const s = getS(uid);
-  if(s.status !== 'running' && s.status !== 'paused') return;
-
-  if(btn){ btn.disabled = true; btn.textContent = '⏳'; }
-
-  const nowTs = Date.now();
-
-  // Fonte primária: startEpoch do wstate, setado no exato instante em que ESTE SELB
-  // foi iniciado (startSelb / applyUserSnapshot). É a fonte mais confiável — não
-  // depende de buscas em history[], que pode conter registros "running" órfãos de
-  // SELBs/dias anteriores para o mesmo operador (SELB que ficou travado sem finalizar).
-  let startMs = s.startEpoch || null;
-
-  // Fallback apenas se realmente não houver startEpoch local: busca em history[]
-  // SOMENTE registros do MESMO uid E do MESMO selb atual (nunca um "running" órfão
-  // de outro SELB), pegando o mais recente por startEpoch.
-  if(!startMs){
-    const candidatos = history.filter(h =>
-      h.uid === uid && h.selb === s.selb && (h.status === 'running' || h.status === 'paused')
-    );
-    const hRun = candidatos.sort((a,b) => (b.startEpoch||0) - (a.startEpoch||0))[0];
-    startMs = hRun?.startEpoch || null;
-    if(!startMs && hRun?.start){
-      const parts = hRun.start.split(':').map(Number);
-      const d = new Date(); d.setHours(parts[0]||0, parts[1]||0, parts[2]||0, 0);
-      startMs = d.getTime();
-      if(startMs > nowTs) startMs -= 86400000;
-    }
-  }
-  if(!startMs){
-    if(btn){ btn.textContent = '❌'; setTimeout(()=>{ btn.disabled=false; btn.textContent='Auto-Sinc'; },2000); }
-    return;
-  }
-
-  // Ajusta effectiveNow se estiver em intervalo do sistema
-  const schedState = getScheduleState();
-  let effectiveNow = nowTs;
-  if(schedState.type === 'break'){
-    const b = schedState.break;
-    const today = new Date(); today.setHours(0,0,0,0);
-    effectiveNow = Math.min(nowTs, today.getTime() + (b.start[0]*3600 + b.start[1]*60)*1000);
-  }
-
-  const totalMs   = Math.max(0, effectiveNow - startMs);
-  const breakMs   = _calcBreakMsFull(startMs, effectiveNow);
-  const corrigido = Math.max(0, Math.floor((totalMs - breakMs) / 1000));
-
-  // ── Trava de sanidade ──
-  // Se o valor recalculado destoar demais do contador local atual (ex.: por causa
-  // de algum registro órfão remanescente em history[]), NÃO aplica a correção —
-  // evita que o contador "salte" horas do nada. Tolerância generosa: 10 minutos
-  // ou 50% do valor atual, o que for maior (cobre o caso de SELBs recém-iniciados).
-  const atualSec    = calcElapsedRunning(uid);
-  const divergencia = Math.abs(corrigido - atualSec);
-  const tolerancia   = Math.max(600, atualSec * 0.5);
-  if(divergencia > tolerancia){
-    console.warn('[Auto-Sinc] Correção ignorada por divergência suspeita — possível registro órfão em history[]', {uid, selb: s.selb, atualSec, corrigido, divergencia});
-    if(btn){ btn.textContent = '⚠️'; setTimeout(()=>{ btn.disabled=false; btn.textContent='Auto-Sinc'; },2500); }
-    return;
-  }
-
-  const isPaused   = schedState.type !== 'work';
-  const novoStatus = isPaused ? 'paused' : 'running';
-
-  // OTIMIZAÇÃO EGRESS/REALTIME: se o valor recalculado praticamente não mudou
-  // (diferença de poucos segundos) e o status já é o mesmo, não há nada de novo
-  // pra persistir. Isso evita gravar (e, consequentemente, retransmitir via
-  // Realtime pra todos os clientes conectados) toda vez que essa rotina roda —
-  // o que acontece a cada 4 min, em CADA aba aberta, pra CADA usuário
-  // running/paused. Como normalmente o contador local já está certo, a imensa
-  // maioria dessas chamadas era um write "no-op" caro em egress.
-  if(divergencia <= 2 && s.status === novoStatus){
-    if(btn){ btn.textContent = '✅'; setTimeout(()=>{ btn.disabled=false; btn.textContent='Auto-Sinc'; }, 2000); }
-    return;
-  }
-
-  try {
-    await dbPatch('/users/'+uid, {
-      _frozenElapsed: corrigido,
-      _activeFrom: isPaused ? null : nowTs,
-      _status: novoStatus
-    });
-
-    s._frozenElapsed = corrigido;
-    s._activeFrom    = isPaused ? null : nowTs;
-    s.status         = novoStatus;
-
-    // Reinicia timer para refletir imediatamente
-    if(!isPaused){
-      if(timers[uid]){ clearInterval(timers[uid]); delete timers[uid]; }
-      startTimer(uid);
-    }
-    renderCard(uid);
-
-    if(btn){
-      btn.textContent = '✅';
-      setTimeout(() => { btn.disabled=false; btn.textContent='Auto-Sinc'; }, 2000);
-    }
-  } catch(e){
-    if(btn){ btn.textContent='❌'; setTimeout(()=>{ btn.disabled=false; btn.textContent='Auto-Sinc'; },2000); }
-    console.error(e);
-  }
-}
-
-async function sincronizarTodosTempos(){
-  const running = users.filter(u => {
-    const s = getS(u.id);
-    return s.status === 'running' || s.status === 'paused';
-  });
-
-  if(!running.length){
-    alert('Nenhum SELB em andamento para sincronizar.');
-    return;
-  }
-
-  const schedState = getScheduleState();
-
-  // ── BLOQUEIO: sincronização só é permitida durante o expediente ──
-  if(schedState.type !== 'work'){
-    const motivo = schedState.type === 'break'
-      ? `durante o intervalo de ${schedState.break.name}`
-      : schedState.type === 'before'
-        ? 'antes do início do expediente (07:30)'
-        : 'após o fim do expediente (17:30)';
-    alert(`⚠️ Sincronização bloqueada!\n\nEssa operação não pode ser realizada ${motivo}.\n\nO cálculo de tempo é feito com base no expediente ativo (07:30 – 17:30). Execute durante o horário de trabalho.`);
-    return;
-  }
-
-  if(!confirm(`Sincronizar ${running.length} usuário(s) com base no horário de início, descontando todos os intervalos do SCHEDULE?`)) return;
-
-  const btn = document.getElementById('btn-sync-all');
-  const origText = btn ? btn.innerHTML : '';
-  if(btn){ btn.disabled = true; btn.innerHTML = '⏳ Sincronizando...'; }
-
-  let count = 0;
-  for(const u of running){
-    await autoSincronizarTempo(u.id);
-    count++;
-    if(btn) btn.innerHTML = `⏳ ${count}/${running.length}...`;
-  }
-
-  if(btn){
-    btn.innerHTML = `✅ ${count} sincronizado${count !== 1 ? 's' : ''}!`;
-    setTimeout(() => { btn.disabled = false; btn.innerHTML = origText; }, 3000);
-  }
-}
-
-// ── Sincronização automática em background a cada 4 minutos ──
-async function autoSyncBackground(){
-  const running = users.filter(u => {
-    const s = getS(u.id);
-    return s.status === 'running' || s.status === 'paused';
-  });
-  if(!running.length) return;
-  const schedState = getScheduleState();
-  if(schedState.type !== 'work') return;
-  for(const u of running){
-    try { await autoSincronizarTempo(u.id, null); } catch(e){}
-  }
-}
-setInterval(autoSyncBackground, 4 * 60 * 1000);
-
 async function confirmarAjusteTempo(){
   const val    = document.getElementById('maj-tempo').value.trim();
   const err    = document.getElementById('maj-err');
@@ -7663,25 +7501,42 @@ async function confirmarAjusteTempo(){
   err.textContent = '';
 
   try {
-    const patch = {};
+    // Fonte única de verdade: o registro do SELB em andamento na aba Consulta.
+    const hRun = history.find(h => h.uid === _ajusteUid && h.selb === s.selb && h.status === 'running');
+    if(!hRun){
+      err.textContent = 'Não foi possível localizar o registro do SELB em andamento na Consulta.';
+      return;
+    }
+
+    // Em vez de guardar o tempo ajustado num campo à parte, reposicionamos o
+    // próprio horário de início do registro (a única referência usada pelo
+    // cálculo) para que o tempo líquido resultante bata com o valor informado.
+    const refMs = (s.status === 'paused' && s._pausedAt) ? s._pausedAt : now;
+    let newStartMs = refMs - newSec * 1000;
+    // Refina algumas vezes para compensar os intervalos do expediente
+    // descontados por calcLiquidDuration entre o novo início e a referência.
+    for(let i = 0; i < 4; i++){
+      const got  = calcLiquidDuration(newStartMs, refMs);
+      const diff = newSec - got;
+      if(diff === 0) break;
+      newStartMs -= diff * 1000;
+    }
+    const newStartStr = new Date(newStartMs).toLocaleTimeString('pt-BR');
+
+    hRun.startEpoch = newStartMs;
+    hRun.start      = newStartStr;
+    s.startEpoch    = newStartMs;
+    // O novo início já reflete o tempo líquido desejado — zera o acumulador de pausas.
+    s._pauseAccum   = 0;
+
+    await dbUpdateHistory(hRun._docId, hRun._dateKey, { startEpoch: newStartMs, start: newStartStr });
+    await dbPatch('/users/' + _ajusteUid, { _startEpoch: newStartMs, _pauseAccum: 0 });
 
     if(s.status === 'running'){
-      // Redefine o ponto de base: congela no valor novo e reinicia contagem a partir de agora
-      s._frozenElapsed = newSec;
-      s._activeFrom    = now;
-      patch._frozenElapsed = newSec;
-      patch._activeFrom    = now;
       // Reinicia timer local para refletir imediatamente
       if(timers[_ajusteUid]){ clearInterval(timers[_ajusteUid]); delete timers[_ajusteUid]; }
       startTimer(_ajusteUid);
-    } else if(s.status === 'paused'){
-      s._frozenElapsed = newSec;
-      s._activeFrom    = null;
-      patch._frozenElapsed = newSec;
-      patch._activeFrom    = null;
     }
-
-    await dbPatch('/users/' + _ajusteUid, patch);
 
     // Atualiza display imediato no card sem esperar o próximo tick
     const elCard = document.getElementById('elapsed-' + _ajusteUid);
@@ -24203,19 +24058,24 @@ function exportLinhaProdCSV(){
 //   • Registra automaticamente todo dbDelete/dbDeleteUser via wrapper
 //
 // Requer (uma vez, no Supabase):
-//   create table if not exists public.audit_log (
+//   create table if not exists public.app_audit_log (
 //     id uuid primary key default gen_random_uuid(),
 //     ts timestamptz not null default now(),
 //     user_id text, user_name text, user_sector text,
 //     action text not null, entity text, entity_id text,
 //     details jsonb, ua text
 //   );
-//   create index if not exists audit_log_ts_idx on public.audit_log (ts desc);
-//   alter table public.audit_log enable row level security;
-//   create policy "audit insert authenticated" on public.audit_log
+//   create index if not exists app_audit_log_ts_idx on public.app_audit_log (ts desc);
+//   alter table public.app_audit_log enable row level security;
+//   create policy "app_audit_log insert authenticated" on public.app_audit_log
 //     for insert to authenticated with check (true);
-//   create policy "audit read admins" on public.audit_log
+//   create policy "app_audit_log read admins" on public.app_audit_log
 //     for select to authenticated using (true); -- ajuste p/ has_role('admin') se preferir
+//
+// OBS: chamamos essa tabela de "app_audit_log" (e não "audit_log") porque já
+// existe uma tabela "audit_log" no banco com outro esquema (provavelmente
+// ligada a triggers de auditoria do próprio banco) — usamos um nome
+// diferente para não conflitar com ela.
 // ═══════════════════════════════════════════════════════════════════════
 (function initAuditLog(){
   if(window.auditLog) return;
@@ -24242,7 +24102,7 @@ function exportLinhaProdCSV(){
     if(typeof _supa === 'undefined' || !_supa) { BUFFER.length = 0; return; }
     const batch = BUFFER.splice(0, MAX_BATCH);
     try {
-      const { error } = await _supa.from('audit_log').insert(batch);
+      const { error } = await _supa.from('app_audit_log').insert(batch);
       if(error) throw error;
     } catch(e){
       // Falha silenciosa — não re-enfileira p/ evitar loop se a tabela não existir
@@ -24326,14 +24186,14 @@ function exportLinhaProdCSV(){
     let rows = [];
     try {
       const { data, error } = await _supa
-        .from('audit_log')
+        .from('app_audit_log')
         .select('*')
         .order('ts', { ascending: false })
         .limit(500);
       if(error) throw error;
       rows = data || [];
     } catch(e){
-      body.innerHTML = `<div style="padding:20px;color:var(--danger,#ef4444);font-size:12px">Não foi possível ler a auditoria: ${e.message||e}<br><br>Verifique se a tabela <code>audit_log</code> existe no Supabase (SQL no topo de <code>initAuditLog</code>).</div>`;
+      body.innerHTML = `<div style="padding:20px;color:var(--danger,#ef4444);font-size:12px">Não foi possível ler a auditoria: ${e.message||e}<br><br>Verifique se a tabela <code>app_audit_log</code> existe no Supabase (SQL no topo de <code>initAuditLog</code>).</div>`;
       return;
     }
     function render(list){
