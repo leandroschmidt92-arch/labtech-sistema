@@ -521,23 +521,69 @@ function applyUserSnapshot(freshUsers){
         // O wstate local já tem um SELB válido rodando — snapshot parcial, preserva estado
         return;
       }
-      s.status = 'idle';
-      s.selb = null;
-      s.startEpoch = null;
-      s.elapsed = 0;
-      s.pausedElapsed = 0;
-      s._activeFrom = null;
-      s._frozenElapsed = 0;
-      s._pausedAt = null;
-      s._pauseAccum = 0;
-      dbPatch('/users/' + fu.id, {
-        _selb: null,
-        _status: 'idle',
-        _startEpoch: null,
-        _activeFrom: null,
-        _frozenElapsed: 0
-      }).catch(err => console.warn('[Sanity Check] Could not repair stale operator state:', err));
+
+      // FIX (bug "SELB some do card mas continua 'Em andamento' na Consulta"):
+      // Antes, este bloco confiava só no array local `history[]` para decidir se
+      // o SELB era "stale". Se esse array ainda não tivesse o registro (listener
+      // de /history atrasado, SELB de dia anterior, ou propagação parcial do
+      // Supabase), o operador era zerado (_status:'idle', _selb:null) mesmo com
+      // um SELB de verdade rodando em /history — dessincronizando o card
+      // (mostra "Iniciar SELB") do registro real (continua "Em andamento" na
+      // Consulta), e bloqueando o reinício com "já possui um SELB em andamento".
+      //
+      // Agora: exige confirmação em 2 snapshots consecutivos (filtra flicker
+      // passageiro) e, antes de apagar, confirma contra o /history real do
+      // Supabase — não só o array local — antes de decidir que é realmente stale.
+      s._staleStrikes = (s._staleStrikes || 0) + 1;
+      if (s._staleStrikes < 2) return; // aguarda confirmação no próximo snapshot
+      s._staleStrikes = 0;
+
+      const _dateKeyCheck = new Date().toDateString().replace(/ /g, '_');
+      dbGet('/history/' + _dateKeyCheck).then(fbHist => {
+        const recs = fbHist ? Object.values(fbHist) : [];
+        const stillActive = recs.find(r => r.uid === fu.id && (r.status === 'running' || r.status === 'aguardando'));
+
+        if (stillActive) {
+          // Falso positivo: existe um SELB de verdade em andamento no Supabase —
+          // não apaga, re-sincroniza o wstate a partir do registro real.
+          console.warn('[Sanity Check] Falso positivo evitado — SELB real encontrado em /history, preservando:', stillActive);
+          s.status = stillActive.status === 'aguardando' ? 'aguardando' : 'running';
+          s.selb = stillActive.selb || s.selb;
+          s.startEpoch = stillActive.startEpoch || s.startEpoch || Date.now();
+          dbPatch('/users/' + fu.id, {
+            _selb: s.selb,
+            _status: s.status,
+            _startEpoch: s.startEpoch
+          }).catch(() => {});
+          renderCard(fu.id);
+          return;
+        }
+
+        // Confirmado contra o Supabase: não há SELB ativo de verdade — reparo seguro.
+        s.status = 'idle';
+        s.selb = null;
+        s.startEpoch = null;
+        s.elapsed = 0;
+        s.pausedElapsed = 0;
+        s._activeFrom = null;
+        s._frozenElapsed = 0;
+        s._pausedAt = null;
+        s._pauseAccum = 0;
+        dbPatch('/users/' + fu.id, {
+          _selb: null,
+          _status: 'idle',
+          _startEpoch: null,
+          _activeFrom: null,
+          _frozenElapsed: 0
+        }).catch(err => console.warn('[Sanity Check] Could not repair stale operator state:', err));
+        renderCard(fu.id);
+      }).catch(err => {
+        // Falha ao verificar — não apaga nada às cegas, mantém estado local por segurança
+        console.warn('[Sanity Check] Falha ao confirmar contra /history, mantendo estado local:', err);
+      });
       return;
+    } else if (s._staleStrikes) {
+      s._staleStrikes = 0; // condição não bateu neste snapshot — reseta o contador
     }
 
     // SELBs de dias anteriores são mantidos — o operador finaliza normalmente.
