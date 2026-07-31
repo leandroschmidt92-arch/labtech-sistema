@@ -471,6 +471,7 @@ let _historyListener = null;
 let _dashboardZerado = false; // quando true, listener não repopula history[]
 
 let _historyReady    = false;
+let _modeloAllRecsPreloadTriggered = false;
 
 function applyUserSnapshot(freshUsers){
   if (!freshUsers || !Array.isArray(freshUsers)) {
@@ -784,6 +785,19 @@ function startRealtimeSync(){
         if(dk === todayDk3 && history.length === 0) history = [];
       }
       _historyReady = true;
+      // ── Pré-carrega o cache de 90 dias usado pelo "T. Médio Modelo" ──
+      // Antes, esse cache (_modeloAllRecs) só era carregado quando alguém
+      // abria a aba Relatórios → Tempo por Modelo. Até lá, os cards do
+      // Dashboard calculavam a média usando só os registros de HOJE, dando
+      // um número bem diferente do relatório (que usa até 90 dias). Carrega
+      // uma única vez por sessão, em segundo plano, assim que o histórico de
+      // hoje estiver pronto, e re-renderiza os cards com a média correta.
+      if(!_modeloAllRecsPreloadTriggered && typeof loadModeloAllPeriods === 'function'){
+        _modeloAllRecsPreloadTriggered = true;
+        loadModeloAllPeriods().then(() => {
+          if(typeof buildCards === 'function' && currentUser && document.getElementById('cards-grid')) buildCards();
+        }).catch(err => console.warn('[T. Médio Modelo] Falha ao pré-carregar cache de 90 dias:', err));
+      }
       if(currentUser){
         updateSummary();
         // ── Re-renderiza cards do dashboard em tempo real ──
@@ -2385,23 +2399,50 @@ function setSector(s,btn){
 }
 
 // ════ TEMPO MÉDIO DO MODELO — mesma lógica do relatório ════
-// Usa _modeloAllRecs (histórico completo) quando disponível, senão usa history (dia atual).
-// Aplica os mesmos filtros do relatório: setor, intervalo 5–180 min (Montagem/Limpeza),
-// exclusão de SELBs individuais via _selbsExcluidos.
+// Usa _modeloAllRecs (histórico de até 90 dias) quando disponível, mas SEMPRE
+// substitui a fatia de HOJE por `history` (array ao vivo), pois _modeloAllRecs
+// é um retrato congelado no momento em que o relatório foi carregado e não
+// recebe as conclusões que acontecem depois na mesma sessão.
+// Aplica os mesmos filtros do relatório: setor, intervalo 15–180 min
+// (Montagem/Limpeza), exclusão de SELBs individuais via _selbsExcluidos, e a
+// mesma janela deslizante de dias (_modeloWindowDays) usada no relatório.
+//
+// FIX (bug "T. Médio Modelo do card difere do relatório"): antes, se
+// _modeloAllRecs ainda não tivesse sido carregado (ninguém abriu a aba
+// Relatórios nesta sessão), o card caía para `history`, ou seja, calculava a
+// média só com as máquinas concluídas HOJE — uma amostra muito menor e
+// diferente da janela de até 90 dias usada no relatório. E mesmo depois de
+// carregado, _modeloAllRecs não recebia as conclusões seguintes do dia.
+function _getModeloSourceRecs(){
+  if(typeof _modeloAllRecs === 'undefined' || _modeloAllRecs.length === 0) return history;
+  const todayDk = new Date().toDateString().replace(/ /g,'_');
+  const older = _modeloAllRecs.filter(h => h._dateKey !== todayDk);
+  return older.concat(history);
+}
+function _modeloRecDateMs(h){
+  if(h.endEpoch && h.endEpoch > 0) return h.endEpoch;
+  if(h.startEpoch && h.startEpoch > 0) return h.startEpoch;
+  if(h._dateKey){ const t = Date.parse(h._dateKey.replace(/_/g,' ')); if(!isNaN(t)) return t; }
+  return Date.now();
+}
+function _modeloCutoffMs(){
+  const _winDays = (typeof _modeloWindowDays === 'number' && _modeloWindowDays > 0) ? _modeloWindowDays : 90;
+  return Date.now() - _winDays * 24 * 60 * 60 * 1000;
+}
 function getAvgModeloSeconds(equipName, sector){
   if(!equipName) return null;
   const _MONT_LIMP_MIN = 15 * 60;
   const _MONT_LIMP_MAX = 180 * 60;
   const isMontLimp = (sector === 'MONTAGEM' || sector === 'LIMPEZA');
-  const source = (typeof _modeloAllRecs !== 'undefined' && _modeloAllRecs.length > 0)
-    ? _modeloAllRecs
-    : history;
+  const source = _getModeloSourceRecs();
+  const cutoff = _modeloCutoffMs();
   const tempos = source
     .filter(h =>
       h.equipamento && h.equipamento.trim() === equipName.trim() &&
       h.sector === sector &&
       h.status === 'ok' &&
       h.duracao &&
+      _modeloRecDateMs(h) >= cutoff &&
       !(typeof _selbsExcluidos !== 'undefined' && _selbsExcluidos.has(h._docId))
     )
     .map(h => {
@@ -2458,15 +2499,15 @@ function getAvgModeloCard(equipName, sector){
   const _MONT_LIMP_MIN = 15 * 60;
   const _MONT_LIMP_MAX = 180 * 60;
   const isMontLimp = (sector === 'MONTAGEM' || sector === 'LIMPEZA');
-  const source = (typeof _modeloAllRecs !== 'undefined' && _modeloAllRecs.length > 0)
-    ? _modeloAllRecs
-    : history;
+  const source = _getModeloSourceRecs();
+  const cutoff = _modeloCutoffMs();
   const tempos = source
     .filter(h =>
       h.equipamento && h.equipamento.trim() === equipName.trim() &&
       h.sector === sector &&
       h.status === 'ok' &&
       h.duracao &&
+      _modeloRecDateMs(h) >= cutoff &&
       !(typeof _selbsExcluidos !== 'undefined' && _selbsExcluidos.has(h._docId))
     )
     .map(h => {
