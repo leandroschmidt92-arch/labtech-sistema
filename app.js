@@ -7145,7 +7145,7 @@ function renderTeamHealth(dateVal, checkinUids, prodCount, noDataAtAll){
   if(!container) return;
   var wasCollapsed = container.dataset.collapsed === '1';
 
-  const targetSectors = [
+  const baseSectors = [
     { key: 'DESMEMBRAMENTO', name: 'Desmembramento', icon: '📦', color: '#38bdf8', bg: 'rgba(56,189,248,0.12)', border: 'rgba(56,189,248,0.35)' },
     { key: 'MONTAGEM',       name: 'Montagem',       icon: '🛠️', color: '#4ade80', bg: 'rgba(74,222,128,0.12)', border: 'rgba(74,222,128,0.35)' },
     { key: 'LIMPEZA',        name: 'Limpeza',        icon: '🧹', color: '#a78bfa', bg: 'rgba(167,139,250,0.12)', border: 'rgba(167,139,250,0.35)' },
@@ -7154,27 +7154,53 @@ function renderTeamHealth(dateVal, checkinUids, prodCount, noDataAtAll){
     { key: 'ELETRÔNICA',     name: 'Eletrônica',     icon: '🔌', color: '#fb923c', bg: 'rgba(251,146,60,0.12)', border: 'rgba(251,146,60,0.35)' },
   ];
 
+  // FIX (bug "Gestão de Equipe não mostra todos os usuários" — causa raiz):
+  // esta lista de setores era FIXA (só os 6 acima). Mas o admin pode criar
+  // setores personalizados em "Gerenciar Setores" (ver addSetor()), e
+  // qualquer usuário cadastrado num setor fora dessa lista fixa ficava
+  // totalmente ausente do painel — nem contado, nem listado — mesmo
+  // aparecendo normalmente no resto do sistema (tabela de usuários, filtros
+  // de setor). Agora inclui também os setores personalizados do tipo
+  // "operador" (setores administrativos/de visualização como PCP,
+  // VISUALIZAÇÃO, VISU FLUXOLAB continuam de fora, pois não são setores de
+  // produção com presença a acompanhar).
+  const knownKeys = new Set(baseSectors.map(s => s.key).concat(['COMPLEXAS']));
+  const customSectors = (typeof _setores !== 'undefined' && Array.isArray(_setores) ? _setores : [])
+    .map(s => String(s || '').toUpperCase().trim())
+    .filter(s => s && !knownKeys.has(s))
+    .filter(s => (typeof getSectorTipo !== 'function') || getSectorTipo(s) !== 'admin')
+    .map(s => ({
+      key: s,
+      name: (typeof _capitalize === 'function') ? _capitalize(s) : s,
+      icon: '🏷️', color: '#94a3b8', bg: 'rgba(148,163,184,0.12)', border: 'rgba(148,163,184,0.35)'
+    }));
+  const targetSectors = baseSectors.concat(customSectors);
+
   const allUsers = Array.isArray(users) ? users : [];
 
   let overallTotal = 0;
   let overallActive = 0;
 
   var cardsHtml = targetSectors.map(function(sec) {
+    // Histórico: esse painel já teve dois bugs de "gente sumindo da lista":
+    // 1) Total contava usuários Ocultos mas eles nunca apareciam nos chips.
+    // 2) Setores personalizados (criados em "Gerenciar Setores") nem
+    //    entravam na lista de setores acima (ver targetSectors/customSectors).
+    // Ocultos e Inativos seguem o MESMO critério de presença que todo mundo
+    // (fez check-in por PIN hoje = presente), só ganham uma etiqueta cinza
+    // extra no chip pra indicar o motivo — não viram uma categoria à parte.
     var secUsers = allUsers.filter(function(u) {
       var uSec = (u.sector || '').toUpperCase().trim();
       if(sec.key === 'COMPLEXA') return uSec === 'COMPLEXA' || uSec === 'COMPLEXAS';
       return uSec === sec.key;
     });
 
-    var total = secUsers.length;
-    // Presença = fez check-in por PIN nessa data (não é mais o toggle
-    // manual Ativo/Inativo do cadastro, que só controla se a conta pode
-    // logar — coisas diferentes).
-    var activeUsers = secUsers.filter(function(u){ return checkinUids.has(String(u.id)) && !u.hidden; });
-    var inactiveUsers = secUsers.filter(function(u){ return !checkinUids.has(String(u.id)) && !u.hidden; });
-    
+    var activeUsers = secUsers.filter(function(u){ return checkinUids.has(String(u.id)); });
+    var inactiveUsers = secUsers.filter(function(u){ return !checkinUids.has(String(u.id)); });
+
     var activeCount = activeUsers.length;
     var inactiveCount = inactiveUsers.length;
+    var total = secUsers.length; // presentes + ausentes — sempre bate
 
     overallTotal += total;
     overallActive += activeCount;
@@ -7185,12 +7211,21 @@ function renderTeamHealth(dateVal, checkinUids, prodCount, noDataAtAll){
     if(pct < 50) healthColor = '#f25757';
     else if(pct < 80) healthColor = '#f5a623';
 
+    // Etiqueta "Oculto"/"Inativo"/"Inativo · Oculto" anexada ao chip, sem
+    // mudar a cor verde/vermelha (que continua indicando só presença).
+    var offTag = function(u){
+      if(u.active === false && u.hidden) return ' <span style="opacity:.75;font-weight:600">(Inativo · Oculto)</span>';
+      if(u.hidden) return ' <span style="opacity:.75;font-weight:600">(Oculto)</span>';
+      if(u.active === false) return ' <span style="opacity:.75;font-weight:600">(Inativo)</span>';
+      return '';
+    };
+
     var activeListText = activeUsers.length > 0
-      ? activeUsers.map(function(u){ return '<span style="display:inline-flex;align-items:center;gap:3px;background:rgba(74,222,128,0.14);border:1px solid rgba(74,222,128,0.35);color:#4ade80;font-size:9px;font-weight:700;padding:2px 6px;border-radius:5px;margin:1px"><span style="width:5px;height:5px;border-radius:50%;background:#4ade80;display:inline-block"></span>'+u.name+'</span>'; }).join('')
+      ? activeUsers.map(function(u){ return '<span style="display:inline-flex;align-items:center;gap:3px;background:rgba(74,222,128,0.14);border:1px solid rgba(74,222,128,0.35);color:#4ade80;font-size:9px;font-weight:700;padding:2px 6px;border-radius:5px;margin:1px"><span style="width:5px;height:5px;border-radius:50%;background:#4ade80;display:inline-block"></span>'+u.name+offTag(u)+'</span>'; }).join('')
       : '<span style="font-size:9px;color:var(--muted);font-style:italic;padding:4px">Ninguém presente</span>';
 
     var inactiveListText = inactiveUsers.length > 0
-      ? inactiveUsers.map(function(u){ return '<span style="display:inline-flex;align-items:center;gap:3px;background:rgba(242,87,87,0.14);border:1px solid rgba(242,87,87,0.35);color:#f25757;font-size:9px;font-weight:700;padding:2px 6px;border-radius:5px;margin:1px;opacity:0.85"><span style="width:5px;height:5px;border-radius:50%;background:#f25757;display:inline-block"></span>'+u.name+'</span>'; }).join('')
+      ? inactiveUsers.map(function(u){ return '<span style="display:inline-flex;align-items:center;gap:3px;background:rgba(242,87,87,0.14);border:1px solid rgba(242,87,87,0.35);color:#f25757;font-size:9px;font-weight:700;padding:2px 6px;border-radius:5px;margin:1px;opacity:0.85"><span style="width:5px;height:5px;border-radius:50%;background:#f25757;display:inline-block"></span>'+u.name+offTag(u)+'</span>'; }).join('')
       : '';
 
     var filterKey = sec.key;
@@ -17010,6 +17045,7 @@ const FLUXOLAB_BOLSOES = [
   { key: 'LINHA_LIMPEZA', label: 'Bolsão Montagem',     icon: '✨', color: '#60a5fa',        bg: 'rgba(96,165,250,.08)',  border: 'rgba(96,165,250,.35)' },
   { key: 'MONTAGEM',      label: 'Montagem',            icon: '🔧', color: 'var(--accent2)', bg: 'rgba(61,214,140,.08)',  border: 'rgba(61,214,140,.3)'  },
   { key: 'COMPLEXA',      label: 'Complexa',            icon: '⚙️', color: 'var(--purple)',  bg: 'rgba(167,139,250,.08)', border: 'rgba(167,139,250,.3)' },
+  { key: 'AG_3D',         label: 'AG. 3D',              icon: '🖨️', color: '#14b8a6',        bg: 'rgba(20,184,166,.08)',  border: 'rgba(20,184,166,.3)'  },
   { key: 'QUALIDADE',     label: 'Bolsão Qualidade',    icon: '🔬', color: '#f5a623',        bg: 'rgba(245,166,35,.08)',  border: 'rgba(245,166,35,.3)'  },
   { key: 'LIBERADAS',     label: 'Liberados Qualidade', icon: '✅', color: '#10b981',        bg: 'rgba(16,185,129,.08)',  border: 'rgba(16,185,129,.35)' },
   { key: 'SCRAP',         label: 'Scrap',               icon: '🗑️', color: '#f25757',        bg: 'rgba(242,87,87,.08)',   border: 'rgba(242,87,87,.35)'  },
@@ -17038,6 +17074,7 @@ const FLUXOLAB_ORDEM_PADRAO = [
   'GAIOLA_LAB',
   'LINHA_1', 'LINHA_2', 'LINHA_3', 'LINHA_4', 'LINHA_5', 'LINHA_6', 'LINHA_7', 'LINHA_8', 'LINHA_9',
   'COMPLEXA',
+  'AG_3D',
   'ELETRONICA',
   'GAIOLA_AG_PECAS',
   'SCRAP',
@@ -17630,6 +17667,22 @@ function _fluxolabRenderModelFilterBar(allModels, matchCountsByBolsao, totalMatc
     bar.style.cssText = 'grid-column:1/-1;background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:10px 14px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px';
     layout.insertBefore(bar, layout.firstChild);
   }
+
+  // FIX (bug "campo de texto apaga enquanto digita no FluxoLAB"): esta barra é
+  // reconstruída a cada 4s pelo poll de /fluxolab (_fluxolabRenderGrid), mesmo
+  // sem nenhuma mudança real de dados. Reescrever bar.innerHTML enquanto o
+  // usuário está digitando destrói o <input> atual (perde foco, cursor e o
+  // texto ainda não confirmado) e cria um novo com o valor antigo — parecendo
+  // que o campo "apaga sozinho". Se o campo está com foco agora, não
+  // reconstrói a barra neste ciclo: só atualiza o datalist de sugestões
+  // (que não afeta o que está sendo digitado) e sai.
+  const existingInput = document.getElementById('fluxolab-bolsao-filter-input');
+  if (existingInput && document.activeElement === existingInput){
+    const dl = document.getElementById('fluxolab-bolsao-filter-models');
+    if (dl) dl.innerHTML = allModels.slice().sort().map(m => '<option value="'+m.replace(/"/g,'&quot;')+'"></option>').join('');
+    return;
+  }
+
   const cur = _fluxolabBolsaoModelFilter;
   const opts = allModels.slice().sort().map(m => '<option value="'+m.replace(/"/g,'&quot;')+'"></option>').join('');
   const totalBadge = cur
@@ -19109,7 +19162,7 @@ function fluxolabRenderChecklistsImported(){
 
   // ── índice de SELBs por modelo nos bolsões ──
   // LAB_KEYS: bolsões que contam como "no lab" (excluindo Doca e Scrap)
-  const LAB_KEYS  = new Set(['LIMPEZA','LINHA_LIMPEZA','MONTAGEM','COMPLEXA','QUALIDADE','LIBERADAS','GAIOLA_LAB']);
+  const LAB_KEYS  = new Set(['LIMPEZA','LINHA_LIMPEZA','MONTAGEM','COMPLEXA','QUALIDADE','GAIOLA_LAB','AG_3D']);
   const DOCA_KEYS = new Set(['DOCA_1']);
 
   // Mapa de nomes normalizados dos modelos da planilha → nome original

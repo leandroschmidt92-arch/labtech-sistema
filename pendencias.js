@@ -244,16 +244,34 @@ function fluxolabUpdateRowElemPend(elem, tableName, field) {
                      _fluxolabPendenciasState[tableName][index].obs.trim() !== '' ||
                      _fluxolabPendenciasState[tableName][index].pecas.trim() !== '';
 
+  // FIX (bug "campo de texto apaga enquanto digita no FluxoLAB > Pendências"):
+  // Antes, ao completar a última linha (ou esvaziar uma), a tabela inteira era
+  // reconstruída 10ms depois, num timer fixo. Se o usuário já tivesse saído do
+  // campo (Tab/Enter) e começado a digitar no PRÓXIMO campo dentro desses
+  // 10ms — bem comum ao preencher rapidamente — o rebuild destruía esse campo
+  // no meio da digitação e recriava com o valor antigo (vazio), porque a
+  // tecla digitada ainda não tinha sido salva no estado. Parecia que o campo
+  // "se atualizava sozinho e apagava". Agora: se o usuário ainda estiver com
+  // o foco em algum campo desta mesma tabela, adia o rebuild e tenta de novo
+  // mais adiante, em vez de reconstruir por baixo dele; só força depois de
+  // ~5s para não deixar a tabela permanentemente desatualizada.
   const reRender = () => {
     fluxolabSavePendenciasDebounced();
-    setTimeout(() => {
-      const activeId = document.activeElement ? document.activeElement.id : null;
+    const attempt = (retriesLeft) => {
+      const active = document.activeElement;
+      const stillEditingThisTable = active && active.id && active.id.indexOf(`pnd-${tableName}-`) === 0;
+      if (stillEditingThisTable && retriesLeft > 0) {
+        setTimeout(() => attempt(retriesLeft - 1), 250);
+        return;
+      }
+      const activeId = active ? active.id : null;
       fluxolabRenderPendencias();
       if (activeId) {
         const el = document.getElementById(activeId);
         if (el) el.focus();
       }
-    }, 10);
+    };
+    setTimeout(() => attempt(20), 10);
   };
 
   if (isLastRow && rowHasData) {

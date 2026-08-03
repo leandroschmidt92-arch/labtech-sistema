@@ -143,15 +143,29 @@ function fluxolabUpdateRowElem(elem, tableName, field) {
   if (isLastRow && rowHasData) {
     _fluxolabPlanejamentoState[tableName].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
     fluxolabSavePlanejamentoDebounced();
-    
-    setTimeout(() => {
-      const activeId = document.activeElement ? document.activeElement.id : null;
+
+    // FIX (bug "campo de texto apaga enquanto digita no FluxoLAB > Planejamento"):
+    // igual ao mesmo bug corrigido em Pendências — antes, a tabela inteira era
+    // reconstruída num timer fixo de 10ms, o que podia destruir o PRÓXIMO campo
+    // bem no momento em que o usuário começava a digitar nele (ex.: Tab de
+    // Modelo pra Qtd WMS), apagando o que tinha acabado de ser digitado.
+    // Agora adia o rebuild enquanto o usuário ainda estiver com o foco em
+    // algum campo desta mesma tabela, tentando de novo a cada 250ms (até ~5s).
+    const attempt = (retriesLeft) => {
+      const active = document.activeElement;
+      const stillEditingThisTable = active && active.id && active.id.indexOf(`plan-${tableName}-`) === 0;
+      if (stillEditingThisTable && retriesLeft > 0) {
+        setTimeout(() => attempt(retriesLeft - 1), 250);
+        return;
+      }
+      const activeId = active ? active.id : null;
       fluxolabRenderPlanejamento();
       if (activeId) {
         const el = document.getElementById(activeId);
         if (el) el.focus();
       }
-    }, 10);
+    };
+    setTimeout(() => attempt(20), 10);
     return;
   }
   
@@ -338,11 +352,12 @@ function fluxolabPlanGetChecklistStats(modeloName) {
 }
 
 function fluxolabPlanGetBolsaoStats(modeloName) {
-  if (!modeloName || typeof _fluxolabData === 'undefined' || !_fluxolabData) return { doca: 0, lab: 0 };
+  if (!modeloName || typeof _fluxolabData === 'undefined' || !_fluxolabData) return { doca: 0, lab: 0, qual: 0 };
   const normAlvo = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(modeloName) : modeloName.toUpperCase().replace(/\s+/g,'');
   
   let docaCount = 0;
   let labCount = 0;
+  let qualCount = 0;
   
   Object.entries(_fluxolabData).forEach(([bolsao, items]) => {
     if (!items) return;
@@ -354,14 +369,17 @@ function fluxolabPlanGetBolsaoStats(modeloName) {
       if (normM === normAlvo) {
         if (bolsao === 'DOCA_1') {
           docaCount++;
-        } else if (bolsao !== 'RETORNO_ESTOQUE') {
+        } else if (bolsao === 'QUALIDADE') {
+          qualCount++;
+          labCount++;
+        } else if (bolsao !== 'RETORNO_ESTOQUE' && bolsao !== 'LIBERADAS') {
           labCount++;
         }
       }
     });
   });
   
-  return { doca: docaCount, lab: labCount };
+  return { doca: docaCount, lab: labCount, qual: qualCount };
 }
 
 // Retorna EM QUAL(IS) bolsão(ões) específico(s) o modelo está fisicamente agora
@@ -448,6 +466,7 @@ function fluxolabRenderPlanTable(title, tableName, titleColor, themeColor) {
             <th style="${thStyle};width:72px;min-width:72px;max-width:72px"><div style="padding:12px 6px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.05em">Sugerido</div></th>
             <th style="${thStyle}">${resizableHeader('DOCA', `ph-${tableName}-doca`, '60px', '50px', '#22d3ee')}</th>
             <th style="${thStyle}">${resizableHeader('LAB', `ph-${tableName}-lab`, '60px', '50px', '#a78bfa')}</th>
+            <th style="${thStyle}">${resizableHeader('QUAL.', `ph-${tableName}-qual`, '60px', '50px', '#f5a623')}</th>
             <th style="${thStyle}">${resizableHeader('Observação', `ph-${tableName}-obs`, '180px', '80px')}</th>
             <th style="${thLastStyle}">${resizableHeader('Peças', `ph-${tableName}-pecas`, '180px', '80px')}</th>
           </tr>
@@ -457,7 +476,7 @@ function fluxolabRenderPlanTable(title, tableName, titleColor, themeColor) {
   
   rows.forEach((row, idx) => {
     const statsChk = row.modelo ? fluxolabPlanGetChecklistStats(row.modelo) : { count: 0, media: 0 };
-    const statsBol = row.modelo ? fluxolabPlanGetBolsaoStats(row.modelo) : { doca: 0, lab: 0 };
+    const statsBol = row.modelo ? fluxolabPlanGetBolsaoStats(row.modelo) : { doca: 0, lab: 0, qual: 0 };
     
     const rowBg = idx % 2 === 0 ? 'rgba(255,255,255,0.015)' : 'transparent';
     const isFilled = row.modelo ? true : false;
@@ -527,6 +546,9 @@ function fluxolabRenderPlanTable(title, tableName, titleColor, themeColor) {
         </td>
         <td id="plan-${tableName}-r${idx}-lab" class="lab-cell" style="${tdStyle};background:rgba(167,139,250,0.05);color:#a78bfa;font-weight:900;font-size:18px;text-shadow:0 0 8px rgba(167,139,250,0.4)">
           ${isFilled ? (statsBol.lab || '-') : ''}
+        </td>
+        <td id="plan-${tableName}-r${idx}-qual" class="qual-cell" style="${tdStyle};background:rgba(245,166,35,0.05);color:#f5a623;font-weight:900;font-size:18px;text-shadow:0 0 8px rgba(245,166,35,0.4)">
+          ${isFilled ? (statsBol.qual || '-') : ''}
         </td>
         
         <td style="${tdStyle};padding:4px">
