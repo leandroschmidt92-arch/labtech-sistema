@@ -2715,42 +2715,49 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     </div>
 
     <!-- ═══ ABAS FluxoLAB ═══ -->
-    <div style="display:flex;gap:8px;margin-bottom:20px;border-bottom:1px solid var(--border);padding-bottom:0">
-      <button id="fluxolab-tab-bolsoes" onclick="fluxolabSwitchTab('bolsoes')" style="
-        background:none;border:none;border-bottom:2px solid var(--accent);color:var(--text);
-        font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
-        letter-spacing:.02em;transition:all .15s;margin-bottom:-1px;
-      ">🗂️ Bolsões</button>
-      <button id="fluxolab-tab-modelos" onclick="fluxolabSwitchTab('modelos')" style="
-        background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
-        font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
-        letter-spacing:.02em;transition:all .15s;margin-bottom:-1px;
-      ">📊 Agrupamento por Modelo</button>
-      <button id="fluxolab-tab-checklists" onclick="fluxolabSwitchTab('checklists')" style="
-        background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
-        font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
-        letter-spacing:.02em;transition:all .15s;margin-bottom:-1px;
-      ">📋 Checklists Importados</button>
-      <button id="fluxolab-tab-caindo" onclick="fluxolabSwitchTab('caindo')" style="
-        background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
-        font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
-        letter-spacing:.02em;transition:all .15s;margin-bottom:-1px;
-      ">🔥 Caindo Hoje <span id="fluxolab-caindo-badge" style="display:none;background:#ef4444;color:#fff;font-size:10px;font-weight:900;border-radius:10px;padding:1px 7px;margin-left:4px;vertical-align:middle"></span></button>
-      <button id="fluxolab-tab-liberados" onclick="fluxolabSwitchTab('liberados')" style="
-        background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
-        font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
-        letter-spacing:.02em;transition:all .15s;margin-bottom:-1px;
-      ">✅ Checklists Liberados Hoje</button>
-      <button id="fluxolab-tab-planejamento" onclick="fluxolabSwitchTab('planejamento')" style="
-        background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
-        font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
-        letter-spacing:.02em;transition:all .15s;margin-bottom:-1px;
-      ">📅 Planejamento do Dia</button>
-      <button id="fluxolab-tab-pendencias" onclick="fluxolabSwitchTab('pendencias')" style="
-        background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
-        font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
-        letter-spacing:.02em;transition:all .15s;margin-bottom:-1px;
-      ">🧩 Pendências Mistas & Complexas</button>
+    <div style="display:flex;align-items:flex-end;margin-bottom:20px;border-bottom:1px solid var(--border);padding-bottom:0">
+      <!-- Abas principais (esquerda) -->
+      <div style="display:flex;gap:8px;flex:1">
+        <button id="fluxolab-tab-bolsoes" onclick="fluxolabSwitchTab('bolsoes')" style="
+          background:none;border:none;border-bottom:2px solid var(--accent);color:var(--text);
+          font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
+          letter-spacing:.02em;transition:all .15s;margin-bottom:-1px;
+        ">🗂️ Bolsões</button>
+        <button id="fluxolab-tab-modelos" onclick="fluxolabSwitchTab('modelos')" style="
+          background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
+          font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
+          letter-spacing:.02em;transition:all .15s;margin-bottom:-1px;
+        ">📊 Agrupamento por Modelo</button>
+        <button id="fluxolab-tab-caindo" onclick="fluxolabSwitchTab('caindo')" style="
+          background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
+          font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
+          letter-spacing:.02em;transition:all .15s;margin-bottom:-1px;
+        ">🔥 Caindo Hoje <span id="fluxolab-caindo-badge" style="display:none;background:#ef4444;color:#fff;font-size:10px;font-weight:900;border-radius:10px;padding:1px 7px;margin-left:4px;vertical-align:middle"></span></button>
+        <button id="fluxolab-tab-liberados" onclick="fluxolabSwitchTab('liberados')" style="
+          background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
+          font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
+          letter-spacing:.02em;transition:all .15s;margin-bottom:-1px;
+        ">✅ Checklists Liberados Hoje</button>
+        <button id="fluxolab-tab-planejamento" onclick="fluxolabSwitchTab('planejamento')" style="
+          background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
+          font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
+          letter-spacing:.02em;transition:all .15s;margin-bottom:-1px;
+        ">📅 Planejamento do Dia</button>
+        <button id="fluxolab-tab-pendencias" onclick="fluxolabSwitchTab('pendencias')" style="
+          background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
+          font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
+          letter-spacing:.02em;transition:all .15s;margin-bottom:-1px;
+        ">🧩 Pendências Mistas & Complexas</button>
+      </div>
+      <!-- Separador vertical + Checklists Importados isolado à direita -->
+      <div style="display:flex;align-items:flex-end;margin-bottom:-1px">
+        <div style="width:1px;background:var(--border2);height:22px;margin:0 10px 9px"></div>
+        <button id="fluxolab-tab-checklists" onclick="fluxolabSwitchTab('checklists')" style="
+          background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
+          font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
+          letter-spacing:.02em;transition:all .15s;
+        ">📋 Checklists Importados</button>
+      </div>
     </div>
 
     <!-- Layout: painel de movimentação (esquerda) + grid dos bolsões (direita) -->
@@ -2882,8 +2889,8 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <!-- Toolbar -->
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap">
         <div>
-          <h2 style="font-size:22px;font-weight:800;color:var(--text);margin:0;display:flex;align-items:center;gap:8px">📋 Pedidos</h2>
-          <p style="font-size:12px;color:var(--muted);margin:3px 0 0">Cruza a demanda (pedidos) com a oferta (seu estoque).</p>
+          <h2 style="font-size:22px;font-weight:800;color:var(--text);margin:0;display:flex;align-items:center;gap:8px">📋 Checklists Importados</h2>
+          <p style="font-size:12px;color:var(--muted);margin:3px 0 0">Lista dos equipamentos importados.</p>
         </div>
         <div style="flex:1"></div>
         <input id="fluxolab-checklist-search" oninput="fluxolabRenderChecklistsImported()" placeholder="Pesquisar OBS, Pedido, Cliente…"
@@ -2897,8 +2904,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           onmouseover="this.style.color='#ef4444';this.style.borderColor='rgba(239,68,68,.5)'" onmouseout="this.style.color='var(--muted)';this.style.borderColor='var(--border2)'">🗑</button>
       </div>
 
-      <!-- Stats bar (preenchida pelo JS) -->
-      <div id="fluxolab-checklists-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-bottom:18px"></div>
+      <!-- Stats bar removida -->
 
       <!-- Lista de modelos -->
       <div id="fluxolab-checklists-grid"></div>

@@ -372,7 +372,7 @@ function fluxolabPlanGetBolsaoStats(modeloName) {
         } else if (bolsao === 'QUALIDADE') {
           qualCount++;
           labCount++;
-        } else if (bolsao !== 'RETORNO_ESTOQUE' && bolsao !== 'LIBERADAS') {
+        } else if (bolsao !== 'RETORNO_ESTOQUE' && bolsao !== 'LIBERADAS' && bolsao !== 'SCRAP') {
           labCount++;
         }
       }

@@ -20132,10 +20132,10 @@ async function fluxolabConsumirChecklistPorModelo(modeloTexto, meta){
         <div>
           <div style="display:flex;align-items:center;gap:10px">
             <span style="font-size:22px">📋</span>
-            <h2 style="font-size:24px;font-weight:800;color:var(--accent);margin:0;letter-spacing:-.02em">Pedidos</h2>
+            <h2 style="font-size:24px;font-weight:800;color:var(--accent);margin:0;letter-spacing:-.02em">Checklists Importados</h2>
           </div>
           <div style="font-size:12px;color:var(--muted);margin-top:4px">
-            Cruza a demanda (pedidos) com a oferta (seu estoque).
+            Lista dos equipamentos importados.
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -20159,8 +20159,6 @@ async function fluxolabConsumirChecklistPorModelo(modeloTexto, meta){
           </button>
         </div>
       </div>
-      <div id="flcl-kpis"
-        style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-bottom:18px"></div>
     `;
     panel.insertBefore(header, panel.firstChild);
 
@@ -20501,6 +20499,7 @@ async function fluxolabConsumirChecklistPorModelo(modeloTexto, meta){
 
   // ── Injeta a caixa de busca abaixo de "Destacar modelo" ─────────
   function injetarBusca(){
+    return false; // Desabilitado a pedido do usuario
     var view = document.getElementById('view-fluxolab');
     if(!view) return false;
     if(document.getElementById('busca-selb-box')) return true;
