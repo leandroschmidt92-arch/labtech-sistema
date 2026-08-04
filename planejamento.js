@@ -326,17 +326,23 @@ function planBadgeHtml(count, filled) {
 
 // Helpers de cálculo
 function fluxolabPlanGetChecklistStats(modeloName) {
-  if (!modeloName || typeof _fluxolabChecklistsImported === 'undefined' || !_fluxolabChecklistsImported.length) return { count: 0, media: 0 };
+  if (!modeloName || typeof _fluxolabChecklistsImported === 'undefined' || !_fluxolabChecklistsImported.length) return { count: 0, media: 0, mediaAberto: 0, maxAberto: 0 };
   const sample = _fluxolabChecklistsImported[0];
   const kModelo = (typeof _fluxolabFindKey === 'function') ? (_fluxolabFindKey(sample, 'Modelo') || _fluxolabFindKey(sample, 'Equipamento')) : null;
   const kDias = (typeof _fluxolabFindKey === 'function') ? (_fluxolabFindKey(sample, 'Dias Úteis Andamento') || _fluxolabFindKey(sample, 'Dias Uteis Andamento') || _fluxolabFindKey(sample, 'Dias Úteis') || _fluxolabFindKey(sample, 'Dias Uteis')) : null;
   
-  if (!kModelo) return { count: 0, media: 0 };
+  // Coluna "Dias Aberto" da planilha de checklists importada (coluna F)
+  const kAberto = (typeof _fluxolabFindKey === 'function') ? (_fluxolabFindKey(sample, 'Dias Aberto') || _fluxolabFindKey(sample, 'Dias em Aberto') || _fluxolabFindKey(sample, 'Dias Abertos')) : null;
+
+  if (!kModelo) return { count: 0, media: 0, mediaAberto: 0, maxAberto: 0 };
   
   const normAlvo = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(modeloName) : modeloName.toUpperCase().replace(/\s+/g,'');
   
   let count = 0;
   let somaDias = 0;
+  let somaAberto = 0;
+  let countAberto = 0;
+  let maxAberto = 0;
   for (const r of _fluxolabChecklistsImported) {
     const rowM = r[kModelo] || '';
     const rm = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(rowM) : rowM.toUpperCase().replace(/\s+/g,'');
@@ -346,9 +352,22 @@ function fluxolabPlanGetChecklistStats(modeloName) {
         let d = parseInt(r[kDias]);
         if (!isNaN(d)) somaDias += d;
       }
+      if (kAberto) {
+        let a = parseInt(r[kAberto]);
+        if (!isNaN(a)) {
+          somaAberto += a;
+          countAberto++;
+          if (a > maxAberto) maxAberto = a;
+        }
+      }
     }
   }
-  return { count, media: count > 0 ? Math.round(somaDias / count) : 0 };
+  return {
+    count,
+    media: count > 0 ? Math.round(somaDias / count) : 0,
+    mediaAberto: countAberto > 0 ? Math.round(somaAberto / countAberto) : 0,
+    maxAberto,
+  };
 }
 
 function fluxolabPlanGetBolsaoStats(modeloName) {

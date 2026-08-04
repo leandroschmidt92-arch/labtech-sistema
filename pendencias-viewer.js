@@ -176,7 +176,7 @@
           <th style="${th}">Lote</th>
           <th style="${th};text-align:left;padding-left:14px">Modelo</th>
           <th style="${th}">Checklists</th>
-          <th style="${th}">Média Dias</th>
+          <th style="${th}">Dias em Aberto</th>
           <th style="${th}">Qtd WMS</th>
           <th style="${th}">Sugerido</th>
           <th style="${th}">DOCA</th>
@@ -187,7 +187,7 @@
 
     rows.forEach((r, i) => {
       const chk = (typeof fluxolabPlanGetChecklistStats === 'function')
-        ? fluxolabPlanGetChecklistStats(r.modelo) : {count:0, media:0};
+        ? fluxolabPlanGetChecklistStats(r.modelo) : {count:0, media:0, mediaAberto:0, maxAberto:0};
       const bol = (typeof fluxolabPlanGetBolsaoStats === 'function')
         ? fluxolabPlanGetBolsaoStats(r.modelo) : {doca:0, lab:0};
       const bg = i % 2 === 0 ? 'rgba(255,255,255,.015)' : 'transparent';
@@ -203,7 +203,7 @@
             ${esc(r.modelo)}${badge}
           </td>
           <td style="${td};color:${chk.count>0?'#4ade80':'#f87171'};font-weight:900;font-size:18px">${chk.count||'-'}</td>
-          <td style="${td};color:var(--text);font-weight:900;font-size:18px">${chk.media||'-'}</td>
+          <td style="${td};color:${chk.maxAberto>0?'#fbbf24':'var(--muted)'};font-weight:900;font-size:18px" title="Maior tempo em aberto entre os checklists deste modelo">${chk.maxAberto || '-'}</td>
           <td style="${td};color:var(--text);font-weight:800;font-size:18px">${esc(r.qtd_wms)||'-'}</td>
           <td style="${td};color:var(--accent);font-weight:800;font-size:18px">${esc(r.sugestao)||'-'}</td>
           <td style="${td};color:#22d3ee;font-weight:900;font-size:18px;background:rgba(34,211,238,.05)">${bol.doca||'-'}</td>
