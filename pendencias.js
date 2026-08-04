@@ -179,7 +179,7 @@ function fluxolabApplyRemoteSyncPend(remoteData) {
             const cellBolsao = document.getElementById(`pnd-${t}-r${i}-bolsao`);
             const cellBadge = document.getElementById(`pnd-${t}-r${i}-badge`);
 
-            if (cellChk) { cellChk.innerText = val ? (statsChk.count || '-') : ''; cellChk.style.color = statsChk.count > 0 ? '#4ade80' : 'var(--muted)'; }
+            if (cellChk) { cellChk.innerText = val ? (statsChk.count || '-') : ''; cellChk.style.color = !val ? 'var(--muted)' : (statsChk.count > 0 ? '#4ade80' : '#f87171'); }
             if (cellMedia) { cellMedia.innerText = val ? (statsChk.media || '-') : ''; cellMedia.style.color = statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'; }
             if (cellDoca) cellDoca.innerText = val ? (statsBol.doca || '-') : '';
             if (cellLab) cellLab.innerText = val ? (statsBol.lab || '-') : '';
@@ -301,7 +301,7 @@ function fluxolabUpdateRowElemPend(elem, tableName, field) {
     const cellBadge = document.getElementById(`pnd-${tableName}-r${index}-badge`);
     const activeBadge = document.getElementById(`pnd-${tableName}-r${index}-active-users`);
 
-    if (cellChk) { cellChk.innerText = value ? (statsChk.count || '-') : ''; cellChk.style.color = statsChk.count > 0 ? '#4ade80' : 'var(--muted)'; }
+    if (cellChk) { cellChk.innerText = value ? (statsChk.count || '-') : ''; cellChk.style.color = !value ? 'var(--muted)' : (statsChk.count > 0 ? '#4ade80' : '#f87171'); }
     if (cellMedia) { cellMedia.innerText = value ? (statsChk.media || '-') : ''; cellMedia.style.color = statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'; }
     if (cellDoca) cellDoca.innerText = value ? (statsBol.doca || '-') : '';
     if (cellLab) cellLab.innerText = value ? (statsBol.lab || '-') : '';
@@ -654,7 +654,7 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
           </div>
         </td>
 
-        <td id="pnd-${tableName}-r${idx}-chk" class="chk-cell" style="${tdStyle};color:${statsChk.count > 0 ? '#4ade80' : 'var(--muted)'};font-weight:900;font-size:18px${hid('chk')}">
+        <td id="pnd-${tableName}-r${idx}-chk" class="chk-cell" style="${tdStyle};color:${!isFilled ? 'var(--muted)' : (statsChk.count > 0 ? '#4ade80' : '#f87171')};font-weight:900;font-size:18px${hid('chk')}">
           ${isFilled ? (statsChk.count || '-') : ''}
         </td>
         <td id="pnd-${tableName}-r${idx}-media" class="media-cell" style="${tdStyle};color:${statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'};font-weight:900;font-size:18px${hid('media')}">

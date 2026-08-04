@@ -3488,10 +3488,12 @@ async function confirmarInicio(){
               if(od>=0 && od<86400 && Math.abs(orphElapsed-od)>60) orphElapsed=od;
             }
           }
+          const _orphEndEpoch = Date.now();
+          const _orphEndDateKey = new Date(_orphEndEpoch).toDateString().replace(/ /g,'_');
           await dbUpdateHistory(runOrphanCheck._docId, runOrphanCheck._dateKey,
-            {end:orphEnd, duracao:fmt(orphElapsed), status:'ok'}).catch(()=>{});
+            {end:orphEnd, duracao:fmt(orphElapsed), status:'ok', endEpoch:_orphEndEpoch, endDateKey:_orphEndDateKey}).catch(()=>{});
           const localRef = history.find(h=>h._docId===runOrphanCheck._docId);
-          if(localRef){ localRef.status='ok'; localRef.end=orphEnd; localRef.duracao=fmt(orphElapsed); }
+          if(localRef){ localRef.status='ok'; localRef.end=orphEnd; localRef.duracao=fmt(orphElapsed); localRef.endEpoch=_orphEndEpoch; localRef.endDateKey=_orphEndDateKey; }
         }
 
         // Reseta o wstate local para refletir idle antes do novo início
@@ -3599,8 +3601,11 @@ async function confirmarInicio(){
       }
     }
     orphan.status = 'ok';
+    const _orphanEndEpoch = Date.now();
+    const _orphanEndDateKey = new Date(_orphanEndEpoch).toDateString().replace(/ /g,'_');
+    orphan.endEpoch = _orphanEndEpoch; orphan.endDateKey = _orphanEndDateKey;
     await dbUpdateHistory(orphan._docId, orphan._dateKey, {
-      end: orphanEnd, duracao: fmt(orphanElapsed), status: 'ok'
+      end: orphanEnd, duracao: fmt(orphanElapsed), status: 'ok', endEpoch: _orphanEndEpoch, endDateKey: _orphanEndDateKey
     });
   }
 
@@ -4606,12 +4611,29 @@ async function liberarPeca(docId, dateKey){
   if(!confirm("Deseja aprovar e liberar este SELB? Ele sairá da lista de aguardando peças.")) return;
   
   try {
+    // Marca a conclusão no momento da aprovação (data de conclusão), para que
+    // o SELB seja contabilizado na produtividade do dia em que foi APROVADO,
+    // e não do dia em que foi iniciado (ex: SELB que ficou aguardando peça
+    // durante a noite e é liberado/aprovado só na manhã seguinte).
+    const _liberarEndEpoch = Date.now();
+    const _liberarEndDateKey = new Date(_liberarEndEpoch).toDateString().replace(/ /g,'_');
+    const _liberarEndTime = new Date(_liberarEndEpoch).toLocaleTimeString('pt-BR');
+
     // Atualiza status no Supabase
-    await dbUpdateHistory(docId, dateKey, { status: 'ok' });
+    const _hAtual = history.find(x => x._docId === docId);
+    const _patchPeca = { status: 'ok', endEpoch: _liberarEndEpoch, endDateKey: _liberarEndDateKey };
+    // Só preenche 'end' se o registro ainda não tinha um horário de término definido
+    if(!_hAtual || !_hAtual.end) _patchPeca.end = _liberarEndTime;
+    await dbUpdateHistory(docId, dateKey, _patchPeca);
     
     // Atualiza localmente
     const h = history.find(x => x._docId === docId);
-    if(h) h.status = 'ok';
+    if(h){
+      h.status = 'ok';
+      h.endEpoch = _liberarEndEpoch;
+      h.endDateKey = _liberarEndDateKey;
+      if(!h.end) h.end = _liberarEndTime;
+    }
 
     // Remove solicitações de peça pendentes vinculadas a este SELB
     const selb = h ? h.selb : null;
@@ -6502,16 +6524,16 @@ function renderConsulta(){
     // Coluna Ação (reprovar) — admin e qualidade
     let acaoTd = '';
     if(podeReprovar){
-      const setorReprovavel = h.sector==='MONTAGEM'||h.sector==='LIMPEZA'||h.sector==='COMPLEXA'||h.sector==='ELETRÔNICA';
-      if(h.status==='ok' && setorReprovavel){
-        const jaReprovado = src.some(r => r.status==='rep' && r._reprovadoDe===h._docId);
-        acaoTd = jaReprovado
-          ? `<td><span style="font-size:11px;color:var(--danger);font-weight:600">&#x2715; Reprovado</span></td>`
-          : `<td><button class="btn bd" style="font-size:11px;padding:5px 10px;white-space:nowrap"
-               onclick="abrirReprovacao('${h._docId}','${h._dateKey||_consultaDateKey}','${h.selb}','${h.name}','${h.sector}')">
-               &#x26A0;&#xFE0F; Reprovar</button></td>`;
-      } else {
+      // Qualidade pode reprovar qualquer registro independente de status ou setor
+      const jaReprovado = src.some(r => r.status==='rep' && r._reprovadoDe===h._docId);
+      if(jaReprovado){
+        acaoTd = `<td><span style="font-size:11px;color:var(--danger);font-weight:600">&#x2715; Reprovado</span></td>`;
+      } else if(h.status==='rep'){
         acaoTd = `<td style="color:var(--muted);font-size:11px">—</td>`;
+      } else {
+        acaoTd = `<td><button class="btn bd" style="font-size:11px;padding:5px 10px;white-space:nowrap"
+             onclick="abrirReprovacao('${h._docId}','${h._dateKey||_consultaDateKey}','${h.selb}','${h.name}','${h.sector}')">
+             &#x26A0;&#xFE0F; Reprovar</button></td>`;
       }
     }
 
@@ -10732,6 +10754,14 @@ let _equipSkus   = {};  // { 'SELB-001': 'SKU-001', ... }
 let _equipUnitizadores = {}; // { 'SELB-001': 'GAIOLA-01', ... }
 let editingEquipKey = null;
 
+// Cadastros manuais (feitos pelo botão "Novo Equipamento", não pela importação
+// de planilha) ficam marcados com { manual:true, criadoEm:<epoch ms> } dentro
+// do campo `raw`. Isso permite que a importação de planilha os preserve por um
+// período de carência (ver EQUIP_MANUAL_GRACE_MS em importEquipFile), em vez de
+// apagá-los junto com o resto da tabela.
+let _equipManualInfo = {}; // { 'SELB-001': <epoch ms em que foi cadastrado manualmente> }
+const EQUIP_MANUAL_GRACE_MS = 10 * 24 * 60 * 60 * 1000; // 10 dias
+
 async function loadEquipamentos(){
   const [r1, r2, r3, r4] = await Promise.all([
     _supa.from('equipamentos').select('id, raw'),
@@ -10741,7 +10771,11 @@ async function loadEquipamentos(){
   ]);
   // Monta objetos temporários antes de atribuir — evita flicker de tela vazia
   const tmpEq = {};
-  (r1.data || []).forEach(e => { tmpEq[e.id] = (e.raw && e.raw.nome) ? e.raw.nome : e.id; });
+  const tmpManual = {};
+  (r1.data || []).forEach(e => {
+    tmpEq[e.id] = (e.raw && e.raw.nome) ? e.raw.nome : e.id;
+    if(e.raw && e.raw.manual) tmpManual[e.id] = e.raw.criadoEm || Date.now();
+  });
   const tmpSeries = {};
   (r2.data || []).forEach(e => { tmpSeries[e.id] = (e.raw && e.raw.serie) ? e.raw.serie : e.raw; });
   const tmpSkus = {};
@@ -10750,6 +10784,7 @@ async function loadEquipamentos(){
   (r4.data || []).forEach(e => { tmpUnit[e.id] = (e.raw && e.raw.unitizador) ? e.raw.unitizador : e.raw; });
   // Atribui tudo de uma vez (atômico)
   equipamentos       = tmpEq;
+  _equipManualInfo    = tmpManual;
   _equipSeries       = tmpSeries;
   _equipSkus         = tmpSkus;
   _equipUnitizadores = tmpUnit;
@@ -11067,11 +11102,41 @@ async function importEquipFile(input){
       return;
     }
 
-    // Replace all (fresh import from system spreadsheet)
-    await _supa.from('equipamentos').delete().neq('id', '___never___');
+    // Replace all (fresh import from system spreadsheet) — MAS preservando
+    // os SELBs cadastrados manualmente (aba Equipamentos → "Novo Equipamento")
+    // que ainda estão dentro do período de carência de 10 dias. Eles só saem
+    // do sistema quando completam 10 dias sem terem sido oficializados pela
+    // planilha (ou imediatamente, se a própria planilha já trouxer o SELB).
+    const { data: _eqAntesImport } = await _supa.from('equipamentos').select('id, raw');
+    const _protegidosImport = new Set();
+    (_eqAntesImport || []).forEach(e => {
+      const raw = e.raw || {};
+      if(raw.manual && raw.criadoEm && (Date.now() - raw.criadoEm) < EQUIP_MANUAL_GRACE_MS && !batch[e.id]){
+        _protegidosImport.add(e.id);
+      }
+    });
+    if(_protegidosImport.size > 0){
+      const _idsParaApagar = (_eqAntesImport || []).map(e => e.id).filter(id => !_protegidosImport.has(id));
+      if(_idsParaApagar.length) await _supa.from('equipamentos').delete().in('id', _idsParaApagar);
+    } else {
+      await _supa.from('equipamentos').delete().neq('id', '___never___');
+    }
     const eqRows = Object.entries(batch).map(([id, nome]) => ({ id, nome: String(nome), raw: { nome: String(nome) } }));
     await _supa.from('equipamentos').upsert(eqRows);
     equipamentos = {...batch};
+    // Recoloca no cache local os SELBs manuais protegidos (não vieram no batch importado)
+    _protegidosImport.forEach(id => {
+      const found = (_eqAntesImport || []).find(e => e.id === id);
+      if(found){
+        equipamentos[id] = (found.raw && found.raw.nome) ? found.raw.nome : id;
+        _equipManualInfo[id] = found.raw.criadoEm;
+      }
+    });
+    // Qualquer SELB manual que tenha sido oficializado pela planilha (mesmo
+    // SELB) ou que já tenha estourado os 10 dias deixa de constar como manual.
+    Object.keys(_equipManualInfo).forEach(id => {
+      if(!_protegidosImport.has(id)) delete _equipManualInfo[id];
+    });
 
     // Salva séries separadamente (não apaga se não encontrou a coluna)
     if(Object.keys(seriesBatch).length > 0){
@@ -11196,8 +11261,15 @@ function renderEquipTable(){
   tbody.innerHTML = entries.map(([selb, nome]) => {
     const selbEsc = selb.replace(/'/g, "\\'");
     const nomeEsc = (nome||'').replace(/'/g, "\\'");
+    const _manualCriadoEm = _equipManualInfo[selb];
+    const _manualBadge = _manualCriadoEm
+      ? (() => {
+          const _diasRestantes = Math.max(0, Math.ceil((EQUIP_MANUAL_GRACE_MS - (Date.now() - _manualCriadoEm)) / 86400000));
+          return ` <span class="pinbadge" title="Cadastro manual — some da lista em ${_diasRestantes} dia(s) se não constar na próxima planilha importada" style="background:rgba(245,166,35,0.12);color:var(--warn);border:1px solid rgba(245,166,35,0.35);font-size:10px">✋ manual · ${_diasRestantes}d</span>`;
+        })()
+      : '';
     return `<tr>
-    <td><span class="pinbadge" style="font-size:12px">${selb}</span></td>
+    <td><span class="pinbadge" style="font-size:12px">${selb}</span>${_manualBadge}</td>
     <td style="font-weight:500">${nome}</td>
     <td style="font-family:var(--mono);font-size:12px">${getEquipSerie(selb) || '—'}</td>
     <td style="font-family:var(--mono);font-size:12px">${getEquipSku(selb) || '—'}</td>
@@ -11256,6 +11328,7 @@ async function saveEquipamento(){
   if(editingEquipKey && editingEquipKey !== selb){
     await _supa.from('equipamentos').delete().eq('id', editingEquipKey);
     delete equipamentos[editingEquipKey];
+    delete _equipManualInfo[editingEquipKey];
     await _supa.from('equipamentos_series').delete().eq('id', editingEquipKey);
     delete _equipSeries[editingEquipKey];
     await _supa.from('equipamentos_skus').delete().eq('id', editingEquipKey);
@@ -11263,8 +11336,19 @@ async function saveEquipamento(){
     await _supa.from('equipamentos_unitizadores').delete().eq('id', editingEquipKey);
     delete _equipUnitizadores[editingEquipKey];
   }
-  await _supa.from('equipamentos').upsert({ id: selb, nome, raw: { nome } }, { onConflict: 'id' });
+  // Marca como cadastro manual (protegido por 10 dias da importação de planilha):
+  // - equipamento totalmente novo → começa a contar agora;
+  // - edição de um equipamento que já era manual → mantém a data original;
+  // - edição de um equipamento que veio da planilha → continua não-manual.
+  let _eqRaw = { nome };
+  if(!editingEquipKey){
+    _eqRaw = { nome, manual: true, criadoEm: Date.now() };
+  } else if(_equipManualInfo[editingEquipKey]){
+    _eqRaw = { nome, manual: true, criadoEm: _equipManualInfo[editingEquipKey] };
+  }
+  await _supa.from('equipamentos').upsert({ id: selb, nome, raw: _eqRaw }, { onConflict: 'id' });
   equipamentos[selb] = nome;
+  if(_eqRaw.manual) _equipManualInfo[selb] = _eqRaw.criadoEm; else delete _equipManualInfo[selb];
 
   if(serie){
     await _supa.from('equipamentos_series').upsert({ id: selb, raw: { serie } }, { onConflict: 'id' });
@@ -11298,6 +11382,7 @@ async function deleteEquip(selb){
   if(!confirm('Remover o equipamento "'+selb+'" — '+equipamentos[selb]+'?')) return;
   await _supa.from('equipamentos').delete().eq('id', selb);
   delete equipamentos[selb];
+  delete _equipManualInfo[selb];
   await _supa.from('equipamentos_series').delete().eq('id', selb);
   delete _equipSeries[selb];
   await _supa.from('equipamentos_skus').delete().eq('id', selb);
@@ -11314,6 +11399,7 @@ async function clearEquipamentos(){
   await _supa.from('equipamentos_skus').delete().neq('id', '___never___');
   await _supa.from('equipamentos_unitizadores').delete().neq('id', '___never___');
   equipamentos = {};
+  _equipManualInfo = {};
   _equipSeries = {};
   _equipSkus = {};
   _equipUnitizadores = {};
@@ -13895,6 +13981,15 @@ async function salvarQualRegistro(){
       fluxolabFinalizarSelb(selb, 'QUALIDADE', 'ok').catch(e => console.warn('[FluxoLAB] Erro ao mover SELB para LIBERADAS:', e));
     }
 
+    // FluxoLAB: modelo aprovado na Qualidade — abate 1 checklist pendente das
+    // tabelas de Pendências Mistas/Complexas (fica vermelho/"SEM CHECKLIST" ao chegar a 0).
+    {
+      const modeloAprovado = registro.equipamento || (typeof getEquipName === 'function' ? getEquipName(selb) : '');
+      if(modeloAprovado && typeof fluxolabConsumirChecklistPorModelo === 'function'){
+        fluxolabConsumirChecklistPorModelo(modeloAprovado, { selb }).catch(()=>{});
+      }
+    }
+
     // Limpa form
     const selbInput = document.getElementById('qual-reg-selb');
     if(selbInput) selbInput.value = '';
@@ -14000,10 +14095,9 @@ window.toggleEtiquetaImpressaManual = async function(regId, checked, el){
             tipo: 'finalizar', setor: 'QUALIDADE', resultado: 'concluido', automatico: true,
             obs: 'Máquina concluída/liberada — removida de todos os bolsões',
           });
-          const modeloTxt = reg.equipamento || (typeof getEquipName === 'function' ? getEquipName(selbToRelease) : '');
-          if(modeloTxt && typeof fluxolabConsumirChecklistPorModelo === 'function'){
-            fluxolabConsumirChecklistPorModelo(modeloTxt, { selb: selbToRelease }).catch(()=>{});
-          }
+          // Nota: o checklist já foi abatido no momento em que o registro de
+          // aprovação foi salvo na Qualidade (salvarQualRegistro), então não
+          // é descontado novamente aqui para evitar dupla contagem.
         }).catch(e => console.warn('[FluxoLAB] Erro ao liberar SELB de todos os bolsões:', e));
       }
     }
@@ -14168,14 +14262,14 @@ async function qualRenderHistoricoSelb(q){
             const dataFmt = (h._dateKey || '').replace(/_/g, ' ');
             let acaoTd = '';
             if(podeReprovar){
-              const reprovavel = setoresReprovaveis.includes(h.sector);
-              if(h.status === 'ok' && reprovavel){
-                const jaReprovado = registros.some(r => r.status === 'rep' && r._reprovadoDe === h._docId);
-                acaoTd = jaReprovado
-                  ? '<td style="padding:8px 16px"><span style="font-size:11px;color:var(--danger);font-weight:600">✕ Reprovado</span></td>'
-                  : `<td style="padding:8px 16px"><button class="btn bd" style="font-size:10px;padding:4px 9px;white-space:nowrap" onclick="abrirReprovacao('${h._docId}','${h._dateKey}','${(h.selb||'').replace(/'/g,"\\'")}','${(h.name||'').replace(/'/g,"\\'")}','${h.sector}')">⚠️ Reprovar</button></td>`;
-              } else {
+              // Qualidade pode reprovar qualquer registro independente de status ou setor
+              const jaReprovado = registros.some(r => r.status === 'rep' && r._reprovadoDe === h._docId);
+              if(jaReprovado){
+                acaoTd = '<td style="padding:8px 16px"><span style="font-size:11px;color:var(--danger);font-weight:600">✕ Reprovado</span></td>';
+              } else if(h.status === 'rep'){
                 acaoTd = '<td style="padding:8px 16px;color:var(--muted);font-size:11px">—</td>';
+              } else {
+                acaoTd = `<td style="padding:8px 16px"><button class="btn bd" style="font-size:10px;padding:4px 9px;white-space:nowrap" onclick="abrirReprovacao('${h._docId}','${h._dateKey}','${(h.selb||'').replace(/'/g,"\\'")}','${(h.name||'').replace(/'/g,"\\'")}','${h.sector}')">⚠️ Reprovar</button></td>`;
               }
             }
             return `<tr style="border-top:1px solid rgba(255,255,255,0.05)">
@@ -16324,6 +16418,15 @@ async function scannerSaveRecord(){
     // FluxoLAB: registrar via scanner também move SELB de QUALIDADE → LIBERADAS
     if(selb){
       fluxolabFinalizarSelb(selb, 'QUALIDADE', 'ok').catch(e => console.warn('[FluxoLAB] Erro ao mover SELB para LIBERADAS (scanner):', e));
+    }
+
+    // FluxoLAB: modelo aprovado na Qualidade — abate 1 checklist pendente das
+    // tabelas de Pendências Mistas/Complexas (fica vermelho/"SEM CHECKLIST" ao chegar a 0).
+    {
+      const modeloAprovado = registro.equipamento || (typeof getEquipName === 'function' ? getEquipName(selb) : '');
+      if(modeloAprovado && typeof fluxolabConsumirChecklistPorModelo === 'function'){
+        fluxolabConsumirChecklistPorModelo(modeloAprovado, { selb }).catch(()=>{});
+      }
     }
 
     alert(`🎉 Registro salvo com sucesso!\nSELB: ${selb}\nContador: ${contador}`);
@@ -19710,6 +19813,10 @@ async function fluxolabConsumirChecklistPorModelo(modeloTexto, meta){
     _fluxolabAtualizarBadgeCaindo();
     if (_fluxolabActiveTab === 'caindo') fluxolabRenderCaindoHoje();
     if (_fluxolabActiveTab === 'liberados') fluxolabRenderLiberadosHoje();
+    // Atualiza também as tabelas de Pendências Mistas/Complexas e Planejamento
+    // do Dia, caso estejam abertas, para refletir o checklist abatido na hora.
+    if (typeof fluxolabRenderPendencias === 'function') { try { fluxolabRenderPendencias(); } catch(e){} }
+    if (typeof fluxolabRenderPlanejamento === 'function') { try { fluxolabRenderPlanejamento(); } catch(e){} }
     return true;
   }catch(e){
     console.warn('[FluxoLAB] Erro ao consumir checklist do modelo:', e);
@@ -22416,11 +22523,9 @@ window.renderSolicitacoesDoDia = function(){
               }
               console.log('[LabTech] SELB', selb, 'removido de todos os bolsões (concluído)');
 
-              // Decrementa o checklist pendente do modelo correspondente, se houver
-              const modeloTxt = reg.equipamento || (typeof getEquipName === 'function' ? getEquipName(selb) : '');
-              if (modeloTxt && typeof fluxolabConsumirChecklistPorModelo === 'function') {
-                await fluxolabConsumirChecklistPorModelo(modeloTxt, { selb });
-              }
+              // Nota: o checklist já foi abatido no momento em que o registro de
+              // aprovação foi salvo na Qualidade, então não é descontado
+              // novamente aqui para evitar dupla contagem.
             }
           } catch (fe) {
             console.warn('[LabTech] Erro ao atualizar FluxoLAB:', fe);

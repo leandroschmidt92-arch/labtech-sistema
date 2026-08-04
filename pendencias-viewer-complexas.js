@@ -201,7 +201,7 @@
           <td style="${td};text-align:left;padding-left:14px;color:#f472b6;font-weight:800;font-size:14px">
             ${esc(r.modelo)}${badge}
           </td>
-          <td style="${td};color:${chk.count>0?'#4ade80':'var(--muted)'};font-weight:900;font-size:18px">${chk.count||'-'}</td>
+          <td style="${td};color:${chk.count>0?'#4ade80':'#f87171'};font-weight:900;font-size:18px">${chk.count||'-'}</td>
           <td style="${td};color:var(--text);font-weight:900;font-size:18px">${chk.media||'-'}</td>
           <td style="${td};color:var(--text);font-weight:800;font-size:18px">${esc(r.qtd_wms)||'-'}</td>
           <td style="${td};color:var(--accent);font-weight:800;font-size:18px">${esc(r.sugestao)||'-'}</td>

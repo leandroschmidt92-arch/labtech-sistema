@@ -107,7 +107,7 @@ function fluxolabApplyRemoteSync(remoteData) {
             const cellLab = document.getElementById(`plan-${t}-r${i}-lab`);
             const cellBadge = document.getElementById(`plan-${t}-r${i}-badge`);
             
-            if (cellChk) { cellChk.innerText = val ? (statsChk.count || '-') : ''; cellChk.style.color = statsChk.count > 0 ? '#4ade80' : 'var(--muted)'; }
+            if (cellChk) { cellChk.innerText = val ? (statsChk.count || '-') : ''; cellChk.style.color = !val ? 'var(--muted)' : (statsChk.count > 0 ? '#4ade80' : '#f87171'); }
             if (cellMedia) { cellMedia.innerText = val ? (statsChk.media || '-') : ''; cellMedia.style.color = statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'; }
             if (cellDoca) cellDoca.innerText = val ? (statsBol.doca || '-') : '';
             if (cellLab) cellLab.innerText = val ? (statsBol.lab || '-') : '';
@@ -181,7 +181,7 @@ function fluxolabUpdateRowElem(elem, tableName, field) {
     const cellLab = document.getElementById(`plan-${tableName}-r${index}-lab`);
     const cellBadge = document.getElementById(`plan-${tableName}-r${index}-badge`);
     
-    if (cellChk) { cellChk.innerText = value ? (statsChk.count || '-') : ''; cellChk.style.color = statsChk.count > 0 ? '#4ade80' : 'var(--muted)'; }
+    if (cellChk) { cellChk.innerText = value ? (statsChk.count || '-') : ''; cellChk.style.color = !value ? 'var(--muted)' : (statsChk.count > 0 ? '#4ade80' : '#f87171'); }
     if (cellMedia) { cellMedia.innerText = value ? (statsChk.media || '-') : ''; cellMedia.style.color = statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'; }
     if (cellDoca) cellDoca.innerText = value ? (statsBol.doca || '-') : '';
     if (cellLab) cellLab.innerText = value ? (statsBol.lab || '-') : '';
@@ -521,7 +521,7 @@ function fluxolabRenderPlanTable(title, tableName, titleColor, themeColor) {
           </div>
         </td>
         
-        <td id="plan-${tableName}-r${idx}-chk" class="chk-cell" style="${tdStyle};color:${statsChk.count > 0 ? '#4ade80' : 'var(--muted)'};font-weight:900;font-size:18px">
+        <td id="plan-${tableName}-r${idx}-chk" class="chk-cell" style="${tdStyle};color:${!isFilled ? 'var(--muted)' : (statsChk.count > 0 ? '#4ade80' : '#f87171')};font-weight:900;font-size:18px">
           ${isFilled ? (statsChk.count || '-') : ''}
         </td>
         <td id="plan-${tableName}-r${idx}-media" class="media-cell" style="${tdStyle};color:${statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'};font-weight:900;font-size:18px">
