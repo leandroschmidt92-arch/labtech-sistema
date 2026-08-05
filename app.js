@@ -14203,7 +14203,7 @@ function renderQualRegistros(){
     .sort((a, b) => (b.ts || 0) - (a.ts || 0));  // mais recentes primeiro
 
   if(!entries.length){
-    tbody.innerHTML = `<tr><td colspan="8" class="empty">Nenhum registro de qualidade encontrado para os filtros selecionados.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="empty">Nenhum registro de qualidade encontrado para os filtros selecionados.</td></tr>`;
     return;
   }
 
@@ -14237,6 +14237,26 @@ function renderQualRegistros(){
         ` : ''}
       </td>
       <td style="font-size:12px;color:var(--muted);max-width:220px">${r.obs || '—'}</td>
+      <td style="font-size:12px">
+        ${(function(){
+          const pedVal = r.pedido ? String(r.pedido).trim() : '';
+          const rid = r._id || '';
+          const selbVal = (r.selb||'').replace(/'/g,"\\'");
+          if(pedVal){
+            return `<span style="font-family:var(--mono);font-weight:700;color:#fbbf24;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.35);border-radius:6px;padding:3px 8px;font-size:12px;white-space:nowrap">${pedVal}</span>`;
+          }
+          // Sem pedido: exibe campo para digitar
+          return `<input type="text" placeholder="—" onblur="(function(inp,id,selb){
+            var v=(inp.value||'').trim();
+            if(!v)return;
+            if(!confirm('Salvar pedido '+v+' para SELB '+selb+'?')){inp.value='';return;}
+            var reg=(_qualRegistros&&_qualRegistros[id]);
+            if(!reg){alert('Registro não encontrado');return;}
+            var nRaw={...reg,pedido:v};
+            _supaAuthed().from('qualidade_registros').update({raw:nRaw}).eq('id',id).then(function(r){if(r.error){alert('Erro: '+r.error.message);}else{_qualRegistros[id]=nRaw;renderQualRegistros();try{if(typeof fluxolabRenderChecklistsImported==='function')fluxolabRenderChecklistsImported();}catch(e){}}});
+          })(this,'${rid}','${selbVal}')" style="width:90px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 6px;font-size:12px;font-family:var(--mono);outline:none" />`;
+        })()}
+      </td>
       <td style="text-align:center">
         <div style="display:flex;flex-direction:column;align-items:center;gap:6px">
           <span style="display:inline-flex;align-items:center;gap:5px;background:rgba(74,222,128,0.12);border:1px solid rgba(74,222,128,0.40);border-radius:20px;padding:4px 10px;font-size:11px;font-weight:700;color:#4ade80;white-space:nowrap;letter-spacing:.02em">
@@ -14364,7 +14384,45 @@ function qualFitIn(node, maxPx, minPx){
 function qualEl(tag, cls){ const n=document.createElement(tag); if(cls) n.className=cls; return n; }
 function qualUpper(v){ return String(v||'').toUpperCase().trim(); }
 
-function qualMakeLabel({selb, serie, sku, modelo, unit, auditado, checklist}){
+function qualGetPedidosDoModelo(modelo) {
+  if (!modelo || !Array.isArray(_fluxolabChecklistsImported) || _fluxolabChecklistsImported.length === 0) return [];
+  const nkTarget = typeof _fluxolabNormModel === 'function' ? _fluxolabNormModel(modelo) : modelo.toUpperCase().trim();
+  const sample = _fluxolabChecklistsImported[0];
+  const kMod = _fluxolabFindKey(sample, 'Descrição Equipamento') || _fluxolabFindKey(sample, 'Descricao Equipamento');
+  const kPed = _fluxolabFindKey(sample, 'Pedido');
+  const kDiasAb = _fluxolabFindKey(sample, 'Dias Aberto') || _fluxolabFindKey(sample, 'Dias Úteis Andamento') || _fluxolabFindKey(sample, 'Dias Uteis Andamento') || _fluxolabFindKey(sample, 'Dias Úteis') || _fluxolabFindKey(sample, 'Dias Uteis');
+  if (!kMod || !kPed) return [];
+  
+  const pedidosUsados = new Set();
+  if (typeof _qualRegistros !== 'undefined') {
+    for (const r of Object.values(_qualRegistros)) {
+      if (!r || !r.pedido) continue;
+      // Filtra pelo mesmo modelo (normalizado), para não remover pedidos de modelos diferentes
+      const rModNorm = typeof _fluxolabNormModel === 'function'
+        ? _fluxolabNormModel(r.equipamento || '')
+        : String(r.equipamento || '').toUpperCase().trim();
+      if (rModNorm === nkTarget) {
+        pedidosUsados.add(String(r.pedido).trim());
+      }
+    }
+  }
+
+  const pedidosMap = new Map();
+  for (const r of _fluxolabChecklistsImported) {
+    const nk = typeof _fluxolabNormModel === 'function' ? _fluxolabNormModel(r[kMod]) : String(r[kMod]||'').toUpperCase().trim();
+    if (nk === nkTarget && r[kPed]) {
+      const p = String(r[kPed]).trim();
+      if (pedidosUsados.has(p)) continue;
+      const dias = (kDiasAb && r[kDiasAb]) ? String(r[kDiasAb]).trim() : '';
+      if (!pedidosMap.has(p)) {
+        pedidosMap.set(p, { pedido: p, dias: dias });
+      }
+    }
+  }
+  return Array.from(pedidosMap.values());
+}
+
+function qualMakeLabel({selb, serie, sku, modelo, unit, auditado, checklist, pedido}){
   selb=qualUpper(selb); serie=qualUpper(serie); sku=qualUpper(sku); modelo=qualUpper(modelo); unit=qualUpper(unit);
 
   const wrap = qualEl('div','ped-label-wrap');
@@ -14427,12 +14485,17 @@ function qualMakeLabel({selb, serie, sku, modelo, unit, auditado, checklist}){
   // simples, só quando o registro tem checklist. Substitui o border-top
   // padrão do row2 por essa faixa com o texto repetido.
   if(temChecklist){
+    const divText = pedido !== undefined ? `CHECKLIST  CHECKLIST  CHECKLIST  PEDIDO ${pedido}` : 'CHECKLIST  CHECKLIST  CHECKLIST';
+    const cssStyle = 'width:100%;flex-shrink:0;height:0.65cm;background-color:#000 !important;color:#fff !important;display:flex;align-items:center;justify-content:center;overflow:hidden;font-weight:900;font-size:12px;letter-spacing:2px;white-space:nowrap;-webkit-print-color-adjust:exact;print-color-adjust:exact;border:none;';
+    
     const divider = qualEl('div','ped-etiq-chk-divider');
-    divider.textContent = 'CHECKLIST  CHECKLIST  CHECKLIST';
-    divider.style.cssText = 'width:100%;flex-shrink:0;height:0.65cm;background:#000;color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;font-weight:900;font-size:11px;letter-spacing:2px;white-space:nowrap;-webkit-print-color-adjust:exact;print-color-adjust:exact';
+    divider.textContent = divText;
+    divider.style.cssText = cssStyle;
+    
     const divider2 = qualEl('div','ped-etiq-chk-divider');
-    divider2.textContent = 'CHECKLIST  CHECKLIST  CHECKLIST';
-    divider2.style.cssText = 'width:100%;flex-shrink:0;height:0.65cm;background:#000;color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;font-weight:900;font-size:11px;letter-spacing:2px;white-space:nowrap;-webkit-print-color-adjust:exact;print-color-adjust:exact';
+    divider2.textContent = divText;
+    divider2.style.cssText = cssStyle;
+    
     row2.style.borderTop = '0';
     row2.style.borderBottom = '0';
     row3.style.borderTop = '0';
@@ -14780,6 +14843,123 @@ function qualGenerateLabels(){
 
   // Gera elementos do DOM
   labels.forEach(data => {
+    let pedCadastrado = null;
+    let regIdFound = null;
+    if (typeof _qualRegistros !== 'undefined') {
+      const qRegEntry = Object.entries(_qualRegistros).find(([k,r]) => r && r.selb === data.selb);
+      if (qRegEntry) {
+        regIdFound = qRegEntry[0];
+        if (qRegEntry[1].pedido) pedCadastrado = qRegEntry[1].pedido;
+      }
+    }
+
+    let temChecklist = false;
+    try { temChecklist = !!(typeof fluxolabModeloTemChecklist === 'function' && data.modelo && fluxolabModeloTemChecklist(data.modelo)); } catch(e){}
+    
+    if (temChecklist) {
+      const pedidos = qualGetPedidosDoModelo(data.modelo);
+      if (pedCadastrado && !pedidos.find(p => p.pedido === pedCadastrado)) {
+        pedidos.unshift({ pedido: pedCadastrado, dias: '' });
+      }
+
+      if (pedidos.length > 0 || pedCadastrado) {
+        data.checklist = true;
+        const container = document.createElement('div');
+        container.style.cssText = 'display:flex;flex-direction:column;align-items:center;gap:8px;padding-bottom:12px;border-bottom:1px dashed var(--border2)';
+        
+        const selWrap = document.createElement('div');
+        selWrap.className = 'no-print';
+        selWrap.style.cssText = 'display:flex;align-items:center;gap:8px;background:var(--bg3);padding:6px 12px;border-radius:8px;border:1px solid var(--border2);font-size:12px;font-weight:600;color:var(--text)';
+        selWrap.innerHTML = `<span>Selecione o Pedido:</span>`;
+        
+        const select = document.createElement('select');
+        select.style.cssText = 'background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px;outline:none;cursor:pointer';
+        
+        const optDefault = document.createElement('option');
+        optDefault.value = '';
+        optDefault.textContent = 'Selecione...';
+        if (!pedCadastrado) optDefault.selected = true;
+        select.appendChild(optDefault);
+        
+        data.pedido = pedCadastrado || undefined;
+
+        pedidos.forEach((pObj) => {
+          const opt = document.createElement('option');
+          opt.value = pObj.pedido;
+          opt.textContent = pObj.dias ? `${pObj.pedido} (${pObj.dias} dias)` : pObj.pedido;
+          if (pedCadastrado === pObj.pedido) opt.selected = true;
+          select.appendChild(opt);
+        });
+        
+        selWrap.appendChild(select);
+        
+        let labelEl = qualMakeLabel(data);
+        
+        let previousValue = select.value;
+        select.onchange = async () => {
+          if (!select.value) { previousValue = ''; data.pedido = undefined; return; }
+
+          // ── Bloqueia pedido duplicado ──
+          const pedidoEscolhido = select.value.trim();
+
+          // 1) Já registrado em outro SELB (no banco)
+          if (typeof _qualRegistros !== 'undefined') {
+            for (const [rid, rec] of Object.entries(_qualRegistros)) {
+              if (rec && rec.pedido && String(rec.pedido).trim() === pedidoEscolhido && rid !== regIdFound) {
+                alert(`⚠️ Pedido ${pedidoEscolhido} já está registrado no SELB ${rec.selb || rid}!\nEscolha outro pedido.`);
+                select.value = previousValue;
+                return;
+              }
+            }
+          }
+          // 2) Já selecionado em outro dropdown da mesma galeria (mesma sessão)
+          const outrosSelects = document.querySelectorAll('.ped-label-wrap ~ div select, div[style*="flex-direction:column"] select');
+          for (const outro of outrosSelects) {
+            if (outro !== select && outro.value && outro.value.trim() === pedidoEscolhido) {
+              alert(`⚠️ Pedido ${pedidoEscolhido} já foi selecionado para outro SELB nesta sessão!\nEscolha outro pedido.`);
+              select.value = previousValue;
+              return;
+            }
+          }
+
+          if (!confirm('DESEJA PASSAR ESSE PEDIDO PARA ESSE SELB?')) {
+            select.value = previousValue;
+            return;
+          }
+          previousValue = select.value;
+          data.pedido = select.value || undefined;
+          
+          if (select.value) {
+            try {
+              if (regIdFound && typeof _qualRegistros !== 'undefined' && typeof _supaAuthed !== 'undefined') {
+                const reg = _qualRegistros[regIdFound];
+                if (reg) {
+                  const newRaw = { ...reg, pedido: select.value };
+                  await _supaAuthed().from('qualidade_registros').update({ raw: newRaw }).eq('id', regIdFound);
+                  _qualRegistros[regIdFound] = newRaw;
+                  // Remove do Firebase o pedido confirmado (definitivo)
+                  try { if (typeof fluxolabRemoverPedidoDaLista === 'function') await fluxolabRemoverPedidoDaLista(select.value); } catch(e){}
+                  // Re-renderiza o FluxoLAB para remover o pedido da lista de checklists
+                  try { if (typeof fluxolabRenderChecklistsImported === 'function') fluxolabRenderChecklistsImported(); } catch(e){}
+                  try { if (typeof _fluxolabRenderGrid === 'function') _fluxolabRenderGrid(); } catch(e){}
+                  try { if (typeof renderQualRegistros === 'function') renderQualRegistros(); } catch(e){}
+                }
+              }
+            } catch(e) { console.error('Erro ao salvar pedido:', e); }
+          }
+
+          const newLabel = qualMakeLabel(data);
+          container.replaceChild(newLabel, labelEl);
+          labelEl = newLabel;
+        };
+        
+        container.appendChild(selWrap);
+        container.appendChild(labelEl);
+        gallery.appendChild(container);
+        return;
+      }
+    }
+    
     gallery.appendChild(qualMakeLabel(data));
   });
 
@@ -15077,9 +15257,116 @@ function qualGerarEtiquetaUnica(selb, regId){
     }
   }catch(e){ temChecklist = false; }
 
-  // Gera etiqueta usando o mesmo template do gerador em lote
-  const labelWrap = qualMakeLabel({ selb, modelo, serie, sku, unit, auditado: false, checklist: temChecklist });
+  let labelData = { selb, modelo, serie, sku, unit, auditado: false, checklist: temChecklist };
+  let labelWrap;
+
+  let pedCadastrado = null;
+  let regIdFound = null;
+  if (typeof _qualRegistros !== 'undefined') {
+    const qRegEntry = Object.entries(_qualRegistros).find(([k,r]) => r && r.selb === selb);
+    if (qRegEntry) {
+      regIdFound = qRegEntry[0];
+      if (qRegEntry[1].pedido) pedCadastrado = qRegEntry[1].pedido;
+    }
+  }
+
+  if (temChecklist) {
+    const pedidos = qualGetPedidosDoModelo(modelo);
+    if (pedCadastrado && !pedidos.find(p => p.pedido === pedCadastrado)) {
+      pedidos.unshift({ pedido: pedCadastrado, dias: '' });
+    }
+
+    if (pedidos.length > 0 || pedCadastrado) {
+      let previousValue = pedCadastrado || '';
+      labelData.pedido = pedCadastrado || undefined;
+      
+      const selWrap = document.createElement('div');
+      selWrap.className = 'no-print';
+      selWrap.style.cssText = 'display:flex;align-items:center;gap:8px;background:var(--bg3);padding:8px 16px;border-radius:10px;border:1px solid var(--border2);font-size:14px;font-weight:600;color:var(--text);margin-bottom:16px;box-shadow:0 4px 12px rgba(0,0,0,.2)';
+      selWrap.innerHTML = `<span>Selecione o Pedido:</span>`;
+      
+      const select = document.createElement('select');
+      select.style.cssText = 'background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:14px;outline:none;cursor:pointer;font-weight:700';
+      
+      const optDefault = document.createElement('option');
+      optDefault.value = '';
+      optDefault.textContent = 'Selecione...';
+      if (!pedCadastrado) optDefault.selected = true;
+      select.appendChild(optDefault);
+
+      pedidos.forEach(pObj => {
+        const opt = document.createElement('option');
+        opt.value = pObj.pedido;
+        opt.textContent = pObj.dias ? `${pObj.pedido} (${pObj.dias} dias)` : pObj.pedido;
+        if (pedCadastrado === pObj.pedido) opt.selected = true;
+        select.appendChild(opt);
+      });
+      
+      selWrap.appendChild(select);
+      overlay.appendChild(selWrap);
+      
+      select.onchange = async () => {
+        if (!select.value) { previousValue = ''; labelData.pedido = undefined; return; }
+
+        // ── Bloqueia pedido duplicado ──
+        const pedidoEscolhido = select.value.trim();
+
+        // 1) Já registrado em outro SELB (no banco)
+        if (typeof _qualRegistros !== 'undefined') {
+          for (const [rid, rec] of Object.entries(_qualRegistros)) {
+            if (rec && rec.pedido && String(rec.pedido).trim() === pedidoEscolhido && rid !== regIdFound) {
+              alert(`⚠️ Pedido ${pedidoEscolhido} já está registrado no SELB ${rec.selb || rid}!\nEscolha outro pedido.`);
+              select.value = previousValue;
+              return;
+            }
+          }
+        }
+
+        if (!confirm('DESEJA PASSAR ESSE PEDIDO PARA ESSE SELB?')) {
+          select.value = previousValue;
+          return;
+        }
+        previousValue = select.value;
+        labelData.pedido = select.value || undefined;
+        
+        if (select.value) {
+          try {
+            if (regIdFound && typeof _qualRegistros !== 'undefined' && typeof _supaAuthed !== 'undefined') {
+              const reg = _qualRegistros[regIdFound];
+              if (reg) {
+                const newRaw = { ...reg, pedido: select.value };
+                await _supaAuthed().from('qualidade_registros').update({ raw: newRaw }).eq('id', regIdFound);
+                _qualRegistros[regIdFound] = newRaw;
+                // Remove do Firebase o pedido confirmado (definitivo)
+                try { if (typeof fluxolabRemoverPedidoDaLista === 'function') await fluxolabRemoverPedidoDaLista(select.value); } catch(e){}
+                // Re-renderiza o FluxoLAB para remover o pedido da lista de checklists
+                try { if (typeof fluxolabRenderChecklistsImported === 'function') fluxolabRenderChecklistsImported(); } catch(e){}
+                try { if (typeof _fluxolabRenderGrid === 'function') _fluxolabRenderGrid(); } catch(e){}
+                try { if (typeof renderQualRegistros === 'function') renderQualRegistros(); } catch(e){}
+              }
+            }
+          } catch(e) { console.error('Erro ao salvar pedido:', e); }
+        }
+
+        const newLabel = qualMakeLabel(labelData);
+        newLabel.style.cssText = 'display:block';
+        
+        // Remove a pílula do novo (porque o antigo já colocou no overlay)
+        const newPill = newLabel.querySelector('.ped-unit-pill');
+        if (newPill) newPill.remove();
+        
+        const currentLabel = overlay.querySelector('.ped-label-wrap');
+        if (currentLabel) {
+           overlay.replaceChild(newLabel, currentLabel);
+        }
+      };
+    }
+  }
+
+  // Gera etiqueta inicial usando o template
+  labelWrap = qualMakeLabel(labelData);
   labelWrap.style.cssText = 'display:block';
+  overlay.appendChild(labelWrap);
 
   // Move o unitizador para o canto superior direito da página (fora da etiqueta)
   const pillEl = labelWrap.querySelector('.ped-unit-pill');
@@ -15190,7 +15477,8 @@ ${headStyles}
     // Remove etiqueta atual e regera com novo modo
     const old = overlay.querySelector('.ped-label-wrap');
     if(old) old.remove();
-    const newLabel = qualMakeLabel({ selb, modelo, serie, sku, unit, auditado: false, checklist: _chkAtivo });
+    labelData.checklist = _chkAtivo;
+    const newLabel = qualMakeLabel(labelData);
     newLabel.style.cssText = 'display:block';
     const newPill = newLabel.querySelector('.ped-unit-pill');
     if(newPill) newPill.remove();
@@ -19586,9 +19874,19 @@ function fluxolabRenderChecklistsImported(){
     return;
   }
 
+  // ── Pedidos já registrados na qualidade (para ocultar da lista) ──
+  const pedidosJaRegistrados = new Set();
+  if (typeof _qualRegistros !== 'undefined') {
+    for (const rec of Object.values(_qualRegistros)) {
+      if (rec && rec.pedido) pedidosJaRegistrados.add(String(rec.pedido).trim());
+    }
+  }
+
   // ── agrupa por modelo ──
   const grupos = {};
   rows.forEach(r => {
+    const pedidoRow = kPedido ? String(r[kPedido] || '').trim() : '';
+    if (pedidoRow && pedidosJaRegistrados.has(pedidoRow)) return; // já confirmado na qualidade
     const modelo = String(r[kModelo]||'(Sem modelo)').trim()||'(Sem modelo)';
     if (!grupos[modelo]) grupos[modelo] = { total:0, items:[], somaUteis:0, liberados:0 };
     const g = grupos[modelo];
@@ -19718,13 +20016,19 @@ function fluxolabRenderChecklistsImported(){
       ? `<span style="flex-shrink:0;font-size:13px;font-weight:700;color:#ef4444;white-space:nowrap">Falta ${faltantes}▾</span>`
       : `<span style="flex-shrink:0;font-size:13px;font-weight:700;color:#22c55e;white-space:nowrap">✓ Coberto</span>`;
 
-    const detailHeaders = ['Pedido','Andamento','Cliente','Status','Dias Aberto'];
+    const detailHeaders = ['Pedido','Andamento','Cliente','Status','Dias Aberto',''];
     const detailKeys    = [kPedido,kAndamento,kCliente,kStatus,kDias];
-    const detailRows    = g.items.map(r =>
-      `<tr>${detailKeys.map(k =>
+    const isAdminUser = !!(currentUser && currentUser.isAdmin);
+    const detailRows    = g.items.map(r => {
+      const pedNum = kPedido ? String(r[kPedido] || '').trim() : '';
+      const rowKey = r._rowKey || '';
+      const btnRemover = isAdminUser && pedNum
+        ? `<td style="padding:4px 8px;border-bottom:1px solid var(--border)"><button onclick="(function(btn,ped){if(!confirm('Remover pedido '+ped+' da lista do FluxoLAB?'))return;btn.disabled=true;btn.textContent='...';if(typeof fluxolabRemoverPedidoDaLista==='function')fluxolabRemoverPedidoDaLista(ped).then(function(){}).catch(function(e){btn.disabled=false;btn.textContent='🗑️';});})(this,'${pedNum.replace(/'/g,"\\\'")}')" style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:6px;color:#ef4444;font-size:11px;font-weight:700;padding:3px 8px;cursor:pointer;white-space:nowrap">🗑️ Remover</button></td>`
+        : `<td style="padding:4px 8px;border-bottom:1px solid var(--border)"></td>`;
+      return `<tr>${detailKeys.map(k =>
         `<td style="padding:7px 12px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border)">${esc(k?r[k]:'—')}</td>`
-      ).join('')}</tr>`
-    ).join('');
+      ).join('')}${btnRemover}</tr>`;
+    }).join('');
 
     return `
     <div style="border-bottom:1px solid var(--border)">
@@ -20157,6 +20461,39 @@ async function fluxolabConsumirChecklistPorModelo(modeloTexto, meta){
     console.warn('[FluxoLAB] Erro ao consumir checklist do modelo:', e);
     return false;
   }
+}
+
+// Remove permanentemente do Firebase a(s) linha(s) do checklist que correspondem
+// ao número de pedido informado, para que ele desapareça definitivamente da lista.
+async function fluxolabRemoverPedidoDaLista(numeroPedido) {
+  if (!numeroPedido || !Array.isArray(_fluxolabChecklistsImported) || !_fluxolabChecklistsImported.length) return;
+  const pedStr = String(numeroPedido).trim();
+  if (!pedStr) return;
+
+  const sample = _fluxolabChecklistsImported[0];
+  const kPed = _fluxolabFindKey(sample, 'Pedido');
+  if (!kPed) return;
+
+  // Encontra todas as linhas com esse número de pedido
+  const linhas = _fluxolabChecklistsImported.filter(r => r._rowKey && String(r[kPed] || '').trim() === pedStr);
+  if (!linhas.length) return;
+
+  for (const row of linhas) {
+    try {
+      await dbDelete('/fluxolab_checklists/' + row._rowKey);
+      const idx = _fluxolabChecklistsImported.indexOf(row);
+      if (idx >= 0) _fluxolabChecklistsImported.splice(idx, 1);
+    } catch(e) {
+      console.warn('[FluxoLAB] Erro ao remover pedido da lista:', e);
+    }
+  }
+
+  try { fluxolabRenderChecklistsImported(); } catch(e) {}
+  try { if (typeof _fluxolabRenderGrid === 'function') _fluxolabRenderGrid(); } catch(e) {}
+  try { _fluxolabAtualizarBadgeCaindo(); } catch(e) {}
+  try { if (_fluxolabActiveTab === 'caindo') fluxolabRenderCaindoHoje(); } catch(e) {}
+  try { if (typeof fluxolabRenderPendencias === 'function') fluxolabRenderPendencias(); } catch(e) {}
+  try { if (typeof fluxolabRenderPlanejamento === 'function') fluxolabRenderPlanejamento(); } catch(e) {}
 }
 
 // Faz a aba "Bolsões" re-renderizar quando os checklists importados mudam
