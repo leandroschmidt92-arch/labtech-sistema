@@ -1820,7 +1820,7 @@ function loginAs(u){
     setView('relatorios', document.getElementById('tab-relatorios'));
     
     // Oculta todas as abas de relatórios que não sejam SCRAP
-    const idsRel = ['reltab-prod','reltab-pedido','reltab-modelo','reltab-usuario','reltab-mensal','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados', 'reltab-linha'];
+    const idsRel = ['reltab-prod','reltab-pedido','reltab-modelo','reltab-usuario','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados', 'reltab-linha'];
     idsRel.forEach(id => {
       const el = document.getElementById(id);
       if(el) el.style.display = 'none';
@@ -1836,7 +1836,7 @@ function loginAs(u){
     setView('consulta', document.getElementById('tab-consulta'));
     
     // Restaura exibição padrão caso Admin ou outro acesse
-    const idsRel = ['reltab-prod','reltab-pedido','reltab-modelo','reltab-usuario','reltab-mensal','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados', 'reltab-linha'];
+    const idsRel = ['reltab-prod','reltab-pedido','reltab-modelo','reltab-usuario','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados', 'reltab-linha'];
     idsRel.forEach(id => {
       const el = document.getElementById(id);
       if(el) el.style.display = '';
@@ -1856,7 +1856,7 @@ function loginAs(u){
       // Setor configurado como "Visão Admin" — abre dashboard completo
       setView('dashboard', document.getElementById('tab-dashboard'));
       buildCards();
-      const idsRel = ['reltab-prod','reltab-pedido','reltab-modelo','reltab-usuario','reltab-mensal','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados', 'reltab-linha'];
+      const idsRel = ['reltab-prod','reltab-pedido','reltab-modelo','reltab-usuario','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados', 'reltab-linha'];
       idsRel.forEach(id => { const el = document.getElementById(id); if(el) el.style.display = ''; });
     } else {
       // Setor configurado como "Tela do Operador" (padrão estilo Montagem)
@@ -1869,7 +1869,7 @@ function loginAs(u){
     buildCards();
     
     // Restaura abas de relatórios para Admin
-    const idsRel = ['reltab-prod','reltab-pedido','reltab-modelo','reltab-usuario','reltab-mensal','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados', 'reltab-linha'];
+    const idsRel = ['reltab-prod','reltab-pedido','reltab-modelo','reltab-usuario','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados', 'reltab-linha'];
     idsRel.forEach(id => {
       const el = document.getElementById(id);
       if(el) el.style.display = '';
@@ -2368,7 +2368,6 @@ function setView(v,btn){
     if(relSubTab==='prod')        loadRelByDate().then(()=>renderRelatorios());
     else if(relSubTab==='scrap')  { _syncGlobalToLocalFilters(); loadScrapByDate().then(()=>renderScrapRel()); }
     else if(relSubTab==='modelo') renderModeloRel();
-    else if(relSubTab==='mensal'){ initMensalSelect(); renderMensalRel(); }
     else if(relSubTab==='reprov') _loadReprovByGlobalDate().then(()=>renderReprovRel());
     else if(relSubTab==='defeitos') _loadDefeitosByGlobalDate().then(()=>renderDefeitos());
     else if(relSubTab==='usuario') _loadUsuarioByGlobalDate().then(()=>renderUsuarioRel());
@@ -7160,6 +7159,9 @@ function _toggleTeamHealth(el){
   el.querySelector('.th-hint') && (el.querySelector('.th-hint').textContent = 'Clique para ' + (isNowCollapsed ? 'recolher' : 'expandir') + ' • Desmembramento, Montagem, Limpeza, Complexa, Qualidade, Eletrônica');
 }
 
+// Setores que ficam FORA do cálculo de saúde da equipe (mas seguem visíveis).
+const _TH_SETORES_FORA_DA_SAUDE = new Set(['ELETRÔNICA','ELETRONICA']);
+
 function renderTeamHealth(dateVal, checkinUids, prodCount, noDataAtAll){
   dateVal = dateVal || null; checkinUids = checkinUids || new Set(); prodCount = (prodCount !== undefined ? prodCount : null);
   noDataAtAll = !!noDataAtAll;
@@ -7224,8 +7226,12 @@ function renderTeamHealth(dateVal, checkinUids, prodCount, noDataAtAll){
     var inactiveCount = inactiveUsers.length;
     var total = secUsers.length; // presentes + ausentes — sempre bate
 
-    overallTotal += total;
-    overallActive += activeCount;
+    // Regra de negócio: o setor ELETRÔNICA aparece no painel (card próprio),
+    // mas NÃO entra no cálculo da "Saúde Geral da Equipe".
+    if(!_TH_SETORES_FORA_DA_SAUDE.has(sec.key)){
+      overallTotal += total;
+      overallActive += activeCount;
+    }
 
     var pct = total > 0 ? Math.round((activeCount / total) * 100) : 0;
 
@@ -7304,7 +7310,7 @@ function renderTeamHealth(dateVal, checkinUids, prodCount, noDataAtAll){
       +'<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">'
         +'<div style="display:flex;align-items:center;gap:10px;background:var(--bg3);border:1px solid var(--border2);border-radius:10px;padding:6px 12px">'
           +'<div style="text-align:right">'
-            +'<div style="font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Saúde Geral da Equipe</div>'
+            +'<div style="font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Saúde Geral da Equipe <span style="font-weight:600;text-transform:none;letter-spacing:0">(sem Eletrônica)</span></div>'
             +'<div style="font-size:10px;color:var(--text);margin-top:2px"><span style="color:#4ade80;font-weight:800">'+overallActive+' presentes</span> de <b>'+overallTotal+'</b></div>'
           +'</div>'
           +'<div style="font-size:18px;font-weight:900;color:'+overallColor+';font-family:var(--mono);line-height:1;background:rgba(0,0,0,0.25);border:1px solid '+overallColor+'44;padding:4px 10px;border-radius:8px;box-shadow:0 0 10px '+overallColor+'33">'+overallPct+'%</div>'
@@ -7714,7 +7720,6 @@ let _relSort    = { col: 'eff', dir: 'desc' };   // tabela principal (Detalhe po
 let _reprovSort = { col: 'date', dir: 'desc' };   // tabela de reprovações
 let _reprovExpandedUsers = new Set();             // usuários expandidos na visão "por profissional"
 let _scrapSort  = { col: 'date', dir: 'desc' };   // tabela SCRAP
-let _mensalSort = { col: 'total', dir: 'desc' };  // tabela mensal
 
 // ── Helpers de sort ──
 function _toggleSort(state, col){
@@ -7735,7 +7740,6 @@ function _applySortIndicators(theadId, col, dir){
 function setRelSort(col){ _toggleSort(_relSort, col); renderRelatorios(); }
 function setReprovSort(col){ _toggleSort(_reprovSort, col); renderReprovRel(); }
 function setScrapSort(col){ _toggleSort(_scrapSort, col); renderScrapRel(); }
-function setMensalSort(col){ _toggleSort(_mensalSort, col); renderMensalRel(); }
 
 // ════════════════════════════════════════════════════════════════════════
 // FILTRO GLOBAL DE DATA — compartilhado por todas as abas de relatórios
@@ -7903,9 +7907,7 @@ async function _reloadCurrentRelSubTab(){
     renderUsuarioRel();
   } else if(tab === 'modelo'){
     await renderModeloRel();
-  } else if(tab === 'mensal'){
-    renderMensalRel();
-  } else if(tab === 'linha'){
+    } else if(tab === 'linha'){
     _relHistoryCache = null;
     await loadRelByDate();
     renderLinhaProdRel();
@@ -8383,7 +8385,6 @@ function refreshRelatorios(){
   else if(relSubTab==='scrap')  { loadScrapByDate().then(()=>renderScrapRel()); }
   else if(relSubTab==='modelo') renderModeloRel();
   else if(relSubTab==='usuario') { _usuarioAllRecs = null; _loadUsuarioByGlobalDate().then(()=>renderUsuarioRel()); }
-  else if(relSubTab==='mensal') renderMensalRel();
   else if(relSubTab==='reprov') _loadReprovByGlobalDate().then(()=>renderReprovRel());
   else if(relSubTab==='defeitos') _loadDefeitosByGlobalDate().then(()=>renderDefeitos());
   else if(relSubTab==='duplicados') _loadDuplicadosByGlobalDate().then(()=>renderDuplicados());
@@ -8408,7 +8409,6 @@ function setRelSubTab(tab){
   document.getElementById('relview-scrap').style.display  = tab==='scrap'  ? 'block':'none';
   document.getElementById('relview-modelo').style.display = tab==='modelo' ? 'block':'none';
   document.getElementById('relview-usuario').style.display= tab==='usuario'? 'block':'none';
-  document.getElementById('relview-mensal').style.display = tab==='mensal' ? 'block':'none';
   document.getElementById('relview-reprov').style.display = tab==='reprov' ? 'block':'none';
   document.getElementById('relview-defeitos').style.display= tab==='defeitos'? 'block':'none';
   const vd = document.getElementById('relview-duplicados');
@@ -8420,7 +8420,7 @@ function setRelSubTab(tab){
   const vln = document.getElementById('relview-linha');
   if(vln) vln.style.display = tab==='linha' ? 'block':'none';
 
-  const ids = ['reltab-prod','reltab-pedido','reltab-scrap','reltab-modelo','reltab-usuario','reltab-mensal','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados', 'reltab-linha'];
+  const ids = ['reltab-prod','reltab-pedido','reltab-scrap','reltab-modelo','reltab-usuario','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados', 'reltab-linha'];
   ids.forEach(id => {
     const b = document.getElementById(id);
     if(b){
@@ -8467,12 +8467,7 @@ function setRelSubTab(tab){
     if(b){ b.style.background='var(--purple)'; b.style.color='#fff'; b.style.border='none'; }
     _usuarioAllRecs = null;
     _loadUsuarioByGlobalDate().then(()=>renderUsuarioRel());
-  } else if(tab==='mensal'){
-    const b=document.getElementById('reltab-mensal');
-    if(b){ b.style.background='var(--warn)'; b.style.color='#000'; b.style.border='none'; }
-    initMensalSelect();
-    renderMensalRel();
-  } else if(tab==='reprov'){
+    } else if(tab==='reprov'){
     const b=document.getElementById('reltab-reprov');
     if(b){ b.style.background='var(--danger)'; b.style.color='#fff'; b.style.border='none'; }
     _loadReprovByGlobalDate().then(()=>renderReprovRel());
@@ -10095,278 +10090,7 @@ async function renderModeloRel(){
   renderSetorModelo('ELETRÔNICA','var(--elet)', 'chart-modelo-elet', 'modelo-elet-kpi', 'modelo-elet-body', 'modelo-elet-label');
 }
 
-// ════════════════════════════════════════
-// RELATÓRIO MENSAL
-// Lê todos os dias do mês diretamente do Supabase (/history/dateKey)
-// ════════════════════════════════════════
-let mensalSector  = '';
-let _mensalData   = null; // cached loaded month data { monthKey, days: {dateKey: records[]} }
-let chartMensalDaily  = null;
-let chartMensalStatus = null;
-
-// Populate month selector with available months (current + past 11)
-function initMensalSelect(){
-  const sel = document.getElementById('mensal-month');
-  if(sel.options.length > 0) return; // already populated
-  const now = new Date();
-  for(let i = 0; i < 12; i++){
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const val = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
-    const lbl = d.toLocaleDateString('pt-BR', {month:'long', year:'numeric'});
-    const opt = document.createElement('option');
-    opt.value = val; opt.textContent = lbl.charAt(0).toUpperCase()+lbl.slice(1);
-    sel.appendChild(opt);
-  }
-}
-
-function setMensalSector(f, btn){
-  mensalSector = f;
-  document.getElementById('mensal-sector-tabs').querySelectorAll('.stab').forEach(b=>b.className='stab');
-  if(btn) btn.classList.add(f ? 'a-'+sc(f) : 'a-all');
-  renderMensalRel();
-}
-
-// Build list of dateKeys for a given YYYY-MM
-function getDaysInMonth(yearMonth){
-  const [y, m] = yearMonth.split('-').map(Number);
-  const days = [];
-  const daysInMonth = new Date(y, m, 0).getDate();
-  for(let d = 1; d <= daysInMonth; d++){
-    const date = new Date(y, m-1, d);
-    // Supabase stores dateKeys as JS toDateString().replace(/ /g,'_')
-    days.push(date.toDateString().replace(/ /g,'_'));
-  }
-  return days;
-}
-
-async function loadMensalData(yearMonth){
-  const loading = document.getElementById('mensal-loading');
-  loading.style.display = 'block';
-
-  const days    = getDaysInMonth(yearMonth);
-  const result  = { monthKey: yearMonth, days: {} };
-
-  // Load all days in parallel (capped at 5 concurrent to avoid rate limits)
-  const BATCH = 5;
-  for(let i = 0; i < days.length; i += BATCH){
-    const batch = days.slice(i, i+BATCH);
-    await Promise.all(batch.map(async dk => {
-      try {
-        const data = await dbGet('/history/'+dk);
-        if(data){
-          result.days[dk] = Object.entries(data)
-            .map(([k,v]) => ({...v, _docId:k, _dateKey:dk}));
-        }
-      } catch(e){ /* day has no data */ }
-    }));
-  }
-
-  loading.style.display = 'none';
-  return result;
-}
-
-async function renderMensalRel(){
-  const sel       = document.getElementById('mensal-month');
-  const yearMonth = sel.value;
-  if(!yearMonth) return;
-
-  // Sempre recarrega para refletir novos registros do mês
-  _mensalData = await loadMensalData(yearMonth);
-
-  // Garante que cada registro pertence ao mês selecionado (do dia 1 ao último dia)
-  const [yNum, mNum] = yearMonth.split('-').map(Number);
-  const inMonth = (h) => {
-    let d = null;
-    if(h.endEpoch)        d = new Date(h.endEpoch);
-    else if(h.startEpoch) d = new Date(h.startEpoch);
-    else if(h._dateKey){
-      // _dateKey ex.: "Fri_May_01_2026"
-      const parts = h._dateKey.split('_');
-      const monthIdx = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].indexOf(parts[1]);
-      if(monthIdx >= 0) d = new Date(Number(parts[3]), monthIdx, Number(parts[2]));
-    }
-    if(!d || isNaN(d)) return false;
-    return d.getFullYear() === yNum && (d.getMonth()+1) === mNum;
-  };
-  // Filtra os dias carregados restringindo ao mês
-  for(const dk of Object.keys(_mensalData.days)){
-    _mensalData.days[dk] = (_mensalData.days[dk]||[]).filter(inMonth);
-  }
-
-  // Flatten all records
-  let allRecs = Object.values(_mensalData.days).flat();
-  if(mensalSector) allRecs = allRecs.filter(h => h.sector === mensalSector);
-
-  // Filter useful statuses
-  const finished = allRecs.filter(h => h.status==='ok'||h.status==='rep'||h.status==='scrap');
-  const reproved = allRecs.filter(h => h.status==='rep');
-  const scrapped = allRecs.filter(h => h.status==='scrap');
-
-  // Aprovadas = SELBs únicos globais com status ok (sem duplicar SELB)
-  const approvedUniqSelbs = new Set(allRecs.filter(h=>h.status==='ok'&&h.selb).map(h=>h.selb));
-  const approvedCount = approvedUniqSelbs.size;
-
-  // Active days = days with at least one finished record
-  const activeDays = Object.values(_mensalData.days)
-    .filter(recs => {
-      const f = mensalSector ? recs.filter(h=>h.sector===mensalSector) : recs;
-      return f.some(h => h.status==='ok'||h.status==='rep'||h.status==='scrap');
-    }).length;
-
-  // KPIs
-  document.getElementById('mensal-kpi').innerHTML = `
-    <div class="sum-card"><div class="slbl">Dias trabalhados</div><div class="sval" style="color:var(--accent)">${activeDays}</div></div>
-    <div class="sum-card"><div class="slbl">Total concluídas</div><div class="sval" style="color:var(--accent2)">${finished.length}</div></div>
-    <div class="sum-card"><div class="slbl">Aprovadas</div><div class="sval" style="color:var(--accent2)">${approvedCount}</div></div>
-    <div class="sum-card"><div class="slbl">Reprovadas</div><div class="sval" style="color:var(--danger)">${reproved.length}</div></div>
-    <div class="sum-card"><div class="slbl">SCRAP</div><div class="sval" style="color:var(--purple)">${scrapped.length}</div></div>`;
-
-  // Build per-day arrays sorted chronologically
-  const days = getDaysInMonth(yearMonth);
-  const dayLabels = days.map(dk => {
-    const parts = dk.replace(/_/g,' ').split(' '); // "Wed Mar 18 2026"
-    return parts[2]+'/'+String(['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].indexOf(parts[1])+1).padStart(2,'0');
-  });
-  const dayFinished = days.map(dk => {
-    const recs = (_mensalData.days[dk]||[]).filter(h => mensalSector ? h.sector===mensalSector : true);
-    return recs.filter(h=>h.status==='ok'||h.status==='rep'||h.status==='scrap').length;
-  });
-  const dayOk   = days.map(dk => (_mensalData.days[dk]||[]).filter(h=>(mensalSector?h.sector===mensalSector:true)&&h.status==='ok').length);
-  const dayRep  = days.map(dk => (_mensalData.days[dk]||[]).filter(h=>(mensalSector?h.sector===mensalSector:true)&&h.status==='rep').length);
-  const dayScp  = days.map(dk => (_mensalData.days[dk]||[]).filter(h=>(mensalSector?h.sector===mensalSector:true)&&h.status==='scrap').length);
-  const dayRun  = days.map(dk => (_mensalData.days[dk]||[]).filter(h=>(mensalSector?h.sector===mensalSector:true)&&h.status==='running').length);
-
-  // Charts
-  const clr = { grid:'rgba(255,255,255,0.07)', text:'#7a83a0' };
-  const baseOpts = {
-    responsive:true,
-    plugins:{ legend:{ labels:{ color:clr.text, font:{size:11}, boxWidth:12 } } },
-    scales:{
-      x:{ ticks:{ color:clr.text, font:{size:9}, maxRotation:45 }, grid:{ color:clr.grid } },
-      y:{ ticks:{ color:clr.text, font:{size:10} }, grid:{ color:clr.grid } }
-    }
-  };
-
-  if(chartMensalDaily) chartMensalDaily.destroy();
-  chartMensalDaily = new Chart(document.getElementById('chart-mensal-daily'),{
-    type:'bar',
-    data:{ labels:dayLabels, datasets:[
-      { label:'Concluídas', data:dayFinished, backgroundColor:'rgba(79,142,247,0.8)', borderRadius:3 }
-    ]},
-    options:{...baseOpts}
-  });
-
-  if(chartMensalStatus) chartMensalStatus.destroy();
-  chartMensalStatus = new Chart(document.getElementById('chart-mensal-status'),{
-    type:'bar',
-    data:{ labels:dayLabels, datasets:[
-      { label:'Aprovadas', data:dayOk,  backgroundColor:'rgba(61,214,140,0.8)',  borderRadius:3, stack:'s' },
-      { label:'Reprovadas',data:dayRep, backgroundColor:'rgba(242,87,87,0.8)',   borderRadius:3, stack:'s' },
-      { label:'SCRAP',     data:dayScp, backgroundColor:'rgba(167,139,250,0.8)', borderRadius:3, stack:'s' }
-    ]},
-    options:{...baseOpts, scales:{...baseOpts.scales, x:{...baseOpts.scales.x,stacked:true}, y:{...baseOpts.scales.y,stacked:true}}}
-  });
-
-  // Per-user summary — aprovadas sem duplicar SELB
-  const byUser = {};
-  finished.forEach(h => {
-    if(!byUser[h.name]) byUser[h.name] = {
-      name:h.name, sector:h.sector, daysSet:new Set(),
-      total:0, ok:0, rep:0, scrap:0,
-      perDay:{},        // total por dia (qualquer status)
-      okSelbsGlobal: new Set(),  // SELBs únicos aprovados (global)
-      okSelbsPerDay: {}          // SELBs únicos aprovados por dia
-    };
-    const u = byUser[h.name];
-    u.total++; u.sector=h.sector;
-    if(h.status==='rep')   u.rep++;
-    if(h.status==='scrap') u.scrap++;
-    if(h.status==='ok' && h.selb){
-      if(!u.okSelbsGlobal.has(h.selb)){
-        u.okSelbsGlobal.add(h.selb);
-        u.ok++;
-      }
-      // Por dia: conta SELB único por dia
-      if(!u.okSelbsPerDay[h._dateKey]) u.okSelbsPerDay[h._dateKey] = new Set();
-      u.okSelbsPerDay[h._dateKey].add(h.selb);
-    }
-    u.daysSet.add(h._dateKey);
-    u.perDay[h._dateKey] = (u.perDay[h._dateKey]||0)+1;
-  });
-
-  const userRows = Object.values(byUser).sort((a,b)=>b.total-a.total);
-  const mensalBody = document.getElementById('mensal-body');
-  if(!userRows.length){
-    mensalBody.innerHTML=`<tr><td colspan="9" class="empty">Nenhum dado encontrado para este período.</td></tr>`;
-  } else {
-    const _colValMensal = (u, col) => {
-      const dayCount = u.daysSet.size;
-      const okPerDayCounts = Object.values(u.okSelbsPerDay||{}).map(s=>s.size);
-      const melhorAprov = okPerDayCounts.length > 0 ? Math.max(...okPerDayCounts) : 0;
-      const mediaAprov  = dayCount > 0 ? u.ok / dayCount : 0;
-      if(col==='name')   return u.name.toLowerCase();
-      if(col==='sector') return u.sector.toLowerCase();
-      if(col==='dias')   return dayCount;
-      if(col==='total')  return u.total;
-      if(col==='aprov')  return u.ok;
-      if(col==='reprov') return u.rep;
-      if(col==='scrap')  return u.scrap;
-      if(col==='media')  return mediaAprov;
-      if(col==='melhor') return melhorAprov;
-      return 0;
-    };
-    const sortedUsers = [...userRows].sort((a,b)=>{
-      const va = _colValMensal(a, _mensalSort.col);
-      const vb = _colValMensal(b, _mensalSort.col);
-      if(typeof va==='string') return _mensalSort.dir==='asc' ? va.localeCompare(vb) : vb.localeCompare(va);
-      return _mensalSort.dir==='asc' ? va-vb : vb-va;
-    });
-    _applySortIndicators('mensal-thead', _mensalSort.col, _mensalSort.dir);
-    mensalBody.innerHTML = sortedUsers.map(u => {
-      const days = u.daysSet.size;
-      const okPerDayCounts = Object.values(u.okSelbsPerDay||{}).map(s=>s.size);
-      const avg  = days > 0 ? (u.ok / days).toFixed(1) : '—';
-      const best = okPerDayCounts.length > 0 ? Math.max(...okPerDayCounts) : 0;
-      return `<tr>
-        <td style="font-weight:500">${u.name}</td>
-        <td><span class="stag stag-${sc(u.sector)}">${u.sector}</span></td>
-        <td style="font-family:var(--mono);color:var(--muted)">${days}</td>
-        <td style="font-family:var(--mono);color:var(--accent2);font-weight:600">${u.total}</td>
-        <td style="font-family:var(--mono);color:var(--accent2)">${u.ok}</td>
-        <td style="font-family:var(--mono);color:var(--danger)">${u.rep}</td>
-        <td style="font-family:var(--mono);color:var(--purple)">${u.scrap}</td>
-        <td style="font-family:var(--mono);color:var(--warn)">${avg}</td>
-        <td style="font-family:var(--mono);color:var(--accent)">${best}</td>
-      </tr>`;
-    }).join('');
-  }
-
-  // Daily breakdown
-  const dailyBody = document.getElementById('mensal-daily-body');
-  const activeDaysData = days.filter(dk => dayFinished[days.indexOf(dk)] > 0 || dayRun[days.indexOf(dk)] > 0);
-  if(!activeDaysData.length){
-    dailyBody.innerHTML=`<tr><td colspan="6" class="empty">Nenhum registro neste mês.</td></tr>`;
-  } else {
-    dailyBody.innerHTML = days
-      .map((dk, i) => ({ dk, i }))
-      .filter(({i}) => dayFinished[i]>0||dayRun[i]>0)
-      .reverse() // most recent first
-      .map(({dk, i}) => {
-        const dateStr = dk.replace(/_/g,' ');
-        const d = new Date(dateStr);
-        const label = d.toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'2-digit'});
-        return `<tr>
-          <td style="font-weight:500">${label}</td>
-          <td style="font-family:var(--mono);color:var(--accent2)">${dayFinished[i]}</td>
-          <td style="font-family:var(--mono);color:var(--accent2)">${dayOk[i]}</td>
-          <td style="font-family:var(--mono);color:var(--danger)">${dayRep[i]}</td>
-          <td style="font-family:var(--mono);color:var(--purple)">${dayScp[i]}</td>
-          <td style="font-family:var(--mono);color:var(--muted)">${dayRun[i]}</td>
-        </tr>`;
-      }).join('');
-  }
-}
-
+// (Relatório Mensal removido — não é mais utilizado)
 function setRelFilter(f,btn){
   relFilter=f;
   document.getElementById('rel-tabs').querySelectorAll('.stab').forEach(b=>b.className='stab');
@@ -14640,7 +14364,7 @@ function qualFitIn(node, maxPx, minPx){
 function qualEl(tag, cls){ const n=document.createElement(tag); if(cls) n.className=cls; return n; }
 function qualUpper(v){ return String(v||'').toUpperCase().trim(); }
 
-function qualMakeLabel({selb, serie, sku, modelo, unit, auditado}){
+function qualMakeLabel({selb, serie, sku, modelo, unit, auditado, checklist}){
   selb=qualUpper(selb); serie=qualUpper(serie); sku=qualUpper(sku); modelo=qualUpper(modelo); unit=qualUpper(unit);
 
   const wrap = qualEl('div','ped-label-wrap');
@@ -14651,6 +14375,13 @@ function qualMakeLabel({selb, serie, sku, modelo, unit, auditado}){
     bar.textContent = 'AUDITADO';
     root.appendChild(bar);
     root.style.paddingTop = '0.75cm';
+  }
+
+  // ── Checklist flag (sem barra vertical — apenas o divider horizontal) ──
+  let temChecklist = checklist;
+  if(temChecklist === undefined){
+    try { temChecklist = !!(typeof fluxolabModeloTemChecklist === 'function' && modelo && fluxolabModeloTemChecklist(modelo)); }
+    catch(e){ temChecklist = false; }
   }
 
   // ── Row 1 — Modelo (esq) | SELB grande + código cinza + QR (dir) ──
@@ -14692,7 +14423,41 @@ function qualMakeLabel({selb, serie, sku, modelo, unit, auditado}){
   const skuQW = qualEl('div','ped-etiq-elem1'); const skuQ = qualEl('img','ped-etiq-qr'); skuQ.alt='QR SKU'; skuQ.src=qualQrURL(sku); skuQW.append(skuQ);
   row3.append(skuTW, skuVW, skuQW);
 
-  root.append(row1, row2, row3);
+  // ── Divisória "CHECKLIST CHECKLIST CHECKLIST" no lugar da linha preta
+  // simples, só quando o registro tem checklist. Substitui o border-top
+  // padrão do row2 por essa faixa com o texto repetido.
+  if(temChecklist){
+    const divider = qualEl('div','ped-etiq-chk-divider');
+    divider.textContent = 'CHECKLIST  CHECKLIST  CHECKLIST';
+    divider.style.cssText = 'width:100%;flex-shrink:0;height:0.65cm;background:#000;color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;font-weight:900;font-size:11px;letter-spacing:2px;white-space:nowrap;-webkit-print-color-adjust:exact;print-color-adjust:exact';
+    const divider2 = qualEl('div','ped-etiq-chk-divider');
+    divider2.textContent = 'CHECKLIST  CHECKLIST  CHECKLIST';
+    divider2.style.cssText = 'width:100%;flex-shrink:0;height:0.65cm;background:#000;color:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;font-weight:900;font-size:11px;letter-spacing:2px;white-space:nowrap;-webkit-print-color-adjust:exact;print-color-adjust:exact';
+    row2.style.borderTop = '0';
+    row2.style.borderBottom = '0';
+    row3.style.borderTop = '0';
+
+    // ── Modo compacto: reduz padding/QR/fontes para caber nas 2 barras ──
+    const compPad = '0.15cm 0.3cm';
+    const compQR  = '1.9cm';
+    [bMod, bSelb, serQRW, serVW, serTW].forEach(el => el.style.padding = compPad);
+    [skuTW, skuVW, skuQW].forEach(el => el.style.padding = compPad);
+    [serQR, sQR, skuQ].forEach(img => { img.style.width = compQR; img.style.height = compQR; });
+    sTit.style.fontSize  = '1.9rem';
+    sVal.style.fontSize  = '1.3rem';
+    serV.style.fontSize  = '2.1rem';
+    serT.style.fontSize  = '1.7rem';
+    skuT.style.fontSize  = '1.7rem';
+    skuV.style.fontSize  = '2.1rem';
+    mTxt.style.fontSize  = '1.6rem';
+    // Empilha do topo — sem esticar rows para baixo
+    root.style.justifyContent = 'flex-start';
+    [row1, row2, row3].forEach(r => { r.style.flex = '0 0 auto'; });
+
+    root.append(row1, divider, row2, divider2, row3);
+  } else {
+    root.append(row1, row2, row3);
+  }
 
   setTimeout(()=>{
     qualFitIn(mTxt, 40, 22);
@@ -15196,6 +14961,80 @@ window.addEventListener('afterprint', () => {
   document.body.classList.remove('printing-qualidade');
 });
 
+// ── Converte uma barra colorida (div com background-color + texto) em SVG
+// vetorial equivalente, mantendo posição/tamanho (que continuam em cm, via
+// CSS herdado do próprio elemento). Usada só na hora de montar o HTML que
+// vai para a janela de impressão, para garantir que a cor de fundo e o
+// texto realmente saiam na impressora física (não só no preview de tela).
+// `srcEl` é o elemento ORIGINAL (ainda visível na tela, antes do clone) —
+// usamos o tamanho real dele em pixels para montar o viewBox do SVG na
+// proporção correta; sem isso um viewBox quadrado genérico distorce texto
+// numa barra bem fina e alta (ou bem larga e baixa) como essas.
+function qualBarraParaSvg(barEl, opts){
+  if(!barEl) return;
+  const bg = opts.bg, fg = opts.fg, vertical = !!opts.vertical;
+  const text = (barEl.textContent || '').trim();
+
+  let w = 0, h = 0;
+  if(opts.srcEl){
+    const r = opts.srcEl.getBoundingClientRect();
+    w = r.width; h = r.height;
+  }
+  if(!w || !h){ // fallback se não deu pra medir
+    if(vertical){ w = 42; h = 400; } else { w = 567; h = 21; }
+  }
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  svg.style.cssText = 'display:block;width:100%;height:100%';
+
+  const rect = document.createElementNS(svgNS, 'rect');
+  rect.setAttribute('x','0'); rect.setAttribute('y','0');
+  rect.setAttribute('width', w); rect.setAttribute('height', h);
+  rect.setAttribute('fill', bg);
+  svg.appendChild(rect);
+
+  if(text){
+    const txt = document.createElementNS(svgNS, 'text');
+    txt.setAttribute('x', w/2); txt.setAttribute('y', h/2);
+    txt.setAttribute('fill', fg);
+    txt.setAttribute('text-anchor','middle');
+    txt.setAttribute('dominant-baseline','central');
+    txt.setAttribute('font-family','Arial, sans-serif');
+    txt.setAttribute('font-weight','900');
+    txt.textContent = text;
+    if(vertical){
+      // Texto lido de baixo para cima, ocupando a maior parte da altura
+      const fontSize = Math.max(10, Math.min(w * 0.55, 18));
+      txt.setAttribute('font-size', fontSize);
+      txt.setAttribute('letter-spacing', Math.max(1, fontSize * 0.18));
+      txt.setAttribute('textLength', h * 0.82);
+      txt.setAttribute('lengthAdjust', 'spacingAndGlyphs');
+      txt.setAttribute('transform', `rotate(-90 ${w/2} ${h/2})`);
+    } else {
+      const fontSize = Math.max(9, Math.min(h * 0.6, 16));
+      txt.setAttribute('font-size', fontSize);
+      if(opts.stretch !== false){
+        // Estica o texto (ex.: "CHECKLIST CHECKLIST CHECKLIST") para
+        // preencher toda a largura da faixa, como uma divisória repetida.
+        txt.setAttribute('textLength', w * 0.96);
+        txt.setAttribute('lengthAdjust', 'spacingAndGlyphs');
+      } else {
+        txt.setAttribute('letter-spacing', Math.max(1, fontSize * 0.2));
+      }
+    }
+    svg.appendChild(txt);
+  }
+
+  // Preserva a posição/tamanho do elemento original (definidos em cm pelo
+  // CSS de página), só limpa o conteúdo e o background CSS antigo.
+  barEl.textContent = '';
+  barEl.style.background = 'transparent';
+  barEl.appendChild(svg);
+}
+
 // ── Gera e imprime etiqueta de um único SELB diretamente da linha da tabela ──
 function qualGerarEtiquetaUnica(selb, regId){
   selb = (selb || '').toUpperCase().trim();
@@ -15221,8 +15060,25 @@ function qualGerarEtiquetaUnica(selb, regId){
   overlay.className = 'qual-print-area';
   overlay.style.cssText = 'position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,0.75);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;overflow:auto';
 
+  // ── Decide se a etiqueta leva a faixa vertical "CHECKLIST" ──
+  // Usa o mesmo critério do badge 📋 Checklist da tabela: o registro
+  // (teve_checklist) e, como fallback, o índice do FluxoLAB pelo modelo.
+  let temChecklist = false;
+  try{
+    let reg = null;
+    if(regId && typeof _qualRegistros === 'object' && _qualRegistros) reg = _qualRegistros[regId] || null;
+    if(!reg && typeof _qualRegistros === 'object' && _qualRegistros){
+      reg = Object.values(_qualRegistros).find(r => (r.selb||'').toUpperCase().trim() === selb) || null;
+    }
+    if(reg && reg.teve_checklist) temChecklist = true;
+    if(!temChecklist && typeof fluxolabModeloTemChecklist === 'function'){
+      const alvo = (reg && reg.equipamento) || modelo;
+      if(alvo && fluxolabModeloTemChecklist(alvo)) temChecklist = true;
+    }
+  }catch(e){ temChecklist = false; }
+
   // Gera etiqueta usando o mesmo template do gerador em lote
-  const labelWrap = qualMakeLabel({ selb, modelo, serie, sku, unit, auditado: true });
+  const labelWrap = qualMakeLabel({ selb, modelo, serie, sku, unit, auditado: false, checklist: temChecklist });
   labelWrap.style.cssText = 'display:block';
 
   // Move o unitizador para o canto superior direito da página (fora da etiqueta)
@@ -15245,12 +15101,40 @@ function qualGerarEtiquetaUnica(selb, regId){
   btnImprimir.textContent = '🖨️ Imprimir';
   btnImprimir.style.cssText = 'background:var(--accent);border:none;border-radius:10px;color:#fff;font-family:var(--font);font-size:14px;font-weight:700;padding:10px 28px;cursor:pointer';
   btnImprimir.onclick = function(){
+    // Lê a etiqueta atual do overlay (pode ter sido trocada pelo btn Checklist)
+    const currentLabel = overlay.querySelector('.ped-label-wrap') || labelWrap;
 
-    const clone = labelWrap.cloneNode(true);
+    const clone = currentLabel.cloneNode(true);
     const pillClone = clone.querySelector('.ped-unit-pill');
     if(pillClone) pillClone.remove();
+
+    // ── Troca as barras coloridas (AUDITADO / CHECKLIST) de "background-color"
+    // CSS por SVG vetorial de verdade. Impressoras térmicas/drivers GDI (ex.:
+    // ZDesigner GK420t) frequentemente descartam background-color na hora de
+    // imprimir de fato, mesmo com print-color-adjust:exact — funciona só no
+    // preview de tela do Chrome. SVG é tratado como conteúdo (não "fundo"),
+    // então sempre imprime.
+    qualBarraParaSvg(clone.querySelector('.ped-auditado-bar'),    { bg:'#1a6b35', fg:'#fff', vertical:false, srcEl: currentLabel.querySelector('.ped-auditado-bar') });
+    clone.querySelectorAll('.ped-etiq-chk-divider').forEach((el, i) => {
+      const srcEls = currentLabel.querySelectorAll('.ped-etiq-chk-divider');
+      qualBarraParaSvg(el, { bg:'#000', fg:'#fff', vertical:false, srcEl: srcEls[i] || srcEls[0] });
+    });
+    // ── Resolve hrefs relativos (ex.: "style.css?v=2") para absolutos ──
+    // A janela de impressão é aberta com window.open('', ...), ou seja,
+    // sua "página" é about:blank. Um <link href="style.css"> relativo
+    // não consegue ser resolvido nesse contexto e o CSS simplesmente
+    // não carrega — foi por isso que a etiqueta perdia todo o layout
+    // (fontes, grid, tamanhos) na hora de imprimir.
     const headStyles = Array.from(document.querySelectorAll('link[rel="stylesheet"], style'))
-      .map(n => n.outerHTML).join('\n');
+      .map(n => {
+        if(n.tagName === 'LINK' && n.hasAttribute('href')){
+          const abs = new URL(n.getAttribute('href'), document.baseURI).href;
+          const clone2 = n.cloneNode(true);
+          clone2.setAttribute('href', abs);
+          return clone2.outerHTML;
+        }
+        return n.outerHTML;
+      }).join('\n');
     const labelHTML = clone.outerHTML;
     const w = window.open('', '_blank', 'width=700,height=500');
     if(!w){ alert('Permita pop-ups para imprimir.'); return; }
@@ -15295,7 +15179,31 @@ ${headStyles}
   btnFechar.textContent = '✕ Fechar';
   btnFechar.style.cssText = 'background:var(--bg3);border:1px solid var(--border2);border-radius:10px;color:var(--text);font-family:var(--font);font-size:14px;font-weight:600;padding:10px 22px;cursor:pointer';
   btnFechar.onclick = function(){ overlay.remove(); };
-  btns.append(btnImprimir, btnFechar);
+
+  // Botão para ativar/desativar modo Checklist na etiqueta normal
+  let _chkAtivo = temChecklist;
+  const btnChk = document.createElement('button');
+  btnChk.innerHTML = _chkAtivo ? '✅ Checklist ativo' : '📋 Checklist';
+  btnChk.style.cssText = `background:${_chkAtivo ? 'rgba(34,211,238,.18)' : 'rgba(255,255,255,0.07)'};border:1px solid ${_chkAtivo ? 'rgba(34,211,238,.6)' : 'rgba(255,255,255,0.2)'};border-radius:10px;color:${_chkAtivo ? '#22d3ee' : 'var(--text)'};font-family:var(--font);font-size:14px;font-weight:700;padding:10px 20px;cursor:pointer;transition:all .2s`;
+  btnChk.onclick = function(){
+    _chkAtivo = !_chkAtivo;
+    // Remove etiqueta atual e regera com novo modo
+    const old = overlay.querySelector('.ped-label-wrap');
+    if(old) old.remove();
+    const newLabel = qualMakeLabel({ selb, modelo, serie, sku, unit, auditado: false, checklist: _chkAtivo });
+    newLabel.style.cssText = 'display:block';
+    const newPill = newLabel.querySelector('.ped-unit-pill');
+    if(newPill) newPill.remove();
+    overlay.appendChild(newLabel);
+    // Atualiza visual do botão
+    btnChk.innerHTML = _chkAtivo ? '✅ Checklist ativo' : '📋 Checklist';
+    btnChk.style.background   = _chkAtivo ? 'rgba(34,211,238,.18)' : 'rgba(255,255,255,0.07)';
+    btnChk.style.borderColor  = _chkAtivo ? 'rgba(34,211,238,.6)'  : 'rgba(255,255,255,0.2)';
+    btnChk.style.color        = _chkAtivo ? '#22d3ee' : 'var(--text)';
+    // Atualiza labelWrap referenciado pelo btnImprimir (via closure re-query)
+  };
+
+  btns.append(btnImprimir, btnChk, btnFechar);
 
   overlay.append(btns, labelWrap);
   document.body.appendChild(overlay);
@@ -16799,7 +16707,6 @@ const REL_TAB_DEFS = [
   { key:'scrap',        btnId:'reltab-scrap',        label:'SCRAP' },
   { key:'modelo',       btnId:'reltab-modelo',       label:'Tempo Modelo' },
   { key:'usuario',      btnId:'reltab-usuario',      label:'Tempo Usuário' },
-  { key:'mensal',       btnId:'reltab-mensal',       label:'Mensal' },
   { key:'reprov',       btnId:'reltab-reprov',       label:'Reprovadas' },
   { key:'defeitos',     btnId:'reltab-defeitos',     label:'Defeitos' },
   { key:'duplicados',   btnId:'reltab-duplicados',   label:'Duplicados' },
@@ -18427,8 +18334,402 @@ function _qualRelFiltrarRegistros() {
   });
 }
 
+
+// ════════════════════════════════════════════════════════════
+// QUALIDADE — LIBERAÇÕES DETALHADAS (DIA / SEMANA / MÊS)
+// ════════════════════════════════════════════════════════════
+let _qualDetGran = 'dia';
+
+function setQualDetGran(g, btn){
+  _qualDetGran = g;
+  const wrap = document.getElementById('qual-det-gran');
+  if(wrap){
+    wrap.querySelectorAll('button').forEach(b => {
+      const on = b === btn;
+      b.style.background = on ? '#a78bfa' : 'none';
+      b.style.color      = on ? '#fff' : 'var(--muted)';
+      b.style.border     = on ? '1px solid #a78bfa' : '1px solid var(--border2)';
+    });
+  }
+  renderQualLiberacoesDetalhe();
+}
+
+function _qualIsAud(r){ return ((r && r.obs || '') + '').toUpperCase().includes('AUDITORIA'); }
+
+function _qualRegDate(r){
+  if(!r) return null;
+  if(r.ts) return new Date(r.ts);
+  if(r.data){
+    const m = String(r.data).match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if(m) return new Date(+m[3], +m[2]-1, +m[1]);
+  }
+  return null;
+}
+
+// Chave e rótulo do agrupamento
+function _qualPeriodoKey(d, gran){
+  const p2 = n => String(n).padStart(2,'0');
+  if(gran === 'mes') return d.getFullYear() + '-' + p2(d.getMonth()+1);
+  if(gran === 'semana'){
+    const ini = new Date(d); ini.setHours(0,0,0,0);
+    ini.setDate(ini.getDate() - ((ini.getDay() + 6) % 7)); // segunda-feira
+    return 'S' + ini.getFullYear() + '-' + p2(ini.getMonth()+1) + '-' + p2(ini.getDate());
+  }
+  return d.getFullYear() + '-' + p2(d.getMonth()+1) + '-' + p2(d.getDate());
+}
+
+function _qualPeriodoLabel(key, gran){
+  const p2 = n => String(n).padStart(2,'0');
+  if(gran === 'mes'){
+    const [y,m] = key.split('-').map(Number);
+    const lbl = new Date(y, m-1, 1).toLocaleDateString('pt-BR',{month:'long', year:'numeric'});
+    return lbl.charAt(0).toUpperCase() + lbl.slice(1);
+  }
+  if(gran === 'semana'){
+    const [y,m,d] = key.slice(1).split('-').map(Number);
+    const ini = new Date(y, m-1, d);
+    const fim = new Date(ini); fim.setDate(ini.getDate()+6);
+    return 'Semana ' + p2(ini.getDate()) + '/' + p2(ini.getMonth()+1) + ' a ' + p2(fim.getDate()) + '/' + p2(fim.getMonth()+1);
+  }
+  const [y,m,d] = key.split('-').map(Number);
+  const dt = new Date(y, m-1, d);
+  const sem = dt.toLocaleDateString('pt-BR',{weekday:'short'}).replace('.','');
+  return p2(d) + '/' + p2(m) + '/' + y + ' (' + sem + ')';
+}
+
+// Contagens fixas: hoje, semana (7 dias), mês corrente — não dependem do filtro
+function _qualResumoFixo(){
+  const todos = Object.values(_qualRegistros || {});
+  const hoje = new Date(); hoje.setHours(0,0,0,0);
+  const ini7 = new Date(hoje); ini7.setDate(hoje.getDate()-6);
+  const iniMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+  const iniAno = new Date(hoje.getFullYear(), 0, 1);
+  const out = { hoje:0, semana:0, mes:0, ano:0, ontem:0 };
+  const ontem = new Date(hoje); ontem.setDate(hoje.getDate()-1);
+  todos.forEach(r => {
+    const d = _qualRegDate(r); if(!d) return;
+    const dd = new Date(d); dd.setHours(0,0,0,0);
+    if(dd.getTime() === hoje.getTime())  out.hoje++;
+    if(dd.getTime() === ontem.getTime()) out.ontem++;
+    if(dd >= ini7)    out.semana++;
+    if(dd >= iniMes)  out.mes++;
+    if(dd >= iniAno)  out.ano++;
+  });
+  return out;
+}
+
+// ── Saúde da equipe no período ──
+// Presença = check-in por PIN no dia (tabela operator_checkins), mesma fonte do
+// painel da aba Admin. O setor Eletrônica fica fora do cálculo (_TH_SETORES_FORA_DA_SAUDE).
+function _qualDiaKey(d){ return new Date(d).toDateString().replace(/ /g,'_'); }
+
+// A "equipe considerada" DEVE ser exatamente a mesma do painel Gestão de Equipe
+// (aba Admin): mesmos setores de produção, incluindo ocultos/inativos, com o
+// setor Eletrônica isolado (fora do percentual).
+function _qualEquipeElegivel(){
+  const all = Array.isArray(typeof users !== 'undefined' ? users : []) ? users : [];
+  const base = ['DESMEMBRAMENTO','MONTAGEM','LIMPEZA','COMPLEXA','COMPLEXAS','QUALIDADE'];
+  const keys = new Set(base);
+  // setores personalizados do tipo operador também contam (igual ao painel)
+  (typeof _setores !== 'undefined' && Array.isArray(_setores) ? _setores : [])
+    .map(s => String(s || '').toUpperCase().trim())
+    .filter(s => s && s !== 'ELETRÔNICA' && s !== 'ELETRONICA')
+    .filter(s => (typeof getSectorTipo !== 'function') || getSectorTipo(s) !== 'admin')
+    .forEach(s => keys.add(s));
+  return all.filter(u => {
+    const s = String(u.sector || '').toUpperCase().trim();
+    if(!s) return false;
+    if(typeof _TH_SETORES_FORA_DA_SAUDE !== 'undefined' && _TH_SETORES_FORA_DA_SAUDE.has(s)) return false;
+    return keys.has(s);
+  });
+}
+
+window._qualCheckinCache = window._qualCheckinCache || {}; // dateKey -> [uid] | null (falhou)
+let _qualSaudeCarregando = false;
+
+async function _qualCarregarCheckins(dateKeys){
+  const faltando = dateKeys.filter(k => !(k in window._qualCheckinCache));
+  if(!faltando.length || _qualSaudeCarregando) return false;
+  _qualSaudeCarregando = true;
+  try {
+    const BATCH = 40;
+    for(let i = 0; i < faltando.length; i += BATCH){
+      const chunk = faltando.slice(i, i + BATCH);
+      try {
+        const { data, error } = await _supaAuthed()
+          .from('operator_checkins').select('uid,date_key').in('date_key', chunk);
+        if(error) throw error;
+        chunk.forEach(k => { window._qualCheckinCache[k] = []; });
+        (data || []).forEach(r => {
+          if(!Array.isArray(window._qualCheckinCache[r.date_key])) window._qualCheckinCache[r.date_key] = [];
+          window._qualCheckinCache[r.date_key].push(String(r.uid));
+        });
+      } catch(e) {
+        console.warn('[Qualidade] check-ins do período:', e);
+        chunk.forEach(k => { if(!(k in window._qualCheckinCache)) window._qualCheckinCache[k] = null; });
+      }
+    }
+  } finally { _qualSaudeCarregando = false; }
+  return true;
+}
+
+// Saúde de um conjunto de dias: média das presenças diárias sobre a equipe elegível.
+function _qualSaudeDeDias(dateKeys){
+  const elegiveis = _qualEquipeElegivel();
+  const totalEq = elegiveis.length;
+  const ids = new Set(elegiveis.map(u => String(u.id)));
+  let somaPct = 0, diasComDados = 0, somaPresentes = 0, pendente = false;
+  const presentesGeral = new Set();
+  dateKeys.forEach(k => {
+    const c = window._qualCheckinCache[k];
+    if(c === undefined){ pendente = true; return; }
+    if(c === null) return;
+    diasComDados++;
+    const presentes = c.filter(uid => ids.has(String(uid)));
+    presentes.forEach(uid => presentesGeral.add(String(uid)));
+    somaPresentes += presentes.length;
+    somaPct += totalEq > 0 ? (presentes.length / totalEq) * 100 : 0;
+  });
+  return {
+    pendente,
+    totalEq,
+    dias: diasComDados,
+    presencaMedia: diasComDados ? somaPresentes / diasComDados : 0,
+    pessoasDistintas: presentesGeral.size,
+    pct: diasComDados ? Math.round(somaPct / diasComDados) : null
+  };
+}
+
+function _qualSaudeCor(pct){
+  if(pct == null) return 'var(--muted)';
+  if(pct < 50) return '#f25757';
+  if(pct < 80) return '#f5a623';
+  return '#4ade80';
+}
+
+// Registros do período + busca livre
+function _qualDetRegistrosFiltrados(){
+  const q = (document.getElementById('qual-det-busca')?.value || '').toUpperCase().trim();
+  let regs = (typeof _qualRelFiltrarRegistros === 'function' ? _qualRelFiltrarRegistros() : []);
+  if(q){
+    regs = regs.filter(r =>
+      String(r.selb || '').toUpperCase().includes(q) ||
+      String(r.equipamento || '').toUpperCase().includes(q) ||
+      String(r.responsavel || r.uid || '').toUpperCase().includes(q)
+    );
+  }
+  return regs.sort((a,b) => (b.ts||0) - (a.ts||0));
+}
+
+function _qualAgruparPorPeriodo(regs, gran){
+  const map = {};
+  regs.forEach(r => {
+    const d = _qualRegDate(r); if(!d) return;
+    const k = _qualPeriodoKey(d, gran);
+    if(!map[k]) map[k] = { key:k, total:0, etiquetas:0, chamados:0, auditoria:0, selbs:new Set(), users:new Set(), dias:new Set() };
+    const g = map[k];
+    g.dias.add(_qualDiaKey(d));
+    g.total++;
+    if(r.etiqueta_impressa) g.etiquetas++;
+    if(r.chamado_aberto) g.chamados++;
+    if(_qualIsAud(r)) g.auditoria++;
+    if(r.selb) g.selbs.add(String(r.selb).toUpperCase());
+    g.users.add(r.responsavel || r.uid || 'Desconhecido');
+  });
+  return Object.values(map).sort((a,b) => a.key < b.key ? 1 : -1);
+}
+
+function renderQualLiberacoesDetalhe(){
+  const resumoEl = document.getElementById('qual-rel-resumo-periodos');
+  const body     = document.getElementById('qual-det-body');
+  const foot     = document.getElementById('qual-det-foot');
+  const regsBody = document.getElementById('qual-det-regs-body');
+  if(!resumoEl && !body && !regsBody) return;
+
+  // ── Resumo fixo ──
+  if(resumoEl){
+    const r = _qualResumoFixo();
+    const cards = [
+      ['Liberados hoje', r.hoje, '#a78bfa'],
+      ['Ontem', r.ontem, '#94a3b8'],
+      ['Últimos 7 dias', r.semana, '#4f8ef7'],
+      ['Mês atual', r.mes, '#4ade80'],
+      ['Ano atual', r.ano, '#f5a623'],
+    ];
+    resumoEl.innerHTML = cards.map(([l,v,c]) => `
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:10px 16px">
+        <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">${l}</div>
+        <div style="font-size:22px;font-weight:800;color:${c};margin-top:2px">${v}</div>
+      </div>`).join('');
+  }
+
+  const regs = _qualDetRegistrosFiltrados();
+
+  // Dias com liberação no período filtrado — base da saúde da equipe.
+  const diasDoPeriodo = Array.from(new Set(regs.map(r => {
+    const d = _qualRegDate(r); return d ? _qualDiaKey(d) : null;
+  }).filter(Boolean)));
+
+  // Busca os check-ins que ainda não estão em cache e re-renderiza quando chegarem.
+  if(diasDoPeriodo.some(k => !(k in window._qualCheckinCache))){
+    _qualCarregarCheckins(diasDoPeriodo).then(mudou => { if(mudou) renderQualLiberacoesDetalhe(); });
+  }
+
+  // ── Saúde da equipe no período ──
+  const saudeEl = document.getElementById('qual-saude-periodo');
+  if(saudeEl){
+    const h = _qualSaudeDeDias(diasDoPeriodo);
+    if(!diasDoPeriodo.length){
+      saudeEl.innerHTML = `<div style="background:var(--bg2);border:1px solid var(--border2);border-radius:12px;padding:14px 16px;font-size:12px;color:var(--muted)">🧑‍🔧 Saúde da equipe — sem liberações no período selecionado.</div>`;
+    } else {
+      const cor = _qualSaudeCor(h.pct);
+      const val = h.pct == null ? (h.pendente ? '…' : '—') : h.pct + '%';
+      saudeEl.innerHTML = `
+        <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:12px;padding:14px 16px">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px">
+            <div>
+              <h3 style="font-size:14px;font-weight:700;color:#22d3ee;margin:0">🧑‍🔧 Saúde da equipe no período</h3>
+              <p style="font-size:11px;color:var(--muted);margin-top:3px">Presença média por check-in nos dias com liberação (setor Eletrônica fora do cálculo).</p>
+            </div>
+            <div style="text-align:right">
+              <div style="font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Presença média</div>
+              <div style="font-size:26px;font-weight:900;color:${cor};line-height:1.1">${val}</div>
+            </div>
+          </div>
+          <div style="height:8px;background:rgba(255,255,255,.07);border-radius:20px;overflow:hidden;margin:12px 0 10px">
+            <div style="height:100%;width:${h.pct || 0}%;background:${cor};border-radius:20px"></div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
+            <div><div style="font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase">Equipe considerada</div><div style="font-size:16px;font-weight:800;color:var(--text)">${h.totalEq}</div></div>
+            <div><div style="font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase">Presentes/dia (média)</div><div style="font-size:16px;font-weight:800;color:var(--text)">${h.presencaMedia.toFixed(1).replace('.',',')}</div></div>
+            <div><div style="font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase">Pessoas distintas</div><div style="font-size:16px;font-weight:800;color:var(--text)">${h.pessoasDistintas}</div></div>
+            <div><div style="font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase">Dias avaliados</div><div style="font-size:16px;font-weight:800;color:var(--text)">${h.dias}${h.pendente ? ' <span style="font-size:10px;color:var(--muted);font-weight:600">carregando…</span>' : ''}</div></div>
+          </div>
+        </div>`;
+    }
+  }
+
+  // ── Tabela por período ──
+  if(body){
+    const grupos = _qualAgruparPorPeriodo(regs, _qualDetGran);
+    if(!grupos.length){
+      body.innerHTML = `<tr><td colspan="9" style="padding:20px;text-align:center;color:var(--muted);font-size:12px">Nenhuma liberação no período selecionado.</td></tr>`;
+      if(foot) foot.innerHTML = '';
+    } else {
+      const max = Math.max(...grupos.map(g => g.total));
+      body.innerHTML = grupos.map(g => {
+        const w = max > 0 ? Math.round((g.total / max) * 100) : 0;
+        const gh = _qualSaudeDeDias(Array.from(g.dias));
+        return `<tr style="border-bottom:1px solid var(--border2)">
+          <td style="padding:10px 12px;font-weight:600;color:var(--text)">${_qualPeriodoLabel(g.key, _qualDetGran)}</td>
+          <td style="padding:10px 12px;text-align:center;font-weight:800;color:#a78bfa;font-size:15px">${g.total}</td>
+          <td style="padding:10px 12px;text-align:center;color:var(--text)">${g.selbs.size}</td>
+          <td style="padding:10px 12px;text-align:center;color:#4ade80;font-weight:600">${g.etiquetas}</td>
+          <td style="padding:10px 12px;text-align:center;color:#f5a623;font-weight:600">${g.chamados}</td>
+          <td style="padding:10px 12px;text-align:center;color:#ec4899;font-weight:600">${g.auditoria || '—'}</td>
+          <td style="padding:10px 12px;text-align:center;color:var(--muted)">${g.users.size}</td>
+          <td style="padding:10px 12px;text-align:center;font-weight:800;color:${_qualSaudeCor(gh.pct)}">${gh.pct == null ? (gh.pendente ? '…' : '—') : gh.pct + '%'}<div style="font-size:9px;font-weight:600;color:var(--muted)">${gh.presencaMedia.toFixed(1).replace('.',',')}/${gh.totalEq}</div></td>
+          <td style="padding:10px 12px">
+            <div style="background:rgba(255,255,255,.07);border-radius:20px;height:8px;min-width:80px;overflow:hidden">
+              <div style="background:linear-gradient(90deg,#a78bfa,#7c3aed);height:100%;width:${w}%;border-radius:20px"></div>
+            </div>
+          </td>
+        </tr>`;
+      }).join('');
+      if(foot){
+        const t = grupos.reduce((a,g) => ({
+          total:a.total+g.total, et:a.et+g.etiquetas, ch:a.ch+g.chamados, au:a.au+g.auditoria
+        }), {total:0, et:0, ch:0, au:0});
+        const selbsUnicos = new Set(regs.map(r => String(r.selb||'').toUpperCase()).filter(Boolean)).size;
+        const media = grupos.length ? (t.total / grupos.length).toFixed(1).replace('.', ',') : '0';
+        foot.innerHTML = `<tr style="background:var(--bg3)">
+          <td style="padding:10px 12px;font-weight:800;color:var(--text)">TOTAL (média ${media}/${_qualDetGran === 'dia' ? 'dia' : _qualDetGran === 'semana' ? 'semana' : 'mês'})</td>
+          <td style="padding:10px 12px;text-align:center;font-weight:800;color:#a78bfa">${t.total}</td>
+          <td style="padding:10px 12px;text-align:center;font-weight:700;color:var(--text)">${selbsUnicos}</td>
+          <td style="padding:10px 12px;text-align:center;font-weight:700;color:#4ade80">${t.et}</td>
+          <td style="padding:10px 12px;text-align:center;font-weight:700;color:#f5a623">${t.ch}</td>
+          <td style="padding:10px 12px;text-align:center;font-weight:700;color:#ec4899">${t.au}</td>
+          <td colspan="3"></td>
+        </tr>`;
+      }
+    }
+  }
+
+  // ── Registros linha a linha ──
+  if(regsBody){
+    const cnt = document.getElementById('qual-det-regs-count');
+    if(cnt) cnt.textContent = '(' + regs.length + ')';
+    const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    if(!regs.length){
+      regsBody.innerHTML = `<tr><td colspan="7" style="padding:20px;text-align:center;color:var(--muted);font-size:12px">Nenhum registro no período selecionado.</td></tr>`;
+    } else {
+      regsBody.innerHTML = regs.map(r => {
+        const d = _qualRegDate(r);
+        const dataStr = r.data || (d ? d.toLocaleDateString('pt-BR') : '—');
+        const horaStr = r.hora || (d ? d.toLocaleTimeString('pt-BR') : '');
+        const aud = _qualIsAud(r);
+        return `<tr style="border-bottom:1px solid var(--border2)">
+          <td style="padding:8px 12px;color:var(--muted);font-family:var(--mono);font-size:11px">${esc(dataStr)} ${esc(String(horaStr).slice(0,5))}</td>
+          <td style="padding:8px 12px;font-weight:700;color:var(--text);font-family:var(--mono)">${esc(r.selb || '—')}</td>
+          <td style="padding:8px 12px;color:var(--text)">${esc(r.equipamento || '—')}</td>
+          <td style="padding:8px 12px;color:#a78bfa;font-weight:600">${esc(r.responsavel || r.uid || 'Desconhecido')}</td>
+          <td style="padding:8px 12px;text-align:center">${r.etiqueta_impressa ? '<span style="color:#4ade80;font-weight:700">✓</span>' : '<span style="color:var(--muted)">—</span>'}</td>
+          <td style="padding:8px 12px;text-align:center">${r.chamado_aberto ? '<span style="color:#f5a623;font-weight:700">✓</span>' : '<span style="color:var(--muted)">—</span>'}</td>
+          <td style="padding:8px 12px;color:var(--muted)">${aud ? '<span style="color:#ec4899;font-weight:700">🔍 </span>' : ''}${esc(r.obs || '—')}</td>
+        </tr>`;
+      }).join('');
+    }
+  }
+}
+
+function _qualBaixarCSV(linhas, nome){
+  const csv = '\ufeff' + linhas.map(l => l.map(c => '"' + String(c == null ? '' : c).replace(/"/g,'""') + '"').join(';')).join('\n');
+  const blob = new Blob([csv], { type:'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = nome;
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+
+function exportarQualLiberacoesPeriodo(){
+  const regs = _qualDetRegistrosFiltrados();
+  const grupos = _qualAgruparPorPeriodo(regs, _qualDetGran);
+  const linhas = [['Período','Liberados','SELBs únicos','Etiquetas','Chamados','Auditoria','Responsáveis','Saúde da equipe (%)','Presentes/dia (média)','Equipe considerada']];
+  grupos.forEach(g => {
+    const gh = _qualSaudeDeDias(Array.from(g.dias));
+    linhas.push([
+      _qualPeriodoLabel(g.key, _qualDetGran), g.total, g.selbs.size, g.etiquetas, g.chamados, g.auditoria, g.users.size,
+      gh.pct == null ? '' : gh.pct,
+      gh.presencaMedia.toFixed(1).replace('.', ','),
+      gh.totalEq
+    ]);
+  });
+  _qualBaixarCSV(linhas, 'liberacoes_qualidade_por_' + _qualDetGran + '.csv');
+}
+
+function exportarQualRegistrosDetalhado(){
+  const regs = _qualDetRegistrosFiltrados();
+  const linhas = [['Data','Hora','SELB','Equipamento','Responsável','Etiqueta impressa','Chamado aberto','Auditoria','Observação']];
+  regs.forEach(r => {
+    const d = _qualRegDate(r);
+    linhas.push([
+      r.data || (d ? d.toLocaleDateString('pt-BR') : ''),
+      r.hora || (d ? d.toLocaleTimeString('pt-BR') : ''),
+      r.selb || '', r.equipamento || '',
+      r.responsavel || r.uid || '',
+      r.etiqueta_impressa ? 'SIM' : 'NÃO',
+      r.chamado_aberto ? 'SIM' : 'NÃO',
+      _qualIsAud(r) ? 'SIM' : 'NÃO',
+      r.obs || ''
+    ]);
+  });
+  _qualBaixarCSV(linhas, 'registros_qualidade_detalhado.csv');
+}
+
 function renderRelatorioUsuariosQual() {
   const registros = _qualRelFiltrarRegistros();
+  try { renderQualLiberacoesDetalhe(); } catch(e) { console.warn('[Qualidade] detalhe:', e); }
   const tbody = document.getElementById('qual-rel-tbody');
   const totaisEl = document.getElementById('qual-rel-totais');
   const detalheEl = document.getElementById('qual-rel-detalhe');
@@ -18457,8 +18758,7 @@ function renderRelatorioUsuariosQual() {
   // Totalizador
   if (totaisEl) {
     const cores = [
-      ['Total de Registros', totalGeral, '#a78bfa'],
-      ['Usuários Ativos', lista.length, '#4f8ef7'],
+      ['Máquinas Revisadas', totalGeral, '#a78bfa'],
       ['Etiquetas Impressas', registros.filter(r => r.etiqueta_impressa).length, '#4ade80'],
       ['Chamados Abertos', registros.filter(r => r.chamado_aberto).length, '#f5a623'],
       ['Auditoria', totalAuditoria, '#ec4899'],
@@ -18654,8 +18954,12 @@ function fluxolabSwitchTab(tab) {
 }
 
 function fluxolabRenderModelos() {
+  window._fluxolabModelosExpanded = window._fluxolabModelosExpanded || new Set();
   const grid = document.getElementById('fluxolab-modelos-grid');
   if (!grid) return;
+
+  const scrollContainer = document.getElementById('fluxolab-modelos-scroll');
+  const savedScrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
 
   const searchEl = document.getElementById('fluxolab-modelo-search');
   const filter = searchEl ? searchEl.value.trim().toLowerCase() : '';
@@ -18769,7 +19073,7 @@ function fluxolabRenderModelos() {
 
   // Ler filtro de ordenação/dias ativo
   const sortFilterEl = document.getElementById('fluxolab-modelo-sort');
-  const sortFilter = sortFilterEl ? sortFilterEl.value : 'total';
+  const sortFilter = sortFilterEl ? sortFilterEl.value : 'maxDias';
 
   // ── Adiciona modelos presentes na planilha mas sem SELB no LAB ──
   // Garante que todos os modelos importados apareçam na tabela, mesmo sem equipamentos físicos.
@@ -18835,6 +19139,15 @@ function fluxolabRenderModelos() {
         ? (motivoSemDado + ' — e nenhum item no bolsão tem timestamp registrado')
         : motivoSemDado;
     }
+
+    if (typeof fluxolabPlanGetChecklistStats === 'function') {
+      const stats = fluxolabPlanGetChecklistStats(modelo);
+      g.maxAberto = stats.maxAberto || 0;
+      g.mediaAberto = stats.mediaAberto || 0;
+    } else {
+      g.maxAberto = 0;
+      g.mediaAberto = 0;
+    }
   });
 
   // Filtrar por texto + filtro de dias úteis
@@ -18843,9 +19156,9 @@ function fluxolabRenderModelos() {
       // Exibe apenas modelos que têm checklist importado na planilha
       if ((checklistIdx.get(_fluxolabNormModel(modelo)) || 0) === 0) return false;
       if (filter && !modelo.toLowerCase().includes(filter)) return false;
-      if (sortFilter === 'acima4')  return d.maxDiasUteis >= 4;
-      if (sortFilter === 'acima10') return d.maxDiasUteis >= 10;
-      if (sortFilter === 'acima20') return d.maxDiasUteis >= 20;
+      if (sortFilter === 'acima4')  return d.maxAberto >= 4;
+      if (sortFilter === 'acima10') return d.maxAberto >= 10;
+      if (sortFilter === 'acima20') return d.maxAberto >= 20;
       if (sortFilter === 'puxar') {
         const cl = checklistIdx.get(_fluxolabNormModel(modelo)) || 0;
         const falt = cl > 0 ? Math.max(0, cl - d.total) : 0;
@@ -18867,14 +19180,14 @@ function fluxolabRenderModelos() {
     })
     .sort((a, b) => {
       if (sortFilter === 'mediaDias') return b[1].mediaDiasUteis - a[1].mediaDiasUteis;
-      if (sortFilter === 'maxDias')   return b[1].maxDiasUteis   - a[1].maxDiasUteis;
+      if (sortFilter === 'maxDias')   return b[1].maxAberto   - a[1].maxAberto;
       if (sortFilter === 'urgencia')  {
         const clA = checklistIdx.get(_fluxolabNormModel(a[0])) || 0;
         const clB = checklistIdx.get(_fluxolabNormModel(b[0])) || 0;
         const fA = clA > 0 ? Math.max(0, clA - a[1].total) : 0;
         const fB = clB > 0 ? Math.max(0, clB - b[1].total) : 0;
         if (fA !== fB) return fB - fA;
-        return b[1].maxDiasUteis - a[1].maxDiasUteis;
+        return b[1].maxAberto - a[1].maxAberto;
       }
       if (sortFilter === 'puxar') {
         const clA = checklistIdx.get(_fluxolabNormModel(a[0])) || 0;
@@ -18883,7 +19196,7 @@ function fluxolabRenderModelos() {
         const fB = clB > 0 ? Math.max(0, clB - b[1].total) : 0;
         return fB - fA;
       }
-      if (sortFilter === 'acima4' || sortFilter === 'acima10' || sortFilter === 'acima20') return b[1].maxDiasUteis - a[1].maxDiasUteis;
+      if (sortFilter === 'acima4' || sortFilter === 'acima10' || sortFilter === 'acima20') return b[1].maxAberto - a[1].maxAberto;
       return b[1].total - a[1].total;
     });
 
@@ -19009,18 +19322,31 @@ function fluxolabRenderModelos() {
              </td>`
           : `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:12px">—</td>`);
 
+    // ── Coluna "Dias em Aberto" — via fluxolabPlanGetChecklistStats
+    const _abMax = dados.maxAberto || 0;
+    const _abColor = v => v >= 30 ? '#ef4444' : v >= 15 ? '#f59e0b' : v >= 7 ? '#facc15' : '#4ade80';
+
+    const diasAbertoCell = clTotal === 0
+      ? `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:12px">—</td>`
+      : _abMax > 0
+        ? `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)" title="Maior tempo em aberto entre os checklists deste modelo">
+             <span style="font-size:18px;font-weight:900;color:${_abColor(_abMax)};font-family:var(--mono);line-height:1">${_abMax}d</span>
+           </td>`
+        : `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:12px">—</td>`;
+
     const detId = 'fxmod-det-' + idx;
     const normKey = _fluxolabNormModel(modelo);
-    const totalCols = 5 + bolsoesAtivos.length; // Modelo + Total + Checklists + Dias Úteis + Faltantes + bolsões
+    const totalCols = 6 + bolsoesAtivos.length; // Modelo + Total + Checklists + Dias Úteis + Dias Aberto + Faltantes + bolsões
     const detalhesHtml = _renderDetalhesPedidos(normKey);
     const hasDet = clTotal > 0;
+    const isOpen = window._fluxolabModelosExpanded.has(normKey);
 
     const mainRow = `<tr style="background:${rowBg};transition:background .12s;cursor:${hasDet?'pointer':'default'}"
-      ${hasDet ? `onclick="(function(el,id){var t=document.getElementById(id);var open=t.style.display!=='none';t.style.display=open?'none':'';var a=el.querySelector('.fxmod-arr');if(a)a.style.transform=open?'':'rotate(180deg)';})(this,'${detId}')"` : ''}
+      ${hasDet ? `onclick="(function(el,id,nk){var t=document.getElementById(id);var open=t.style.display!=='none';t.style.display=open?'none':'';var a=el.querySelector('.fxmod-arr');if(a)a.style.transform=open?'':'rotate(180deg)';if(open)window._fluxolabModelosExpanded.delete(nk);else window._fluxolabModelosExpanded.add(nk);})(this,'${detId}','${normKey}')"` : ''}
       onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background='${rowBg}'">
       <td style="padding:10px 16px;border-bottom:1px solid var(--border);min-width:220px;max-width:340px">
         <div style="display:flex;align-items:center;gap:10px">
-          ${hasDet ? `<span class="fxmod-arr" style="color:var(--muted);font-size:12px;transition:transform .2s;flex-shrink:0">▾</span>` : `<span style="width:12px;flex-shrink:0"></span>`}
+          ${hasDet ? `<span class="fxmod-arr" style="color:var(--muted);font-size:12px;transition:transform .2s;flex-shrink:0;${isOpen ? 'transform:rotate(180deg)' : ''}">▾</span>` : `<span style="width:12px;flex-shrink:0"></span>`}
           <div style="font-size:13px;font-weight:600;color:var(--text);line-height:1.3;word-break:break-word">${modelo}</div>
         </div>
       </td>
@@ -19029,12 +19355,13 @@ function fluxolabRenderModelos() {
       </td>
       ${clCell}
       ${diasCell}
+      ${diasAbertoCell}
       ${faltantesCell}
       ${cols}
     </tr>`;
 
     const detRow = hasDet
-      ? `<tr id="${detId}" style="display:none;background:var(--bg1)">
+      ? `<tr id="${detId}" style="display:${isOpen ? '' : 'none'};background:var(--bg1)">
            <td colspan="${totalCols}" style="padding:0;border-bottom:1px solid var(--border2)">${detalhesHtml}</td>
          </tr>`
       : '';
@@ -19078,7 +19405,7 @@ function fluxolabRenderModelos() {
     </div>
 
     <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:16px;overflow:hidden">
-      <div style="overflow-x:auto;max-height:calc(100vh - 320px);overflow-y:auto">
+      <div id="fluxolab-modelos-scroll" style="overflow-x:auto;max-height:calc(100vh - 320px);overflow-y:auto">
       <table style="width:100%;border-collapse:collapse">
         <thead style="position:sticky;top:0;z-index:3">
           <tr>
@@ -19086,6 +19413,7 @@ function fluxolabRenderModelos() {
             <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text);text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3)">Total</th>
             <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#f59e0b;text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap">📋 Checklists</th>
             <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap">⏱ Dias Úteis</th>
+            <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#fbbf24;text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap">📅 Dias em Aberto</th>
             <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#ef4444;text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap">⚠ Faltantes</th>
             ${colHeaders}
           </tr>
@@ -19094,6 +19422,13 @@ function fluxolabRenderModelos() {
       </table>
       </div>
     </div>`;
+
+  if (savedScrollTop > 0) {
+    const newScrollContainer = document.getElementById('fluxolab-modelos-scroll');
+    if (newScrollContainer) {
+      newScrollContainer.scrollTop = savedScrollTop;
+    }
+  }
 }
 
 

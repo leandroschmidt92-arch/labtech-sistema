@@ -137,6 +137,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
   box-shadow:0 2px 12px rgba(0,0,0,.18);
   page-break-inside:avoid;break-inside:avoid;
 }
+.ped-etiq-chklist{position:absolute;z-index:5;left:0;top:0;bottom:0;width:1.1cm;background:#000;color:#fff;display:flex;align-items:center;justify-content:center;letter-spacing:.18em;font-weight:900;font-size:.95rem;writing-mode:vertical-rl;transform:rotate(180deg);text-transform:uppercase;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 .ped-etiq-row{display:flex;align-items:stretch;border-bottom:2px solid #000;flex:1}
 .ped-etiq-row:last-child{border-bottom:none}
 .ped-etiq-row2{flex:1.1}
@@ -1047,7 +1048,6 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <button id="reltab-scrap"  onclick="setRelSubTab('scrap')"  style="background:none;color:var(--muted);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">🗑️ SCRAP</button>
       <button id="reltab-modelo" onclick="setRelSubTab('modelo')" style="background:none;color:var(--muted);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">⏱️ Tempo por Modelo</button>
       <button id="reltab-usuario" onclick="setRelSubTab('usuario')" style="background:none;color:var(--muted);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">👤 Tempo por Usuário</button>
-      <button id="reltab-mensal" onclick="setRelSubTab('mensal')" style="background:none;color:var(--muted);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">📅 Mensal</button>
       <button id="reltab-reprov" onclick="setRelSubTab('reprov')" style="background:none;color:var(--muted);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">⚠️ Reprovadas</button>
       <button id="reltab-defeitos" onclick="setRelSubTab('defeitos')" style="background:none;color:var(--muted);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">🔍 Defeitos Frequentes</button>
       <button id="reltab-duplicados" onclick="setRelSubTab('duplicados')" style="background:none;color:var(--muted);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">🔄 SELBs Duplicados</button>
@@ -1535,80 +1535,6 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     </div>
   </div><!-- /relview-pedido -->
 
-    <!-- SUB-VIEW: MENSAL -->
-    <div id="relview-mensal" style="display:none">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:12px">
-        <div>
-          <h2 style="font-size:18px;font-weight:600">Relatório Mensal<span class="info-rel-btn" onclick="mostrarInfoRelatorio('mensal')" title="Como funciona este relatório">ℹ</span></h2>
-          <p style="font-size:12px;color:var(--muted);margin-top:3px">Consolidado de todos os dias do mês selecionado</p>
-        </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <select id="mensal-month" class="sel" style="width:auto;margin:0;font-size:12px;padding:7px 12px" onchange="renderMensalRel()"></select>
-          <div class="stabs" id="mensal-sector-tabs" style="margin:0">
-            <button class="stab a-all" onclick="setMensalSector('',this)">Todos</button>
-            <button class="stab" onclick="setMensalSector('MONTAGEM',this)">Montagem</button>
-            <button class="stab" onclick="setMensalSector('LIMPEZA',this)">Limpeza</button>
-            <button class="stab" onclick="setMensalSector('COMPLEXA',this)">Complexa</button>
-            <button class="stab" onclick="setMensalSector('ELETRÔNICA',this)">Eletrônica</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Loading indicator -->
-      <div id="mensal-loading" style="display:none;text-align:center;padding:40px;color:var(--muted);font-size:13px">
-        <div style="width:28px;height:28px;border:2px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 12px"></div>
-        Carregando dados do mês...
-      </div>
-
-      <!-- KPI cards -->
-      <div id="mensal-kpi" style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:20px"></div>
-
-      <!-- Charts row -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
-        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
-          <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px">Máquinas concluídas por dia</div>
-          <canvas id="chart-mensal-daily" height="200"></canvas>
-        </div>
-        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
-          <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px">Aprovadas × Reprovadas × SCRAP por dia</div>
-          <canvas id="chart-mensal-status" height="200"></canvas>
-        </div>
-      </div>
-
-      <!-- Per-user summary table -->
-      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:20px">
-        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px">Resumo por profissional</div>
-        <div style="overflow-x:auto">
-        <table class="rtbl">
-          <thead id="mensal-thead"><tr>
-            <th class="sortable" onclick="setMensalSort('name')">Profissional</th>
-            <th class="sortable" onclick="setMensalSort('sector')">Setor</th>
-            <th class="sortable" onclick="setMensalSort('dias')">Dias ativos</th>
-            <th class="sortable" onclick="setMensalSort('total')">Total concluídas</th>
-            <th class="sortable" onclick="setMensalSort('aprov')">Aprovadas</th>
-            <th class="sortable" onclick="setMensalSort('reprov')">Reprovadas</th>
-            <th class="sortable" onclick="setMensalSort('scrap')">SCRAP</th>
-            <th class="sortable" onclick="setMensalSort('media')">Média/dia</th>
-            <th class="sortable" onclick="setMensalSort('melhor')">Melhor dia</th>
-          </tr></thead>
-          <tbody id="mensal-body"></tbody>
-        </table>
-        </div>
-      </div>
-
-      <!-- Daily breakdown table -->
-      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
-        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px">Detalhamento diário</div>
-        <div style="overflow-x:auto">
-        <table class="rtbl">
-          <thead><tr>
-            <th>Data</th><th>Concluídas</th><th>Aprovadas</th><th>Reprovadas</th><th>SCRAP</th><th>Em andamento</th>
-          </tr></thead>
-          <tbody id="mensal-daily-body"></tbody>
-        </table>
-        </div>
-      </div>
-    </div><!-- /relview-mensal -->
 
     <!-- SUB-VIEW: REPROVADAS -->
     <div id="relview-reprov" style="display:none">
@@ -1774,6 +1700,9 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
         <button onclick="exportarRelatorioUsuariosQual()" style="background:rgba(74,222,128,.12);border:1px solid rgba(74,222,128,.35);border-radius:9px;color:#4ade80;font-family:var(--font);font-size:12px;font-weight:700;padding:8px 16px;cursor:pointer">⬇ Exportar CSV</button>
       </div>
 
+      <!-- ── Saúde da equipe no período (presença por check-in; setor Eletrônica fora do cálculo) ── -->
+      <div id="qual-saude-periodo" style="margin-bottom:18px"></div>
+
       <!-- Filtros -->
       <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:18px;padding:14px 16px;background:var(--bg2);border:1px solid var(--border2);border-radius:12px">
         <div>
@@ -1800,6 +1729,80 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 
       <!-- KPIs -->
       <div id="qual-rel-totais" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:18px"></div>
+
+      <!-- ── Resumo Dia / Semana / Mês (independente do filtro acima) ── -->
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <h3 style="font-size:13px;font-weight:700;color:var(--text);margin:0">✅ Liberações da Qualidade — resumo</h3>
+        <span style="font-size:11px;color:var(--muted)">valores fixos: hoje, semana e mês corrente</span>
+      </div>
+      <div id="qual-rel-resumo-periodos" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:18px"></div>
+
+      <!-- ── Liberações por período (dia / semana / mês) ── -->
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:12px;padding:14px 16px;margin-bottom:18px">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+          <div>
+            <h3 style="font-size:14px;font-weight:700;color:#a78bfa;margin:0">📆 Liberações por período</h3>
+            <p style="font-size:11px;color:var(--muted);margin-top:3px">Quantidade de SELBs liberados na Qualidade agrupada por dia, semana ou mês (respeita o filtro de período acima).</p>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <div id="qual-det-gran" style="display:flex;gap:6px">
+              <button class="qual-gran-btn active" data-gran="dia" onclick="setQualDetGran('dia',this)" style="background:#a78bfa;border:1px solid #a78bfa;border-radius:8px;color:#fff;font-family:var(--font);font-size:11px;font-weight:700;padding:6px 14px;cursor:pointer">Por dia</button>
+              <button class="qual-gran-btn" data-gran="semana" onclick="setQualDetGran('semana',this)" style="background:none;border:1px solid var(--border2);border-radius:8px;color:var(--muted);font-family:var(--font);font-size:11px;font-weight:700;padding:6px 14px;cursor:pointer">Por semana</button>
+              <button class="qual-gran-btn" data-gran="mes" onclick="setQualDetGran('mes',this)" style="background:none;border:1px solid var(--border2);border-radius:8px;color:var(--muted);font-family:var(--font);font-size:11px;font-weight:700;padding:6px 14px;cursor:pointer">Por mês</button>
+            </div>
+            <button onclick="exportarQualLiberacoesPeriodo()" style="background:rgba(167,139,250,.12);border:1px solid rgba(167,139,250,.4);border-radius:8px;color:#a78bfa;font-family:var(--font);font-size:11px;font-weight:700;padding:6px 14px;cursor:pointer">⬇ CSV do período</button>
+          </div>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:720px">
+            <thead>
+              <tr style="background:var(--bg3)">
+                <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--border2)">Período</th>
+                <th style="padding:10px 12px;text-align:center;font-size:10px;font-weight:700;color:#a78bfa;text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--border2);width:110px">Liberados</th>
+                <th style="padding:10px 12px;text-align:center;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--border2);width:110px">SELBs únicos</th>
+                <th style="padding:10px 12px;text-align:center;font-size:10px;font-weight:700;color:#4ade80;text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--border2);width:100px">Etiquetas</th>
+                <th style="padding:10px 12px;text-align:center;font-size:10px;font-weight:700;color:#f5a623;text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--border2);width:100px">Chamados</th>
+                <th style="padding:10px 12px;text-align:center;font-size:10px;font-weight:700;color:#ec4899;text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--border2);width:100px">Auditoria</th>
+                <th style="padding:10px 12px;text-align:center;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--border2);width:110px">Responsáveis</th>
+                <th style="padding:10px 12px;text-align:center;font-size:10px;font-weight:700;color:#22d3ee;text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--border2);width:130px">Saúde equipe</th>
+                <th style="padding:10px 12px;text-align:left;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--border2);min-width:150px">Volume</th>
+              </tr>
+            </thead>
+            <tbody id="qual-det-body"><tr><td colspan="9" style="padding:20px;text-align:center;color:var(--muted);font-size:12px">Carregando...</td></tr></tbody>
+            <tfoot id="qual-det-foot"></tfoot>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── Registros detalhados (linha a linha) ── -->
+      <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:12px;padding:14px 16px;margin-bottom:18px">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+          <div>
+            <h3 style="font-size:14px;font-weight:700;color:var(--text);margin:0">🧾 Registros detalhados <span id="qual-det-regs-count" style="font-size:11px;color:var(--muted);font-weight:600"></span></h3>
+            <p style="font-size:11px;color:var(--muted);margin-top:3px">Todas as liberações do período selecionado, uma por linha.</p>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input id="qual-det-busca" oninput="renderQualLiberacoesDetalhe()" placeholder="Buscar SELB, equipamento ou responsável..." style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:var(--font);font-size:12px;padding:7px 10px;outline:none;min-width:240px">
+            <button onclick="exportarQualRegistrosDetalhado()" style="background:rgba(74,222,128,.12);border:1px solid rgba(74,222,128,.35);border-radius:8px;color:#4ade80;font-family:var(--font);font-size:11px;font-weight:700;padding:7px 14px;cursor:pointer">⬇ CSV detalhado</button>
+          </div>
+        </div>
+        <div style="overflow-x:auto;max-height:520px;overflow-y:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:900px">
+            <thead>
+              <tr style="background:var(--bg3);position:sticky;top:0;z-index:1">
+                <th style="padding:9px 12px;text-align:left;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;border-bottom:1px solid var(--border2);width:150px">Data / Hora</th>
+                <th style="padding:9px 12px;text-align:left;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;border-bottom:1px solid var(--border2);width:110px">SELB</th>
+                <th style="padding:9px 12px;text-align:left;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;border-bottom:1px solid var(--border2)">Equipamento</th>
+                <th style="padding:9px 12px;text-align:left;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;border-bottom:1px solid var(--border2);width:160px">Responsável</th>
+                <th style="padding:9px 12px;text-align:center;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;border-bottom:1px solid var(--border2);width:90px">Etiqueta</th>
+                <th style="padding:9px 12px;text-align:center;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;border-bottom:1px solid var(--border2);width:90px">Chamado</th>
+                <th style="padding:9px 12px;text-align:left;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;border-bottom:1px solid var(--border2);min-width:180px">Observação</th>
+              </tr>
+            </thead>
+            <tbody id="qual-det-regs-body"></tbody>
+          </table>
+        </div>
+      </div>
 
       <!-- Tabela -->
       <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:12px;overflow:hidden">
@@ -2868,9 +2871,9 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
         <div style="font-size:12px;color:var(--muted)">Clique no modelo para ver os SELBs individuais · badges indicam bolsão e dias parado</div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <select id="fluxolab-modelo-sort" onchange="fluxolabRenderModelos()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--text);font-family:var(--font);font-size:12px;padding:7px 12px;outline:none;cursor:pointer">
+            <option value="maxDias" selected>&#9650; Maior dia parado</option>
             <option value="total">&#8597; Ordenar: Total</option>
             <option value="mediaDias">&#128197; Dias médios em aberto</option>
-            <option value="maxDias">&#9650; Maior dia parado</option>
             <option value="urgencia">&#128680; Urgência</option>
             <option value="acima4">&#9888; Acima de 4 dias</option>
             <option value="acima10">&#128992; Acima de 10 dias</option>
@@ -4665,16 +4668,6 @@ function pedPrintLabels() {
         { label: 'Para que serve', texto: 'Ajuda a identificar se um profissional está mais rápido ou mais lento que a média geral em determinados modelos, para apoiar treinamento ou redistribuição de tarefas.' },
       ]
     },
-    'mensal': {
-      titulo: '📅 Relatório Mensal',
-      resumo: 'Mostra um resumo consolidado de todos os dias de um mês escolhido.',
-      secoes: [
-        { label: 'Como funciona', texto: 'Você escolhe o mês e o ano. O sistema busca todos os registros daquele mês (do dia 1 ao último dia) e soma os resultados de aprovados, reprovados e SCRAP.' },
-        { label: 'Aprovados sem duplicar', texto: 'O número de <b>aprovados</b> conta cada SELB apenas uma vez no mês, mesmo que ele tenha sido registrado mais de uma vez — assim o total reflete a quantidade real de equipamentos diferentes que saíram aprovados.' },
-        { label: 'Dias ativos', texto: 'O indicador de "dias ativos" conta quantos dias daquele mês tiveram pelo menos um registro finalizado (aprovado, reprovado ou SCRAP), ajudando a entender a frequência de produção.' },
-        { label: 'Filtro por setor', texto: 'É possível restringir os números a apenas um setor (Montagem, Limpeza, Complexa ou Eletrônica) usando as abas no topo.' },
-      ]
-    },
     'reprov': {
       titulo: '⚠️ Máquinas Reprovadas',
       resumo: 'Lista os equipamentos que foram reprovados na qualidade e precisaram de retrabalho.',
@@ -4718,6 +4711,9 @@ function pedPrintLabels() {
         { label: 'O que é contado', texto: 'Para cada responsável, o sistema soma quantos SELBs ele liberou na tela de Qualidade dentro do período escolhido, além de quantas etiquetas imprimiu e quantos chamados abriu durante essas liberações.' },
         { label: 'Auditoria', texto: 'Registros marcados com a palavra "auditoria" na observação são contados separadamente, para diferenciar liberação normal de uma revisão de auditoria.' },
         { label: 'Reprovações no mesmo período', texto: 'O relatório também mostra quantos equipamentos aquele mesmo responsável reprovou dentro do período, para dar uma visão completa do trabalho dele na Qualidade.' },
+        { label: 'Liberações por dia, semana e mês', texto: 'Os cartões de resumo mostram sempre quantos SELBs foram liberados <b>hoje</b>, <b>ontem</b>, nos <b>últimos 7 dias</b>, no <b>mês atual</b> e no <b>ano atual</b>, independente do filtro escolhido. Logo abaixo, a tabela "Liberações por período" agrupa as liberações do período filtrado por dia, por semana (segunda a domingo) ou por mês, com totais de etiquetas, chamados, auditoria e SELBs únicos.' },
+        { label: 'Saúde da equipe no período', texto: 'Mostra a <b>presença média</b> da equipe (check-in por PIN) nos dias que tiveram liberação dentro do filtro, além de presentes por dia, pessoas distintas e dias avaliados. A tabela "Liberações por período" traz a mesma métrica por dia/semana/mês. O setor <b>Eletrônica não entra no cálculo</b> de saúde da equipe (nem aqui, nem na aba Admin).' },
+        { label: 'Registros detalhados', texto: 'A última tabela lista cada liberação individualmente (data/hora, SELB, equipamento, responsável, etiqueta, chamado e observação), com busca livre e exportação em CSV.' },
       ]
     },
     'tempo-selb': {
