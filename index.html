@@ -641,6 +641,15 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
             <span style="font-size: 10px; font-weight: 800; color: var(--purple); letter-spacing: 0.05em;">EXP. CX</span>
             <span style="font-family: var(--mono); font-size: 15px; font-weight: 800;"><span id="exp-comp-atual" style="color: var(--warn);">0</span><span style="color: var(--muted);">/</span><span id="exp-comp-total" style="color: var(--muted);">0</span></span>
           </div>
+          <div style="height: 24px; width: 1px; background: var(--border); margin: 0 4px;"></div>
+          <div id="dash-liberadas-pill" title="Total de equipamentos liberados pela Qualidade hoje" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(236, 72, 153, 0.06); border: 1px solid rgba(236, 72, 153, 0.15); border-radius: 10px;">
+            <span style="font-size: 10px; font-weight: 800; color: #ec4899; letter-spacing: 0.05em;">LIBERADAS NO DIA</span>
+            <span id="dash-liberadas-total" style="font-family: var(--mono); font-size: 15px; font-weight: 800; color: #ec4899;">0</span>
+          </div>
+          <div id="dash-health-pill" title="Saúde Geral da Equipe (Presença)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(74, 222, 128, 0.06); border: 1px solid rgba(74, 222, 128, 0.15); border-radius: 10px;">
+            <span style="font-size: 10px; font-weight: 800; color: #4ade80; letter-spacing: 0.05em;">SAÚDE EQUIPE</span>
+            <span id="dash-health-total" style="font-family: var(--mono); font-size: 15px; font-weight: 800; color: #4ade80;">0%</span>
+          </div>
         </div>
       </div>
     </div>

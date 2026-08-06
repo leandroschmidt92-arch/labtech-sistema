@@ -4219,6 +4219,11 @@ function updateSummary(){
   if(elComp) elComp.textContent = tComp;
   if(elTot)  elTot.textContent  = tTot;
 
+  // Atualiza badge de Liberadas no Dia (mesma fonte/lógica do card
+  // "Liberados no Dia" da aba Qualidade — ver _qualLiberadosHojeCount)
+  const elLib = document.getElementById('dash-liberadas-total');
+  if(elLib) elLib.textContent = _qualLiberadosHojeCount();
+
   // ── Expectativa de Produção (por setor, sempre visível — MONTAGEM, LIMPEZA e COMPLEXA) ──
   // Cada operador ativo tem meta diária (8 na Montagem/Limpeza, 1 na Complexa),
   // então a expectativa do setor = nº de cards ativos (usuários ativos/não
@@ -4248,7 +4253,67 @@ function updateSummary(){
   _renderExpectativaSetor('MONTAGEM', 8, [['exp-mont-atual','exp-mont-total'], ['texp-mont-atual','texp-mont-total']]);
   _renderExpectativaSetor('LIMPEZA',  8, [['exp-limp-atual','exp-limp-total'], ['texp-limp-atual','texp-limp-total']]);
   _renderExpectativaSetor('COMPLEXA', 1, [['exp-comp-atual','exp-comp-total'], ['texp-comp-atual','texp-comp-total']]);
+
+  // Atualiza Saúde da Equipe do dashboard (se já carregada)
+  const elDashHealth = document.getElementById('dash-health-total');
+  if (elDashHealth && typeof window._dashSaudeEquipePct !== 'undefined') {
+    elDashHealth.textContent = window._dashSaudeEquipePct + '%';
+  }
 }
+
+// Conta "Liberados no Dia" (hoje, data real do sistema) a partir de
+// _qualRegistros. Função ÚNICA usada tanto pelo badge do topo do Dashboard
+// quanto pelo card "Liberados no Dia" da aba Qualidade, para os dois nunca
+// divergirem — mesmo que o filtro de data da tela de Qualidade esteja
+// setado para outro dia (esse filtro é só de visualização/tabela, não deve
+// mudar o que o badge de hoje mostra).
+function _qualLiberadosHojeCount() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hojeStr = `${dd}/${mm}/${yyyy}`;
+  return Object.values(_qualRegistros || {}).filter(r => r.data === hojeStr).length;
+}
+
+// Busca a Saúde da Equipe para o badge no topo do Dashboard
+// Roda uma vez e depois a cada 5 minutos, para não sobrecarregar o DB
+async function fetchDashboardSaudeEquipe() {
+  try {
+    const todayISO = new Date().toISOString().slice(0,10);
+    const dObj = new Date(todayISO + 'T00:00:00');
+    const dateKey = dObj.toDateString().replace(/ /g,'_');
+    const { data: _ci } = await _supaAuthed().from('operator_checkins').select('uid').eq('date_key', dateKey);
+    const checkinUids = new Set((_ci || []).map(r => String(r.uid)));
+
+    // Usa a MESMA equipe elegível do painel Admin / aba Qualidade:
+    // todos os setores de produção (Desmembramento, Montagem, Limpeza,
+    // Complexa, Qualidade + setores personalizados), exceto Eletrônica
+    // (_TH_SETORES_FORA_DA_SAUDE). Antes essa lista estava fixa e incompleta
+    // aqui (só Montagem/Limpeza/Complexa), o que fazia o badge do dashboard
+    // divergir do percentual mostrado no Admin.
+    const equipeElegivel = (typeof _qualEquipeElegivel === 'function')
+      ? _qualEquipeElegivel()
+      : (users || []).filter(u => {
+          const uSec = (u.sector || '').toUpperCase().trim();
+          return uSec && !(typeof _TH_SETORES_FORA_DA_SAUDE !== 'undefined' && _TH_SETORES_FORA_DA_SAUDE.has(uSec));
+        });
+
+    const overallTotal = equipeElegivel.length;
+    const overallActive = equipeElegivel.filter(u => checkinUids.has(String(u.id))).length;
+
+    const pct = overallTotal > 0 ? Math.round((overallActive / overallTotal) * 100) : 0;
+    window._dashSaudeEquipePct = pct;
+
+    // Atualiza imediatamente o UI se o elemento já estiver lá
+    const elDashHealth = document.getElementById('dash-health-total');
+    if (elDashHealth) elDashHealth.textContent = pct + '%';
+  } catch (e) {
+    console.warn('Erro ao buscar saude da equipe pro dashboard:', e);
+  }
+}
+setInterval(fetchDashboardSaudeEquipe, 300000);
+setTimeout(fetchDashboardSaudeEquipe, 3000);
 
 // ════ CONSULTA ════
 let _consultaDateKey = null;   // dateKey currently shown in consulta (kept for compat)
@@ -14166,6 +14231,14 @@ function renderQualRegistros(){
   // Conjunto base filtrado por data (e busca) — sem filtro de status —
   // usado para calcular os totais dos cards sempre referente ao filtro ativo
   const allValues = Object.values(_qualRegistros);
+
+  // Atualiza badge fixo do Dashboard. IMPORTANTE: este badge é sempre "hoje",
+  // independente do filtro de data escolhido nesta tela de Qualidade (esse
+  // filtro serve só pra tabela/consulta). Usa a mesma função do card
+  // "Liberados no Dia" abaixo para os dois nunca divergirem.
+  const dashLibEl = document.getElementById('dash-liberadas-total');
+  if(dashLibEl) dashLibEl.textContent = _qualLiberadosHojeCount();
+
   const baseFiltered = allValues.filter(r => {
     if(targetDateStr && r.data !== targetDateStr) return false;
     if(q && !(r.selb||'').toUpperCase().includes(q) && !(r.equipamento||'').toUpperCase().includes(q)) return false;
@@ -17530,11 +17603,27 @@ function fluxolabStartListener() {
     _fluxolabScheduleSyncLiberados();
     const viewEl = document.getElementById('view-fluxolab');
     if (viewEl && viewEl.classList.contains('active')) {
-      _fluxolabRenderGrid();
-      _fluxolabUpdateTimestamp();
-      // Re-renderiza aba checklists se estiver ativa para atualizar Lab/Doca
-      if (_fluxolabActiveTab === 'checklists') {
-        try { fluxolabRenderChecklistsImported(); } catch(e) {}
+      // ── ANTI-FLICKER ──────────────────────────────────────────────
+      // O poll roda a cada 4s. Antes, re-renderizava o grid e as subabas
+      // via innerHTML mesmo quando NADA mudou — o que causava o "piscar"
+      // ao navegar entre as subabas. Agora só re-renderiza quando o
+      // snapshot realmente mudou (com um refresh forçado a cada 60s para
+      // atualizar textos relativos do tipo "5min atrás").
+      let _sig = '';
+      try { _sig = JSON.stringify(_fluxolabData); } catch(e) { _sig = String(Date.now()); }
+      const _now = Date.now();
+      const _forced = !window._fluxolabLastRenderTs || (_now - window._fluxolabLastRenderTs > 60000);
+      if (_sig !== window._fluxolabLastSig || _forced) {
+        window._fluxolabLastSig = _sig;
+        window._fluxolabLastRenderTs = _now;
+        _fluxolabRenderGrid();
+        _fluxolabUpdateTimestamp();
+        // Re-renderiza aba checklists se estiver ativa para atualizar Lab/Doca
+        if (_fluxolabActiveTab === 'checklists') {
+          try { fluxolabRenderChecklistsImported(); } catch(e) {}
+        }
+      } else {
+        _fluxolabUpdateTimestamp();
       }
     }
     // Atualiza chips se a fila estiver aberta
@@ -18195,9 +18284,12 @@ function _fluxolabRenderGrid() {
       const starBadge = matched && filterModel
         ? '<span title="Modelo destacado" style="margin-left:4px;color:var(--accent);font-size:11px">★</span>'
         : '';
-      return '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;background:' + chipBg + ';border:1px solid ' + chipBd + ';border-radius:8px;padding:6px 10px;transition:background .15s,opacity .15s;opacity:' + chipOp + '" onmouseover="this.style.background=\'var(--bg4)\'" onmouseout="this.style.background=\'' + chipBg + '\'">'
+      // Urgência do modelo deste SELB
+      const _urgQ = _fluxolabModeloUrgenteQtd(modeloSelb);
+      const urgChip = _fluxolabUrgBadge(_urgQ, 'sm');
+      return '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;background:' + (_urgQ ? 'rgba(239,68,68,.10)' : chipBg) + ';border:1px solid ' + (_urgQ ? 'rgba(239,68,68,.7)' : chipBd) + ';border-radius:8px;padding:6px 10px;transition:background .15s,opacity .15s;opacity:' + chipOp + '" onmouseover="this.style.background=\'var(--bg4)\'" onmouseout="this.style.background=\'' + chipBg + '\'">'
         + '<div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1">'
-          + '<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:' + b.color + ';white-space:nowrap">' + selbCode + warnBadge + starBadge + '</span>'
+          + '<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:' + b.color + ';white-space:nowrap">' + selbCode + warnBadge + starBadge + urgChip + '</span>'
           + '<div style="min-width:0;flex:1">'
             + (v.userName ? '<div style="font-size:10px;color:var(--muted);white-space:normal;word-break:break-word;line-height:1.25">' + v.userName + (v.movidoPor && v.movidoPor !== v.userName ? ' · mov. por ' + v.movidoPor : '') + '</div>' : '')
             + (modeloSelb ? '<div title="Modelo do equipamento" style="font-size:10px;font-weight:600;color:' + b.color + ';white-space:normal;word-break:break-word;line-height:1.25;opacity:.9;margin-top:2px">📦 ' + modeloSelb + '</div>' : '')
@@ -19233,6 +19325,7 @@ function fluxolabSwitchTab(tab) {
   setBtn(btnPlanejamento, tab === 'planejamento');
   setBtn(btnPendencias, tab === 'pendencias');
 
+  // Ao trocar de subaba, força o próximo poll a recalcular sem repintar tudo agora
   if (tab === 'modelos')    fluxolabRenderModelos();
   if (tab === 'checklists') fluxolabRenderChecklistsImported();
   if (tab === 'caindo')     fluxolabRenderCaindoHoje();
@@ -19273,8 +19366,14 @@ function fluxolabRenderModelos() {
       diasUteis: _fluxolabFindKey(sample,'Dias Úteis Andamento') || _fluxolabFindKey(sample,'Dias Uteis Andamento') || _fluxolabFindKey(sample,'Dias Úteis') || _fluxolabFindKey(sample,'Dias Uteis'),
       diasAb:    _fluxolabFindKey(sample,'Dias Aberto'),
       status:    _fluxolabFindKey(sample,'Status Checklist') || _fluxolabFindKey(sample,'Status'),
-      obs:       _fluxolabFindKey(sample,'Observação') || _fluxolabFindKey(sample,'Observacao') || _fluxolabFindKey(sample,'OBS') || _fluxolabFindKey(sample,'Obs'),
+      obs:       _fluxolabFindKey(sample,'Observação Comercial') || _fluxolabFindKey(sample,'Observação') || _fluxolabFindKey(sample,'Observacao') || _fluxolabFindKey(sample,'OBS') || _fluxolabFindKey(sample,'Obs'),
+      prodCompra: _fluxolabFindKey(sample,'Produção/Compra x Checklist') || _fluxolabFindKey(sample,'Producao/Compra x Checklist') || _fluxolabFindKey(sample,'Produção'),
     };
+    // "Tipo" na planilha é a coluna final "Status" (A INSTALAR / TROCA TÉCNICA)
+    if (!dKeys.tipo) {
+      const kSt = Object.keys(sample).find(k => k.trim().toLowerCase() === 'status');
+      if (kSt && kSt !== dKeys.status) dKeys.tipo = kSt;
+    }
     if (dKeys.modelo) {
       for (const r of _fluxolabChecklistsImported) {
         const nk = _fluxolabNormModel(r[dKeys.modelo]);
@@ -19292,12 +19391,14 @@ function fluxolabRenderModelos() {
     }
     const k = info.keys;
     const headers = [
+      ['Andamento',  k.andamento],
       ['Pedido',     k.pedido],
       ['Cliente',    k.cliente],
       ['Customer · Tel', k.customer || k.telefone],
       ['Tipo',       k.tipo],
-      ['Dias Úteis', k.diasUteis || k.diasAb],
-      ['Status',     k.status],
+      ['Dias Aberto', k.diasAb],
+      ['Dias Úteis Andamento', k.diasUteis],
+      ['Status Checklist', k.status],
       ['Obs',        k.obs],
     ];
     const ths = headers.map(([h]) =>
@@ -19311,15 +19412,21 @@ function fluxolabRenderModelos() {
           const tel  = k.telefone ? r[k.telefone] : '';
           val = [nome, tel].filter(Boolean).map(_escDet).join('<br><span style="color:var(--muted);font-size:11px">') + (tel?'</span>':'');
           if (!nome && !tel) val = '—';
+        } else if (key && (key === k.diasAb || key === k.diasUteis)) {
+          // números fiéis à planilha (127.0 → 127, 0 continua 0)
+          const n = parseFloat(String(r[key]).replace(',', '.'));
+          val = isNaN(n) ? '—' : String(Number.isInteger(n) ? n : n.toFixed(1).replace('.', ','));
         } else if (key && r[key] != null && String(r[key]).trim() !== '') {
           val = _escDet(r[key]);
         }
         return `<td style="padding:7px 12px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border);vertical-align:top">${val}</td>`;
       }).join('');
-      return `<tr>${tds}</tr>`;
+      const _urgRow = _fluxolabRowUrgente(r);
+      return `<tr${_urgRow ? ' style="background:rgba(239,68,68,.10);box-shadow:inset 3px 0 0 #ef4444"' : ''}>${tds}</tr>`;
     }).join('');
     return `<div style="background:var(--bg1);overflow-x:auto">
-      <table style="width:100%;border-collapse:collapse;min-width:760px">
+      <table style="width:100%;border-collapse:collapse;min-width:1040px">
+
         <thead><tr style="background:var(--bg3)">${ths}</tr></thead>
         <tbody>${trs}</tbody>
       </table>
@@ -19408,16 +19515,18 @@ function fluxolabRenderModelos() {
       } else {
         const vals = det.rows
           .map(r => parseFloat(r[duKey]))
-          .filter(v => !isNaN(v) && v > 0); // ignora 0 e negativos (linhas sem data)
+          .filter(v => !isNaN(v) && v >= 0); // zero é um valor válido na planilha
         if (vals.length) {
+          g.minDiasUteis    = Math.min(...vals);
           g.maxDiasUteis    = Math.max(...vals);
           g.mediaDiasUteis  = calcAverage(vals, null, 1);
           usouChecklist = true;
         } else {
-          motivoSemDado = `Coluna "${duKey}" existe mas está vazia/zerada para todos os checklists deste modelo`;
+          motivoSemDado = `Coluna "${duKey}" existe mas está vazia para todos os checklists deste modelo`;
         }
       }
     }
+    if (g.minDiasUteis  === undefined) g.minDiasUteis   = g.minDias;
     if (g.maxDiasUteis  === undefined) g.maxDiasUteis   = g.maxDias;
     if (g.mediaDiasUteis === undefined) g.mediaDiasUteis = g.mediaDias;
     // Flag: só temos dado confiável se veio da planilha (checklist) OU se há timestamp real nos itens do bolsão
@@ -19581,20 +19690,25 @@ function fluxolabRenderModelos() {
     // Faltantes = checklists - SELBs nos bolsões de lab (exclui SCRAP e DOCA_1)
     const faltantes = clTotal > 0 ? Math.max(0, clTotal - labTotal) : 0;
 
+    const _duMin = dados.minDiasUteis || 0;
     const _duMax = dados.maxDiasUteis || 0;
     const _duMed = dados.mediaDiasUteis || 0;
     const _duMedFmt = String(_duMed).replace('.', ',');
     const _duColor = m => m >= 20 ? '#ef4444' : m >= 10 ? '#f59e0b' : m >= 4 ? '#facc15' : 'var(--text)';
 
     // Coluna dedicada "Dias Úteis" — sempre visível na linha principal, sem precisar expandir
+    // Quando o filtro "Dias médios em aberto" está ativo, exibe a MÉDIA em vez do maior valor
+    const _duUsaMedia = sortFilter === 'mediaDias';
+    const _duValor    = _duUsaMedia ? _duMedFmt : String(_duMax);
+    const _duBase     = _duUsaMedia ? _duMed : _duMax;
+    const _duTitle    = _duUsaMedia
+      ? 'Média de Dias Úteis Andamento entre os checklists deste modelo'
+      : 'Maior valor de Dias Úteis Andamento entre os checklists deste modelo';
     const diasCell = clTotal === 0
       ? `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:12px">—</td>`
       : dados.temDadosDias
-        ? `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">
-             <div style="display:inline-flex;flex-direction:column;align-items:center;gap:1px" title="Média e máximo de dias úteis em andamento, calculados a partir dos checklists importados">
-               <span style="font-size:18px;font-weight:900;color:${_duColor(_duMed)};font-family:var(--mono);line-height:1">${_duMedFmt}d</span>
-               <span style="font-size:9px;font-weight:700;color:var(--muted);font-family:var(--mono);white-space:nowrap">méd · máx ${_duMax}d</span>
-             </div>
+        ? `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)" title="${_duTitle}">
+             <span style="font-size:18px;font-weight:900;color:${_duColor(_duBase)};font-family:var(--mono);line-height:1">${_duValor}d</span>
            </td>`
         : `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">
              <span title="${(dados.motivoSemDadosDias || 'Sem dado de dias para este modelo').replace(/"/g,'&quot;')}" style="font-size:11px;font-weight:600;color:var(--muted);font-style:italic;white-space:nowrap;cursor:help">sem dado ⓘ</span>
@@ -19629,13 +19743,21 @@ function fluxolabRenderModelos() {
     const hasDet = clTotal > 0;
     const isOpen = window._fluxolabModelosExpanded.has(normKey);
 
-    const mainRow = `<tr style="background:${rowBg};transition:background .12s;cursor:${hasDet?'pointer':'default'}"
+    // Urgência: modelos com checklist "Urgência Laboratório"
+    const _urgQtd = (() => {
+      const det = checklistDetalhes.get(normKey);
+      if (!det || !det.rows.length) return 0;
+      return det.rows.filter(_fluxolabRowUrgente).length;
+    })();
+    const _urgBadge = _fluxolabUrgBadge(_urgQtd);
+
+    const mainRow = `<tr style="background:${_urgQtd ? 'rgba(239,68,68,.10)' : rowBg};${_urgQtd ? 'box-shadow:inset 4px 0 0 #ef4444;' : ''}transition:background .12s;cursor:${hasDet?'pointer':'default'}"
       ${hasDet ? `onclick="(function(el,id,nk){var t=document.getElementById(id);var open=t.style.display!=='none';t.style.display=open?'none':'';var a=el.querySelector('.fxmod-arr');if(a)a.style.transform=open?'':'rotate(180deg)';if(open)window._fluxolabModelosExpanded.delete(nk);else window._fluxolabModelosExpanded.add(nk);})(this,'${detId}','${normKey}')"` : ''}
-      onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background='${rowBg}'">
+      onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background='${_urgQtd ? 'rgba(239,68,68,.10)' : rowBg}'">
       <td style="padding:10px 16px;border-bottom:1px solid var(--border);min-width:220px;max-width:340px">
         <div style="display:flex;align-items:center;gap:10px">
           ${hasDet ? `<span class="fxmod-arr" style="color:var(--muted);font-size:12px;transition:transform .2s;flex-shrink:0;${isOpen ? 'transform:rotate(180deg)' : ''}">▾</span>` : `<span style="width:12px;flex-shrink:0"></span>`}
-          <div style="font-size:13px;font-weight:600;color:var(--text);line-height:1.3;word-break:break-word">${modelo}</div>
+          <div style="font-size:13px;font-weight:600;color:var(--text);line-height:1.3;word-break:break-word;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span>${modelo}</span>${_urgBadge}</div>
         </div>
       </td>
       <td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">
@@ -19700,7 +19822,7 @@ function fluxolabRenderModelos() {
             <th style="padding:10px 16px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);text-align:left;border-bottom:2px solid var(--border2);background:var(--bg3)">Modelo</th>
             <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text);text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3)">Total</th>
             <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#f59e0b;text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap">📋 Checklists</th>
-            <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap">⏱ Dias Úteis</th>
+            <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap">⏱ Dias Úteis Andamento${sortFilter === 'mediaDias' ? ' (média)' : ''}</th>
             <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#fbbf24;text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap">📅 Dias em Aberto</th>
             <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#ef4444;text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap">⚠ Faltantes</th>
             ${colHeaders}
@@ -20025,17 +20147,20 @@ function fluxolabRenderChecklistsImported(){
       const btnRemover = isAdminUser && pedNum
         ? `<td style="padding:4px 8px;border-bottom:1px solid var(--border)"><button onclick="(function(btn,ped){if(!confirm('Remover pedido '+ped+' da lista do FluxoLAB?'))return;btn.disabled=true;btn.textContent='...';if(typeof fluxolabRemoverPedidoDaLista==='function')fluxolabRemoverPedidoDaLista(ped).then(function(){}).catch(function(e){btn.disabled=false;btn.textContent='🗑️';});})(this,'${pedNum.replace(/'/g,"\\\'")}')" style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:6px;color:#ef4444;font-size:11px;font-weight:700;padding:3px 8px;cursor:pointer;white-space:nowrap">🗑️ Remover</button></td>`
         : `<td style="padding:4px 8px;border-bottom:1px solid var(--border)"></td>`;
-      return `<tr>${detailKeys.map(k =>
+      const _urgRow = _fluxolabRowUrgente(r);
+      return `<tr${_urgRow ? ' style="background:rgba(239,68,68,.10);box-shadow:inset 3px 0 0 #ef4444"' : ''}>${detailKeys.map(k =>
         `<td style="padding:7px 12px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border)">${esc(k?r[k]:'—')}</td>`
       ).join('')}${btnRemover}</tr>`;
     }).join('');
 
+    const _grpUrg = g.items.some(_fluxolabRowUrgente);
     return `
-    <div style="border-bottom:1px solid var(--border)">
-      <div style="display:flex;align-items:center;gap:12px;padding:13px 18px;cursor:pointer;transition:background .12s"
+    <div style="border-bottom:1px solid var(--border)${_grpUrg ? ';box-shadow:inset 4px 0 0 #ef4444' : ''}">
+      <div style="display:flex;align-items:center;gap:12px;padding:13px 18px;cursor:pointer;transition:background .12s;${_grpUrg ? 'background:rgba(239,68,68,.08)' : ''}"
            onclick="(function(el,id){var t=document.getElementById(id);var open=t.style.display!=='none';t.style.display=open?'none':'';el.querySelector('.cl-arr').style.transform=open?'':'rotate(180deg)';})(this,'${detailId}')"
-           onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">
+           onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background='${_grpUrg ? 'rgba(239,68,68,.08)' : ''}'">
         ${atrBadge}
+        ${_fluxolabUrgBadge(g.items.filter(_fluxolabRowUrgente).length)}
         <span style="flex:1;font-size:14px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">${esc(modelo)}</span>
         <span style="flex-shrink:0;font-size:13px;font-weight:700;color:${avgColor};white-space:nowrap">Avg: ${avg}d</span>
         <span style="flex-shrink:0;font-size:13px;font-weight:600;color:var(--muted);white-space:nowrap">${g.total} Peds</span>
@@ -20142,11 +20267,13 @@ function fluxolabRenderCaindoHoje() {
       const detailId = 'caindo-det-' + idx;
       const detailKeys    = [kPedido, kAndamento, kCliente, kStatus, diasKey];
       const detailHeaders = ['Pedido', 'Andamento', 'Cliente', 'Status', 'Dias'];
-      const detailRows = items.map(r =>
-        `<tr>${detailKeys.map(k =>
+      const detailRows = items.map(r => {
+        const _urgRow = _fluxolabRowUrgente(r);
+        return `<tr${_urgRow ? ' style="background:rgba(239,68,68,.10);box-shadow:inset 3px 0 0 #ef4444"' : ''}>${detailKeys.map(k =>
           `<td style="padding:7px 12px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border)">${esc(k ? r[k] : '—')}</td>`
-        ).join('')}</tr>`
-      ).join('');
+        ).join('')}</tr>`;
+      }).join('');
+      const _urgQtdGrp = items.filter(_fluxolabRowUrgente).length;
 
       return `
       <div style="border-bottom:1px solid var(--border)">
@@ -20154,6 +20281,7 @@ function fluxolabRenderCaindoHoje() {
              onclick="(function(el,id){var t=document.getElementById(id);var open=t.style.display!=='none';t.style.display=open?'none':'';el.querySelector('.caindo-arr').style.transform=open?'':'rotate(180deg)';})(this,'${detailId}')"
              onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">
           <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:4px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.5);border-radius:7px;padding:3px 9px;font-size:11px;font-weight:800;color:#ef4444;white-space:nowrap">🔥 HOJE</span>
+          ${_fluxolabUrgBadge(_urgQtdGrp)}
           <span style="flex:1;font-size:14px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">${esc(modelo)}</span>
           <span style="flex-shrink:0;font-size:13px;font-weight:700;color:#ef4444;white-space:nowrap">${items.length} checklist${items.length > 1 ? 's' : ''}</span>
           <span class="caindo-arr" style="flex-shrink:0;color:var(--muted);font-size:14px;transition:transform .2s">▾</span>
@@ -20233,7 +20361,7 @@ function fluxolabRenderLiberadosHoje() {
         }).join('');
       return `<div style="border-bottom:1px solid var(--border2)">
         <div style="padding:12px 16px;background:var(--bg3);display:flex;align-items:center;justify-content:space-between">
-          <span style="font-size:13px;font-weight:700;color:var(--text)">${esc(modelo)}</span>
+          <span style="font-size:13px;font-weight:700;color:var(--text);display:inline-flex;align-items:center;gap:8px"><span>${esc(modelo)}</span>${_fluxolabUrgBadge(_fluxolabModeloUrgenteQtd(modelo))}</span>
           <span style="font-size:12px;font-weight:800;color:#4ade80;background:rgba(74,222,128,.12);border:1px solid rgba(74,222,128,.4);border-radius:10px;padding:2px 10px">${items.length}</span>
         </div>
         <table style="width:100%;border-collapse:collapse">
@@ -20390,6 +20518,73 @@ function fluxolabRelatorioPorDia() {
 
 // FLUXOLAB — Indexação de checklists por modelo (para badges nos bolsões)
 // ════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// FLUXOLAB — URGÊNCIA: identificação visual global
+// Um checklist é "urgência" quando qualquer coluna de status/andamento/
+// prioridade da planilha contém "urg" (ex.: "Urgência Laboratório").
+// ═══════════════════════════════════════════════════════════════════
+function _fluxolabIsUrgenteValor(v){
+  const s = String(v == null ? '' : v).toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return s.includes('urg');
+}
+function _fluxolabRowUrgente(r){
+  if (!r || typeof r !== 'object') return false;
+  for (const k of Object.keys(r)) {
+    const kn = String(k).toLowerCase();
+    if (kn.includes('status') || kn.includes('andamento') || kn.includes('prioridade')) {
+      if (_fluxolabIsUrgenteValor(r[k])) return true;
+    }
+  }
+  return false;
+}
+// modelo normalizado -> qtd de checklists em urgência
+function _fluxolabBuildUrgenciaIndex(){
+  const idx = new Map();
+  if (!Array.isArray(_fluxolabChecklistsImported) || !_fluxolabChecklistsImported.length) return idx;
+  const sample = _fluxolabChecklistsImported[0];
+  const k = _fluxolabFindKey(sample, 'Descrição Equipamento') || _fluxolabFindKey(sample, 'Descricao Equipamento');
+  if (!k) return idx;
+  for (const r of _fluxolabChecklistsImported){
+    if (!_fluxolabRowUrgente(r)) continue;
+    const m = _fluxolabNormModel(r[k]);
+    if (!m) continue;
+    idx.set(m, (idx.get(m) || 0) + 1);
+  }
+  return idx;
+}
+function _fluxolabModeloUrgenteQtd(modeloTexto){
+  if (!modeloTexto) return 0;
+  const idx = _fluxolabBuildUrgenciaIndex();
+  const nk = _fluxolabNormModel(modeloTexto);
+  if (idx.has(nk)) return idx.get(nk);
+  // match aproximado (nomes do Supabase x planilha)
+  const tokens = nk.split(/\s+/).filter(t => t.length >= 4);
+  if (!tokens.length) return 0;
+  for (const [k, q] of idx) {
+    if (tokens.every(t => k.includes(t))) return q;
+  }
+  return 0;
+}
+// Badge padrão de urgência (usado em todas as abas)
+function _fluxolabUrgBadge(qtd, size){
+  if (!qtd) return '';
+  const sm = size === 'sm';
+  return '<span class="fx-urg" title="' + qtd + ' checklist(s) em Urgência Laboratório"'
+    + ' style="flex-shrink:0;display:inline-flex;align-items:center;gap:4px;background:rgba(239,68,68,.18);'
+    + 'border:1px solid rgba(239,68,68,.65);color:#ef4444;border-radius:7px;'
+    + (sm ? 'padding:1px 6px;font-size:9px;margin-left:5px;' : 'padding:3px 9px;font-size:11px;')
+    + 'font-weight:900;letter-spacing:.04em;white-space:nowrap">🚨 URGÊNCIA' + (qtd > 1 ? ' ' + qtd : '') + '</span>';
+}
+try {
+  if (typeof document !== 'undefined' && !document.getElementById('fluxolab-urg-style')) {
+    const _fxUrgSt = document.createElement('style');
+    _fxUrgSt.id = 'fluxolab-urg-style';
+    _fxUrgSt.textContent = '@keyframes fxUrgPulse{0%,100%{opacity:1}50%{opacity:.5}}.fx-urg{animation:fxUrgPulse 1.5s ease-in-out infinite}';
+    (document.head || document.documentElement).appendChild(_fxUrgSt);
+  }
+} catch(_e) {}
+
 function _fluxolabNormModel(s){
   return String(s||'').toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
@@ -20881,15 +21076,19 @@ async function fluxolabRemoverPedidoDaLista(numeroPedido) {
     const norm = s => String(s||'').toLowerCase()
       .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
       .replace(/[^a-z0-9]/g,'');
+    // IMPORTANTE: cada nome é testado (exato, depois parcial) antes de passar
+    // para o próximo nome da lista de prioridade. Antes o código testava
+    // "match exato" de TODOS os nomes primeiro — o que fazia uma coluna
+    // genérica como "Dias Aberto" (match exato) vencer uma coluna mais
+    // específica e prioritária como "Dias Úteis Andamento" (que só batia
+    // por match parcial), gerando valores divergentes entre abas que usam
+    // essa mesma planilha importada.
     for(const n of names){
       const t = norm(n);
-      const k = keys.find(k => norm(k) === t);
-      if(k) return k;
-    }
-    for(const n of names){
-      const t = norm(n);
-      const k = keys.find(k => norm(k).includes(t));
-      if(k) return k;
+      const exact = keys.find(k => norm(k) === t);
+      if(exact) return exact;
+      const partial = keys.find(k => norm(k).includes(t));
+      if(partial) return partial;
     }
     return null;
   }
@@ -21031,10 +21230,22 @@ async function fluxolabRemoverPedidoDaLista(numeroPedido) {
     const kCust    = findKey(s,'Customer','Contato','Atendente','Responsavel','Responsável');
     const kTel     = findKey(s,'Telefone','Tel','Fone','Celular');
     const kTipo    = findKey(s,'Tipo','Tipo Pedido','Modalidade');
-    const kDias    = findKey(s,'Dias Uteis','Dias Úteis','Dias Aberto','Dias');
-    const kStatus  = findKey(s,'Status Checklist','Status','Andamento');
-    const kObs     = findKey(s,'OBS','Observação','Observacao','Obs');
+    const kAndam   = findKey(s,'Andamento');
+    const kDias    = findKey(s,'Dias Úteis Andamento','Dias Uteis Andamento','Dias Úteis','Dias Uteis');
+    const kAberto  = findKey(s,'Dias Aberto');
+    const kStatus  = findKey(s,'Status Checklist');
+    const kObs     = findKey(s,'Observação Comercial','Observacao Comercial','OBS','Observação','Observacao','Obs');
     const kUrg     = findKey(s,'Urgente','Prioridade');
+    // "Tipo" na planilha é a coluna final "Status" (A INSTALAR / TROCA TÉCNICA)
+    const kTipoFinal = kTipo || (Object.keys(s).find(k => k.trim().toLowerCase() === 'status') || null);
+
+    // parse numérico fiel à planilha (aceita 0, decimais e "127.0")
+    const num = v => {
+      if(v === null || v === undefined || String(v).trim() === '') return NaN;
+      const n = parseFloat(String(v).replace(',', '.'));
+      return isNaN(n) ? NaN : n;
+    };
+    const fmtNum = n => isNaN(n) ? '—' : String(Number.isInteger(n) ? n : n.toFixed(1).replace('.', ','));
 
     if(!kModelo){
       renderKPIs([], {}, {});
@@ -21048,12 +21259,14 @@ async function fluxolabRemoverPedidoDaLista(numeroPedido) {
     const statusCounts = { lab:0, doca:0, estoque:0, atrasados:0, urgentes:0 };
     rows.forEach(r => {
       const modelo = String(r[kModelo]||'(Sem modelo)').trim() || '(Sem modelo)';
-      if(!grupos[modelo]) grupos[modelo] = { items:[], dias:[], lab:0, doca:0, atr:0 };
+      if(!grupos[modelo]) grupos[modelo] = { items:[], dias:[], abertos:[], lab:0, doca:0, atr:0 };
       grupos[modelo].items.push(r);
-      const dias = kDias ? parseInt(String(r[kDias]).replace(/\D/g,''),10) : NaN;
-      if(!isNaN(dias)){
-        grupos[modelo].dias.push(dias);
-        if(dias > 10){ grupos[modelo].atr++; statusCounts.atrasados++; }
+      const dias = kDias ? num(r[kDias]) : NaN;
+      if(!isNaN(dias)) grupos[modelo].dias.push(dias);
+      const aberto = kAberto ? num(r[kAberto]) : NaN;
+      if(!isNaN(aberto)){
+        grupos[modelo].abertos.push(aberto);
+        if(aberto > 10){ grupos[modelo].atr++; statusCounts.atrasados++; }
       }
       const cls = kStatus ? classifyStatus(r[kStatus]) : null;
       if(cls === 'lab')     { grupos[modelo].lab++;  statusCounts.lab++; }
@@ -21094,23 +21307,34 @@ async function fluxolabRemoverPedidoDaLista(numeroPedido) {
       return;
     }
 
-    const headers = ['PEDIDO','CLIENTE','CUSTOMER · TEL','TIPO','DIAS ÚTEIS','STATUS','OBS','URGENTE'];
+    const headers = ['ANDAMENTO','PEDIDO','CLIENTE','CUSTOMER · TEL','TIPO','DIAS ABERTO','DIAS ÚTEIS ANDAMENTO','STATUS CHECKLIST','OBS','URGENTE'];
 
     const cards = entradas.map((entry, idx) => {
       const [modelo, d] = entry;
       const id = 'flcl-grp-' + idx;
-      const avg = d.dias.length
-        ? Math.round(d.dias.reduce((a,b)=>a+b,0)/d.dias.length)
-        : 0;
+      const duMed = d.dias.length
+        ? Math.round((d.dias.reduce((a,b)=>a+b,0)/d.dias.length) * 10) / 10
+        : null;
+      const duMin = d.dias.length ? Math.min(...d.dias) : null;
+      const duMax = d.dias.length ? Math.max(...d.dias) : null;
+      const abMax = d.abertos.length ? Math.max(...d.abertos) : null;
       const falta = Math.max(0, d.total - d.lab - d.doca);
       const isAtr = d.atr > 0;
 
       const detailRows = d.items.map(r => {
-        const dias = kDias ? parseInt(String(r[kDias]).replace(/\D/g,''),10) : NaN;
-        const diasTxt = isNaN(dias) ? '—' : (dias + 'd');
+        const dias = kDias ? num(r[kDias]) : NaN;
+        const diasTxt = isNaN(dias) ? '—' : (fmtNum(dias) + 'd');
         const diasColor = isNaN(dias) ? 'var(--muted)' :
           (dias > 10 ? 'var(--danger)' : dias > 5 ? 'var(--gold)' : 'var(--accent)');
         const diasWarn = !isNaN(dias) && dias > 10 ? ' ⚠' : '';
+
+        const aberto = kAberto ? num(r[kAberto]) : NaN;
+        const abertoTxt = isNaN(aberto) ? '—' : (fmtNum(aberto) + 'd');
+        const abertoColor = isNaN(aberto) ? 'var(--muted)' :
+          (aberto >= 30 ? 'var(--danger)' : aberto >= 15 ? 'var(--gold)' : 'var(--text)');
+
+        const andam = kAndam ? String(r[kAndam]||'').trim() : '';
+
 
         const status = kStatus ? String(r[kStatus]||'').trim() : '';
         const stCls = classifyStatus(status);
@@ -21121,7 +21345,7 @@ async function fluxolabRemoverPedidoDaLista(numeroPedido) {
                         stCls === 'doca' ? '#3b82f6' :
                         stCls === 'estoque' ? 'var(--danger)' : 'var(--text)';
 
-        const tipo = kTipo ? String(r[kTipo]||'').trim() : '';
+        const tipo = kTipoFinal ? String(r[kTipoFinal]||'').trim() : '';
         const tipoBadge = tipo ? `<span style="display:inline-block;background:var(--bg4);
           border:1px solid var(--border);border-radius:999px;padding:3px 10px;font-size:10px;
           font-weight:700;color:var(--text)">${esc(tipo)}</span>` : '—';
@@ -21153,10 +21377,12 @@ async function fluxolabRemoverPedidoDaLista(numeroPedido) {
         const pedido = kPedido ? String(r[kPedido]||'').trim() : '—';
 
         return `<tr style="transition:background .15s" onmouseover="this.style.background='rgba(148,163,184,.04)'" onmouseout="this.style.background=''">
+          <td style="padding:14px 14px;border-bottom:1px solid var(--border);font-size:10.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;white-space:nowrap">${esc(andam||'—')}</td>
           <td style="padding:14px 14px;border-bottom:1px solid var(--border);font-size:11.5px;font-weight:600;color:var(--text);font-family:var(--mono)">${esc(pedido||'—')}</td>
           <td style="padding:14px 14px;border-bottom:1px solid var(--border)">${cliCell}</td>
           <td style="padding:14px 14px;border-bottom:1px solid var(--border)">${custCell}</td>
           <td style="padding:14px 14px;border-bottom:1px solid var(--border)">${tipoBadge}</td>
+          <td style="padding:14px 14px;border-bottom:1px solid var(--border);font-size:12px;font-weight:700;color:${abertoColor};font-family:var(--mono)">${abertoTxt}</td>
           <td style="padding:14px 14px;border-bottom:1px solid var(--border);font-size:12px;font-weight:700;color:${diasColor};font-family:var(--mono)">${diasTxt}${diasWarn}</td>
           <td style="padding:14px 14px;border-bottom:1px solid var(--border)">
             <span style="display:inline-block;background:${stBg};color:${stColor};
@@ -21187,7 +21413,10 @@ async function fluxolabRemoverPedidoDaLista(numeroPedido) {
               <div style="font-size:14px;font-weight:800;color:var(--text);letter-spacing:.01em">
                 ${esc(modelo)}
               </div>
-              <div style="font-size:11px;color:var(--muted)">Avg: ${avg}d</div>
+              <div style="display:flex;align-items:center;gap:12px;font-size:11px;color:var(--muted);white-space:nowrap">
+                <span title="Maior valor da coluna 'Dias Aberto' da planilha">📅 Aberto máx: <b style="color:var(--text)">${abMax === null ? '—' : abMax + 'd'}</b></span>
+                <span title="Média da coluna 'Dias Úteis Andamento' da planilha (inclui zeros)">⏱ Úteis: <b style="color:var(--text)">${duMed === null ? '—' : String(duMed).replace('.', ',') + 'd'}</b>${duMin === null ? '' : ` <span style="font-family:var(--mono)">(MIN ${duMin} - MAX ${duMax})</span>`}</span>
+              </div>
             </div>
             <div style="display:flex;align-items:center;gap:18px;font-size:11px;font-weight:700">
               <span style="color:var(--muted)">${d.total} Peds</span>
