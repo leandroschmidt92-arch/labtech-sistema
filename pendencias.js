@@ -312,7 +312,16 @@ function fluxolabUpdateRowElemPend(elem, tableName, field) {
     if (cellDoca) cellDoca.innerText = value ? (statsBol.doca || '-') : '';
     if (cellLab) cellLab.innerText = value ? (statsBol.lab || '-') : '';
     if (cellBolsao) cellBolsao.innerHTML = value ? pendBolsaoLocaisHtml(value) : '';
-    if (cellBadge) cellBadge.innerHTML = pendBadgeHtml(statsChk.count, !!value);
+    if (cellBadge) {
+      const urgQtd2 = (value && typeof _fluxolabModeloUrgenteQtd === 'function') ? _fluxolabModeloUrgenteQtd(value) : 0;
+      const urgBadge2 = (urgQtd2 && typeof _fluxolabUrgBadge === 'function') ? _fluxolabUrgBadge(urgQtd2) : '';
+      cellBadge.innerHTML = pendBadgeHtml(statsChk.count, !!value) + urgBadge2;
+      // Destaca a linha se urgente
+      const tr = cellBadge.closest('tr');
+      if (tr) {
+        tr.style.borderLeft = urgQtd2 ? '3px solid rgba(239,68,68,0.8)' : '';
+      }
+    }
     if (activeBadge) activeBadge.dataset.modelo = value || '';
     pendUpdateHeaderTotals(tableName);
     if (typeof updateActiveUsersInTables === 'function') updateActiveUsersInTables();
@@ -652,8 +661,10 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
   rows.forEach((row, idx) => {
     const statsChk = row.modelo ? fluxolabPlanGetChecklistStats(row.modelo) : { count: 0, media: 0 };
     const statsBol = row.modelo ? fluxolabPlanGetBolsaoStats(row.modelo) : { doca: 0, lab: 0 };
+    const urgQtd = (row.modelo && typeof _fluxolabModeloUrgenteQtd === 'function') ? _fluxolabModeloUrgenteQtd(row.modelo) : 0;
+    const urgBadgeHtml = (urgQtd && typeof _fluxolabUrgBadge === 'function') ? _fluxolabUrgBadge(urgQtd) : '';
 
-    const rowBg = idx % 2 === 0 ? 'rgba(255,255,255,0.015)' : 'transparent';
+    const rowBg = idx % 2 === 0 ? (urgQtd ? 'rgba(239,68,68,0.07)' : 'rgba(255,255,255,0.015)') : (urgQtd ? 'rgba(239,68,68,0.04)' : 'transparent');
     const isFilled = row.modelo ? true : false;
 
     const inpBase = 'width:100%;height:100%;min-height:36px;border:none;background:transparent;text-align:center;font-weight:800;outline:none;font-family:var(--font);font-size:18px;color:var(--text);transition:all .2s;display:block';
@@ -667,8 +678,10 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
     const idPecas = `pnda-${tableName}-r${idx}-pecas`;
     const hPecas = savedSizes[idPecas] || '36px';
 
+    const rowBorderLeft = urgQtd ? 'border-left:3px solid rgba(239,68,68,0.8);' : '';
+
     html += `
-      <tr style="background:${rowBg};transition:background .2s"
+      <tr style="background:${rowBg};transition:background .2s;${rowBorderLeft}"
           ondragstart="pendDragStartTr(event, '${tableName}')"
           ondragover="pendDragOver(event)"
           ondragleave="pendDragLeave(event)"
@@ -692,7 +705,7 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
                    onfocus="${inpFocus}" onblur="${inpBlur}"
                    onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'modelo')"
                    style="flex:1;min-width:0;height:100%;min-height:36px;border:none;background:transparent;text-align:left;font-weight:800;outline:none;font-family:var(--font);font-size:15px;color:${themeColor};transition:all .2s;padding:0" />
-            <span id="pnd-${tableName}-r${idx}-badge" style="display:flex;align-items:center">${pendBadgeHtml(statsChk.count, isFilled)}</span>
+            <span id="pnd-${tableName}-r${idx}-badge" style="display:flex;align-items:center;gap:4px">${pendBadgeHtml(statsChk.count, isFilled)}${urgBadgeHtml}</span>
             <span class="active-users-badge" id="pnd-${tableName}-r${idx}-active-users" data-modelo="${row.modelo || ''}" style="display:flex;align-items:center"></span>
           </div>
         </td>

@@ -6,6 +6,62 @@ let _fluxolabPlanLoaded = false;
 let _planSyncChannel = null;
 let _planMediaSortDir = { tabela1: null, tabela2: null, tabela3: null }; // null | 'desc' | 'asc'
 
+// Quantidade mínima de linhas de cada tabela. A tabela nunca fica com menos
+// linhas que isso, mas pode crescer conforme modelos vão sendo digitados e
+// depois retrai de volta até esse mínimo quando as linhas extras ficam vazias.
+const FLUXOLAB_PLAN_MIN_ROWS = { tabela1: 5, tabela2: 5, tabela3: 10 };
+
+// Uma linha "tem dado" se qualquer campo dela foi preenchido
+function fluxolabPlanRowHasData(row) {
+  return !!(row && (
+    (row.modelo && row.modelo.trim() !== '') ||
+    (row.qtd_wms && row.qtd_wms.trim() !== '') ||
+    (row.sugestao && row.sugestao.trim() !== '') ||
+    (row.obs && row.obs.trim() !== '') ||
+    (row.pecas && row.pecas.trim() !== '')
+  ));
+}
+
+// Retrai a tabela removendo linhas vazias extras do final, respeitando o
+// mínimo configurado (FLUXOLAB_PLAN_MIN_ROWS) e mantendo sempre 1 linha vazia
+// extra após a última linha preenchida (para o usuário continuar digitando).
+// Retorna true se alguma linha foi removida (ou seja, se precisa re-renderizar).
+function fluxolabCompactPlanTable(tableName) {
+  const list = _fluxolabPlanejamentoState[tableName];
+  if (!list) return false;
+  const minRows = FLUXOLAB_PLAN_MIN_ROWS[tableName] || 5;
+
+  let lastFilledIdx = -1;
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (fluxolabPlanRowHasData(list[i])) { lastFilledIdx = i; break; }
+  }
+
+  const desiredLength = Math.max(minRows, lastFilledIdx + 2);
+  if (list.length > desiredLength) {
+    _fluxolabPlanejamentoState[tableName] = list.slice(0, desiredLength);
+    return true;
+  }
+  return false;
+}
+
+// Re-renderiza a tabela sem apagar o campo em que o usuário ainda está
+// digitando (adia enquanto o foco estiver dentro da mesma tabela).
+function fluxolabScheduleRerender(tableName, retriesLeft) {
+  if (retriesLeft === undefined) retriesLeft = 20;
+  const active = document.activeElement;
+  const stillEditingThisTable = active && active.id && active.id.indexOf(`plan-${tableName}-`) === 0;
+  if (stillEditingThisTable && retriesLeft > 0) {
+    setTimeout(() => fluxolabScheduleRerender(tableName, retriesLeft - 1), 250);
+    return;
+  }
+  const activeId = active ? active.id : null;
+  fluxolabRenderPlanejamento();
+  if (activeId) {
+    const el = document.getElementById(activeId);
+    if (el) el.focus();
+  }
+}
+
 // Carrega o estado do Supabase
 async function fluxolabLoadPlanejamento() {
   if (typeof currentUser === 'undefined' || !currentUser) return;
@@ -29,9 +85,15 @@ async function fluxolabLoadPlanejamento() {
   }
   
   // Garantir linhas mínimas
-  while (_fluxolabPlanejamentoState.tabela1.length < 10) _fluxolabPlanejamentoState.tabela1.push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
-  while (_fluxolabPlanejamentoState.tabela2.length < 5)  _fluxolabPlanejamentoState.tabela2.push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
-  while (_fluxolabPlanejamentoState.tabela3.length < 10) _fluxolabPlanejamentoState.tabela3.push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
+  ['tabela1', 'tabela2', 'tabela3'].forEach(t => {
+    const minRows = FLUXOLAB_PLAN_MIN_ROWS[t] || 5;
+    while (_fluxolabPlanejamentoState[t].length < minRows) {
+      _fluxolabPlanejamentoState[t].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
+    }
+    // Se o estado salvo veio com linhas extras vazias (ex.: mínimo antigo era
+    // maior), retrai já no carregamento até o mínimo atual.
+    fluxolabCompactPlanTable(t);
+  });
   
   _fluxolabPlanLoaded = true;
   
@@ -79,6 +141,20 @@ function fluxolabApplyRemoteSync(remoteData) {
   
   ['tabela1', 'tabela2', 'tabela3'].forEach(t => {
     if (!remoteData[t]) return;
+    
+    // Se outro usuário retraiu a tabela (removeu linhas vazias do final),
+    // corta as linhas locais que sobraram além do novo tamanho remoto,
+    // desde que nenhuma delas tenha sido preenchida localmente sem sync ainda.
+    if (_fluxolabPlanejamentoState[t].length > remoteData[t].length) {
+      const extras = _fluxolabPlanejamentoState[t].slice(remoteData[t].length);
+      const extrasEmpty = extras.every(r => !fluxolabPlanRowHasData(r));
+      if (extrasEmpty) {
+        _fluxolabPlanejamentoState[t].length = remoteData[t].length;
+        if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'planejamento') {
+          fluxolabScheduleRerender(t);
+        }
+      }
+    }
     
     for (let i = 0; i < remoteData[t].length; i++) {
       if (!_fluxolabPlanejamentoState[t][i]) _fluxolabPlanejamentoState[t][i] = { modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' };
@@ -141,6 +217,8 @@ function fluxolabUpdateRowElem(elem, tableName, field) {
                      _fluxolabPlanejamentoState[tableName][index].pecas.trim() !== '';
 
   if (isLastRow && rowHasData) {
+    // Tabela EXPANDE: última linha foi preenchida, adiciona uma nova linha
+    // vazia no final para o usuário continuar digitando.
     _fluxolabPlanejamentoState[tableName].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
     fluxolabSavePlanejamentoDebounced();
 
@@ -151,25 +229,22 @@ function fluxolabUpdateRowElem(elem, tableName, field) {
     // Modelo pra Qtd WMS), apagando o que tinha acabado de ser digitado.
     // Agora adia o rebuild enquanto o usuário ainda estiver com o foco em
     // algum campo desta mesma tabela, tentando de novo a cada 250ms (até ~5s).
-    const attempt = (retriesLeft) => {
-      const active = document.activeElement;
-      const stillEditingThisTable = active && active.id && active.id.indexOf(`plan-${tableName}-`) === 0;
-      if (stillEditingThisTable && retriesLeft > 0) {
-        setTimeout(() => attempt(retriesLeft - 1), 250);
-        return;
-      }
-      const activeId = active ? active.id : null;
-      fluxolabRenderPlanejamento();
-      if (activeId) {
-        const el = document.getElementById(activeId);
-        if (el) el.focus();
-      }
-    };
-    setTimeout(() => attempt(20), 10);
+    setTimeout(() => fluxolabScheduleRerender(tableName), 10);
     return;
   }
   
   fluxolabSavePlanejamentoDebounced();
+  
+  // Tabela RETRAI: se ao editar este campo a linha ficou vazia (ex.: usuário
+  // apagou o modelo), remove linhas vazias sobrando no final, sem nunca
+  // descer abaixo do mínimo configurado (FLUXOLAB_PLAN_MIN_ROWS).
+  if (!rowHasData) {
+    const compacted = fluxolabCompactPlanTable(tableName);
+    if (compacted) {
+      setTimeout(() => fluxolabScheduleRerender(tableName), 10);
+      return;
+    }
+  }
   
   if (field === 'modelo') {
     const statsChk = value ? fluxolabPlanGetChecklistStats(value) : { count: 0, media: 0 };
@@ -191,10 +266,12 @@ function fluxolabUpdateRowElem(elem, tableName, field) {
 }
 
 function fluxolabClearPlanTable(tableName) {
-  if (confirm(`Tem certeza que deseja limpar a ${tableName}? Os ajustes de tamanho da tabela não serão perdidos.`)) {
-    const size = _fluxolabPlanejamentoState[tableName].length;
+  if (confirm(`Tem certeza que deseja limpar a ${tableName}? Os ajustes de tamanho das colunas não serão perdidos.`)) {
+    // Ao limpar tudo, não sobra nenhum modelo adicionado, então a tabela
+    // retrai direto para o mínimo configurado.
+    const minRows = FLUXOLAB_PLAN_MIN_ROWS[tableName] || 5;
     _fluxolabPlanejamentoState[tableName] = [];
-    for (let i = 0; i < size; i++) {
+    for (let i = 0; i < minRows; i++) {
       _fluxolabPlanejamentoState[tableName].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
     }
     fluxolabSavePlanejamentoDebounced();

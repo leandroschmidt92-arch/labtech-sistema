@@ -2256,6 +2256,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       </div>
       <div style="display:flex;align-items:center;gap:10px">
         <div id="fluxolab-last-update" style="font-size:11px;color:var(--muted)"></div>
+        <button onclick="fluxolabLimparMaquinasA()" style="background:rgba(242,87,87,.15);border:1px solid rgba(242,87,87,.4);color:var(--danger);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 14px;cursor:pointer" title="Confere e remove dos bolsões equipamentos que foram para Máquinas A nos últimos 7 dias">🧹 Limpar Máquinas A (7d)</button>
         <button onclick="fluxolabForceRefresh()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--muted);font-family:var(--font);font-size:12px;font-weight:600;padding:7px 14px;cursor:pointer">↺ Atualizar</button>
         <button id="btn-fluxolab-log" onclick="fluxolabToggleLog()" style="position:relative;background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--muted);font-family:var(--font);font-size:12px;font-weight:600;padding:7px 14px;cursor:pointer;transition:all .2s" title="Ver log de movimentações">
           📋 Log
@@ -2273,7 +2274,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           background:none;border:none;border-bottom:2px solid var(--accent);color:var(--text);
           font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
           letter-spacing:.02em;transition:all .15s;margin-bottom:-1px;
-        ">🗂️ Bolsões</button>
+        ">🗂️ Bolsões <span id="fluxolab-bolsoes-total-badge" style="display:none;background:rgba(255,255,255,0.15);color:var(--text);font-size:10px;font-weight:900;border-radius:10px;padding:1px 7px;margin-left:4px;vertical-align:middle">0</span></button>
         <button id="fluxolab-tab-modelos" onclick="fluxolabSwitchTab('modelos')" style="
           background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
           font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
@@ -2418,6 +2419,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <div style="margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
         <div style="font-size:12px;color:var(--muted)">Clique no modelo para ver os SELBs individuais · badges indicam bolsão e dias parado</div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <button onclick="fluxolabVerificarPedidosRegistrados(this)" title="Verifica se há pedidos do checklist já registrados na Qualidade e remove-os da lista" style="background:rgba(16,185,129,.12);border:1px solid var(--accent);border-radius:9px;color:var(--accent);font-family:var(--font);font-size:12px;font-weight:700;padding:7px 14px;outline:none;cursor:pointer">&#128260; Verificar Pedidos Registrados</button>
           <select id="fluxolab-modelo-sort" onchange="fluxolabRenderModelos()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--text);font-family:var(--font);font-size:12px;padding:7px 12px;outline:none;cursor:pointer">
             <option value="total">&#8597; Ordenar: Total</option>
             <option value="mediaDias">&#128197; Dias médios em aberto</option>

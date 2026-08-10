@@ -2012,6 +2012,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <input class="sinp" id="maquinas-a-search" placeholder="BUSCAR SELB OU EQUIPAMENTO..." oninput="renderMaquinasAView()" style="width:260px">
           <button onclick="renderMaquinasAView()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--muted);font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">🔄 Atualizar</button>
+          <button onclick="fluxolabLimparMaquinasA()" style="background:rgba(242,87,87,.15);border:1px solid rgba(242,87,87,.4);color:var(--danger);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer" title="Confere e remove dos bolsões do FluxoLAB os equipamentos enviados para Máquinas A nos últimos 7 dias">🧹 Limpar Bolsões (7d)</button>
           <button onclick="abrirModalLogsPecas()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--text);font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">📝 Logs</button>
           <button id="btn-bipar-maquinas-a" onclick="abrirModalBiparMaquinasA()" style="background:rgba(16,185,129,.18);border:1px solid rgba(16,185,129,.5);border-radius:9px;color:#10b981;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">📥 Bipar SELBs (Pietro)</button>
           <label id="maquinaa-import-label" title="Planilha usada só para preencher o nome do equipamento ao registrar Máquina A — não altera a aba Equipamentos" style="display:none;background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">
@@ -2735,7 +2736,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           background:none;border:none;border-bottom:2px solid var(--accent);color:var(--text);
           font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
           letter-spacing:.02em;transition:all .15s;margin-bottom:-1px;
-        ">🗂️ Bolsões</button>
+        ">🗂️ Bolsões <span id="fluxolab-bolsoes-total-badge" style="display:none;background:rgba(255,255,255,0.15);color:var(--text);font-size:10px;font-weight:900;border-radius:10px;padding:1px 7px;margin-left:4px;vertical-align:middle">0</span></button>
         <button id="fluxolab-tab-modelos" onclick="fluxolabSwitchTab('modelos')" style="
           background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
           font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
@@ -2880,6 +2881,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <div style="margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
         <div style="font-size:12px;color:var(--muted)">Clique no modelo para ver os SELBs individuais · badges indicam bolsão e dias parado</div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <button onclick="fluxolabVerificarPedidosRegistrados(this)" title="Verifica se há pedidos do checklist já registrados na Qualidade e remove-os da lista" style="background:rgba(16,185,129,.12);border:1px solid var(--accent);border-radius:9px;color:var(--accent);font-family:var(--font);font-size:12px;font-weight:700;padding:7px 14px;outline:none;cursor:pointer">&#128260; Verificar Pedidos Registrados</button>
           <select id="fluxolab-modelo-sort" onchange="fluxolabRenderModelos()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--text);font-family:var(--font);font-size:12px;padding:7px 12px;outline:none;cursor:pointer">
             <option value="maxDias" selected>&#9650; Maior dia parado</option>
             <option value="total">&#8597; Ordenar: Total</option>
