@@ -406,6 +406,32 @@ function _supaAuthed(){ return _operatorAccessToken ? _supaOp : _supa; }
 const _db = createSupabaseCompatShim(_supa);
 window._db = _db; // exposto globalmente para os patches de integração
 
+// ── OTIMIZAÇÃO CONSUMO REALTIME: canal único para tabela 'app_config' ────
+// Antes: 4 canais Realtime separados (app_config_celebration, app_config_alerts,
+// sectorTabPerms, relSubTabPerms), cada um com seu próprio filtro key=eq.X na
+// MESMA tabela app_config. Cada canal aberto soma overhead de conexão/join
+// na cota de Realtime Messages, multiplicado por sessão/aba aberta.
+// Agora: um único canal ouve TODA a tabela (sem filtro) e despacha pelo
+// payload.new.key para o handler certo. Resultado idêntico para quem
+// registra o handler — só muda o número de canais físicos abertos (4 → 1).
+// Handlers podem ser registrados a qualquer momento (antes ou depois do
+// canal já estar inscrito), pois o dispatch é só um lookup em objeto JS,
+// não uma chamada .on() nova no canal do Supabase.
+var _appConfigHandlers = Object.create(null);
+var _appConfigChannel = null;
+function _appConfigOn(key, handler) {
+  _appConfigHandlers[key] = handler;
+  if (!_appConfigChannel) {
+    _appConfigChannel = _supa.channel('app_config_bus')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_config' }, (payload) => {
+        const k = payload && payload.new && payload.new.key;
+        const h = k && _appConfigHandlers[k];
+        if (h) h(payload);
+      })
+      .subscribe();
+  }
+}
+
 
 // publishNewVersion removida por segurança
 
@@ -909,23 +935,21 @@ function startRealtimeSync(){
   }, err => console.warn('Users listener error:', err));
 
   // ── Listener de Celebrações Globais ────────────────────────────────────────
-  // Celebration listener via Supabase Realtime
-  _supa.channel('app_config_celebration')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'app_config', filter: 'key=eq.latestCelebration' }, async (payload) => {
-      const data = payload.new?.value;
-      if(!data || !data.timestamp) return;
-      // Evita disparar celebrações antigas no carregamento inicial
-      const now = Date.now();
-      if(now - data.timestamp > 30000) return; // ignora se tiver mais de 30s
-      // Evita disparar a mesma celebração múltiplas vezes localmente
-      if(window._lastCelebrationTs === data.timestamp) return;
-      window._lastCelebrationTs = data.timestamp;
-      // Dispara o efeito visual e sonoro em todas as telas
-      if(typeof playCelebration === 'function'){
-        playCelebration(data.uid);
-      }
-    })
-    .subscribe();
+  // Celebration listener via Supabase Realtime (canal único app_config_bus)
+  _appConfigOn('latestCelebration', async (payload) => {
+    const data = payload.new?.value;
+    if(!data || !data.timestamp) return;
+    // Evita disparar celebrações antigas no carregamento inicial
+    const now = Date.now();
+    if(now - data.timestamp > 30000) return; // ignora se tiver mais de 30s
+    // Evita disparar a mesma celebração múltiplas vezes localmente
+    if(window._lastCelebrationTs === data.timestamp) return;
+    window._lastCelebrationTs = data.timestamp;
+    // Dispara o efeito visual e sonoro em todas as telas
+    if(typeof playCelebration === 'function'){
+      playCelebration(data.uid);
+    }
+  });
 }
 
 // ════════════════════════════════════════
@@ -13135,10 +13159,9 @@ const ALERT_SECTORS = new Set(['COMPLEXA','MONTAGEM','LIMPEZA']);
   let _alertsListener = null;
   function startAlertsListener(){
     if(_alertsListener) return;
-    _supa.channel('app_config_alerts')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_config', filter: 'key=eq.alertsDismissed' }, async (payload) => {
-        const data = payload.new?.value;
-        if(!data) return;
+    _appConfigOn('alertsDismissed', async (payload) => {
+      const data = payload.new?.value;
+      if(!data) return;
       Object.entries(data).forEach(([uid, ts]) => {
         // Só aplica se for mais recente que o que já temos
         if(ts > (_dismissed.get(uid) || 0)){
@@ -13230,6 +13253,10 @@ const ALERT_SECTORS = new Set(['COMPLEXA','MONTAGEM','LIMPEZA']);
     if (typeof _pendSyncChannel !== 'undefined') _pendSyncChannel = null;
     if (typeof _planSyncChannel !== 'undefined') _planSyncChannel = null;
     if (typeof _pvChannel !== 'undefined') _pvChannel = null;
+    // Canal único de app_config (celebration/alerts/sectorTabPerms/relSubTabPerms):
+    // removeAllChannels() acima já o removeu do servidor, então limpamos a
+    // referência local para que _appConfigOn() recrie o canal no próximo login.
+    _appConfigChannel = null;
 
     if (typeof _fluxolabPendLoaded !== 'undefined') _fluxolabPendLoaded = false;
     if (typeof _fluxolabPlanLoaded !== 'undefined') _fluxolabPlanLoaded = false;
@@ -16972,11 +16999,10 @@ async function salvarConfigAbas(){
   try{
     const { data } = await _supa.from('app_config').select('value').eq('key','sectorTabPerms').single();
     if(data){ _sectorTabPermsRaw = data.value; _applySectorTabPermsRaw(); }
-    _supa.channel('sectorTabPerms')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_config', filter: 'key=eq.sectorTabPerms' }, async (payload) => {
-        _sectorTabPermsRaw = payload.new?.value;
-        _applySectorTabPermsRaw();
-      }).subscribe();
+    _appConfigOn('sectorTabPerms', async (payload) => {
+      _sectorTabPermsRaw = payload.new?.value;
+      _applySectorTabPermsRaw();
+    });
   }catch(e){ console.warn('Falha ao carregar permissões de abas:', e); }
 })();
 
@@ -17110,11 +17136,10 @@ function _applyRelSubTabPermsRaw(){
   try{
     const { data } = await _supa.from('app_config').select('value').eq('key','relSubTabPerms').single();
     if(data){ _relSubTabPermsRaw = data.value; _applyRelSubTabPermsRaw(); }
-    _supa.channel('relSubTabPerms')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_config', filter: 'key=eq.relSubTabPerms' }, async (payload) => {
-        _relSubTabPermsRaw = payload.new?.value;
-        _applyRelSubTabPermsRaw();
-      }).subscribe();
+    _appConfigOn('relSubTabPerms', async (payload) => {
+      _relSubTabPermsRaw = payload.new?.value;
+      _applyRelSubTabPermsRaw();
+    });
   }catch(e){ console.warn('Falha ao carregar permissões de sub-abas:', e); }
 })();
 

@@ -75,12 +75,12 @@ async function fluxolabLoadPlanejamento() {
     
     // Configura o sincronismo em tempo real (Multiplayer)
     if (!_planSyncChannel) {
-      _planSyncChannel = _supa.channel('planejamento_sync')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'fluxolab_state', filter: "key=eq.planejamento_lote_dia" }, payload => {
-          if (payload.new && payload.new.data) {
-            fluxolabApplyRemoteSync(payload.new.data);
-          }
-        }).subscribe();
+      _planSyncChannel = true;
+      window._fluxolabStateOn('planejamento_lote_dia', payload => {
+        if (payload.new && payload.new.data) {
+          fluxolabApplyRemoteSync(payload.new.data);
+        }
+      });
     }
   }
   

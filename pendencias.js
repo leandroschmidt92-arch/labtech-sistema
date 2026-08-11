@@ -88,13 +88,16 @@ async function fluxolabLoadPendencias() {
     } catch(e) { console.error('Erro ao carregar pendências:', e); }
 
     // Configura o sincronismo em tempo real (Multiplayer)
+    // Agora via canal único fluxolab_state_bus (app.js), em vez de canal próprio —
+    // reduz canais Realtime duplicados, já que pendencias-viewer.js e
+    // pendencias-viewer-complexas.js escutam essa MESMA key.
     if (!_pendSyncChannel) {
-      _pendSyncChannel = _supa.channel('pendencias_sync')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'fluxolab_state', filter: "key=eq.pendencias_mistas_complexas" }, payload => {
-          if (payload.new && payload.new.data) {
-            fluxolabApplyRemoteSyncPend(payload.new.data);
-          }
-        }).subscribe();
+      _pendSyncChannel = true;
+      window._fluxolabStateOn('pendencias_mistas_complexas', payload => {
+        if (payload.new && payload.new.data) {
+          fluxolabApplyRemoteSyncPend(payload.new.data);
+        }
+      });
     }
   }
 

@@ -29,16 +29,13 @@
     } catch(e){ console.error('[pvc] load', e); }
 
     if (!_pvChannel) {
-      _pvChannel = _supa.channel('pendencias_viewer_complexas_sync')
-        .on('postgres_changes',
-          { event:'*', schema:'public', table:'fluxolab_state',
-            filter:"key=eq.pendencias_mistas_complexas" },
-          payload => {
-            if (payload.new && payload.new.data && Array.isArray(payload.new.data.complexas)) {
-              _pvState.complexas = payload.new.data.complexas;
-              if (_pvModalEl && _pvModalEl.style.display === 'flex') pvRenderModalTable();
-            }
-          }).subscribe();
+      _pvChannel = true;
+      window._fluxolabStateOn('pendencias_mistas_complexas', payload => {
+        if (payload.new && payload.new.data && Array.isArray(payload.new.data.complexas)) {
+          _pvState.complexas = payload.new.data.complexas;
+          if (_pvModalEl && _pvModalEl.style.display === 'flex') pvRenderModalTable();
+        }
+      });
     }
     _pvLoaded = true;
   }
