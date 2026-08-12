@@ -173,7 +173,7 @@
           <th style="${th}">Lote</th>
           <th style="${th};text-align:left;padding-left:14px">Modelo</th>
           <th style="${th}">Checklists</th>
-          <th style="${th}">Média Dias</th>
+          <th style="${th}">⏱ Dias Úteis Andamento</th>
           <th style="${th}">Dias em Aberto</th>
           <th style="${th}">Qtd WMS</th>
           <th style="${th}">Sugerido</th>
@@ -185,7 +185,7 @@
 
     rows.forEach((r, i) => {
       const chk = (typeof fluxolabPlanGetChecklistStats === 'function')
-        ? fluxolabPlanGetChecklistStats(r.modelo) : {count:0, media:0, mediaAberto:0, maxAberto:0};
+        ? fluxolabPlanGetChecklistStats(r.modelo) : {count:0, media:0, mediaAberto:0, maxAberto:0, maxDiasUteis:0};
       const bol = (typeof fluxolabPlanGetBolsaoStats === 'function')
         ? fluxolabPlanGetBolsaoStats(r.modelo) : {doca:0, lab:0};
       const bg = i % 2 === 0 ? 'rgba(255,255,255,.015)' : 'transparent';
@@ -193,6 +193,9 @@
         ? `<span style="background:rgba(74,222,128,.15);color:#4ade80;font-size:9px;font-weight:800;padding:2px 6px;border-radius:8px;margin-left:8px;letter-spacing:.03em">✓</span>`
         : `<span style="background:rgba(248,113,113,.15);color:#f87171;font-size:9px;font-weight:800;padding:2px 6px;border-radius:8px;margin-left:8px;letter-spacing:.03em">✗</span>`;
       const esc = s => String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      const duMax = chk.maxDiasUteis || chk.media || 0;
+      const duColor = duMax >= 20 ? '#ef4444' : duMax >= 10 ? '#f59e0b' : duMax >= 4 ? '#facc15' : 'var(--text)';
+      const duHtml = duMax ? `${duMax}d` : '-';
       html += `
         <tr style="background:${bg}">
           <td style="${td};color:var(--muted);font-weight:800;font-size:15px">${i+1}º</td>
@@ -201,8 +204,8 @@
             ${esc(r.modelo)}${badge}
           </td>
           <td style="${td};color:${chk.count>0?'#4ade80':'#f87171'};font-weight:900;font-size:18px">${chk.count||'-'}</td>
-          <td style="${td};color:var(--text);font-weight:900;font-size:18px">${chk.media||'-'}</td>
-          <td style="${td};color:${chk.maxAberto>0?'#fbbf24':'var(--muted)'};font-weight:900;font-size:18px" title="Maior tempo em aberto entre os checklists deste modelo">${chk.maxAberto ? (chk.maxAberto + '<span style=\'display:block;font-size:10px;font-weight:700;color:var(--muted)\'>méd ' + (chk.mediaAberto||0) + '</span>') : '-'}</td>
+          <td style="${td};color:${duColor};font-weight:900;font-size:18px;font-family:var(--mono)" title="Maior Dias Úteis Andamento">${duHtml}</td>
+          <td style="${td};color:${chk.maxAberto>0?'#fbbf24':'var(--muted)'};font-weight:900;font-size:18px;font-family:var(--mono)" title="Dias em aberto">${chk.maxAberto ? (chk.maxAberto + 'd') : '-'}</td>
           <td style="${td};color:var(--text);font-weight:800;font-size:18px">${esc(r.qtd_wms)||'-'}</td>
           <td style="${td};color:var(--accent);font-weight:800;font-size:18px">${esc(r.sugestao)||'-'}</td>
           <td style="${td};color:#22d3ee;font-weight:900;font-size:18px;background:rgba(34,211,238,.05)">${bol.doca||'-'}</td>

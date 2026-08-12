@@ -8,6 +8,8 @@ var _fluxolabPendLoaded = typeof _fluxolabPendLoaded !== 'undefined' ? _fluxolab
 var _pendSyncChannel = typeof _pendSyncChannel !== 'undefined' ? _pendSyncChannel : null;
 var _pendMediaSortDir = typeof _pendMediaSortDir !== 'undefined' ? _pendMediaSortDir : { mistas: null, complexas: null };
 var _pendAbertoSortDir = typeof _pendAbertoSortDir !== 'undefined' ? _pendAbertoSortDir : { mistas: null, complexas: null };
+var _pendActiveSortCol = typeof _pendActiveSortCol !== 'undefined' ? _pendActiveSortCol : { mistas: null, complexas: null };
+var _pendExpandedRows = typeof _pendExpandedRows !== 'undefined' ? _pendExpandedRows : {};
 
 // Mínimo de linhas: a tabela agora cresce e ENCOLHE conforme os registros.
 const PEND_ROW_MIN = { mistas: 1, complexas: 1 };
@@ -19,7 +21,7 @@ const PEND_COL_DEFS = [
   { k: 'lote',     label: 'Lote',       rz: 'lote',   w: '50px',  min: '40px' },
   { k: 'modelo',   label: 'Modelo',     rz: 'mod',    w: '340px', min: '120px' },
   { k: 'chk',      label: 'Checklists', rz: 'chk-v2', w: '60px',  min: '50px' },
-  { k: 'media',    label: 'Média Dias', rz: 'media',  w: '80px',  min: '60px' },
+  { k: 'media',    label: '⏱ Dias Úteis Andamento', rz: 'media',  w: '110px', min: '80px' },
   { k: 'diasab',   label: 'Dias em Aberto', rz: 'diasab', w: '96px', min: '70px' },
   { k: 'qtd_wms',  label: 'Qtd WMS',    rz: 'qtd',    w: '72px',  min: '50px' },
   { k: 'sugestao', label: 'Sugerido',   rz: 'sug',    w: '72px',  min: '50px' },
@@ -55,6 +57,164 @@ function pendShowAllCols(tableName) {
   _pendColMenuOpen[tableName] = true;
   fluxolabRenderPendencias();
 }
+function pendNormModelo(modelo) {
+  return (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(modelo) : String(modelo || '').toUpperCase().replace(/\s+/g, '');
+}
+
+function pendIsListaDetalhada(tableName) {
+  try {
+    const o = JSON.parse(localStorage.getItem('fluxolabPendListaDetalhada') || '{}');
+    return !!o[tableName];
+  } catch (e) { return false; }
+}
+
+function pendToggleListaDetalhada(tableName, checked) {
+  try {
+    const o = JSON.parse(localStorage.getItem('fluxolabPendListaDetalhada') || '{}');
+    o[tableName] = !!checked;
+    localStorage.setItem('fluxolabPendListaDetalhada', JSON.stringify(o));
+  } catch (e) {}
+  _pendExpandedRows[tableName] = new Set();
+  fluxolabRenderPendencias();
+}
+
+function pendCountModeloInTable(tableName, modelo, excludeIndex) {
+  const norm = pendNormModelo(modelo);
+  let n = 0;
+  (_fluxolabPendenciasState[tableName] || []).forEach((r, i) => {
+    if (i === excludeIndex) return;
+    if (r.modelo && pendNormModelo(r.modelo) === norm) n++;
+  });
+  return n;
+}
+
+function pendValidateModeloQuota(tableName, modelo, excludeIndex) {
+  const trimmed = String(modelo || '').trim();
+  if (!trimmed) return null;
+  const existing = pendCountModeloInTable(tableName, trimmed, excludeIndex);
+  if (existing >= 1) {
+    return `Este modelo já está na lista.\n\nNa lista detalhada, cada checklist é exibido automaticamente — não duplique a linha do modelo.`;
+  }
+  return null;
+}
+
+function pendGetChecklistItemStats(stats, chkIdx) {
+  if (!stats || !stats.rows || !stats.rows.length) return { diasUteis: 0, diasAberto: 0 };
+  const r = stats.rows[chkIdx != null ? chkIdx : 0];
+  if (!r) return { diasUteis: 0, diasAberto: 0 };
+  const kDias = stats.keys && stats.keys.kDias;
+  const kAberto = stats.keys && stats.keys.kAberto;
+  let diasUteis = 0;
+  let diasAberto = 0;
+  if (kDias) { const d = parseInt(r[kDias]); if (!isNaN(d)) diasUteis = d; }
+  if (kAberto) { const a = parseInt(r[kAberto]); if (!isNaN(a)) diasAberto = a; }
+  return { diasUteis, diasAberto, row: r };
+}
+
+// Índices dos checklists ordenados por Dias Úteis Andamento
+function pendGetSortedChecklistIndices(stats, dir) {
+  if (!stats || !stats.rows || !stats.rows.length) return [];
+  const indices = stats.rows.map((_, i) => i);
+  const desc = dir !== 'asc';
+  indices.sort((a, b) => {
+    const sa = pendGetChecklistItemStats(stats, a);
+    const sb = pendGetChecklistItemStats(stats, b);
+    const diff = desc ? (sb.diasUteis - sa.diasUteis) : (sa.diasUteis - sb.diasUteis);
+    if (diff !== 0) return diff;
+    const ab = desc ? (sb.diasAberto - sa.diasAberto) : (sa.diasAberto - sb.diasAberto);
+    return ab !== 0 ? ab : a - b;
+  });
+  return indices;
+}
+
+function pendPushDetailedChecklists(display, row, idx, stats, tableName) {
+  const sortDir = (_pendMediaSortDir[tableName] === 'asc') ? 'asc' : 'desc';
+  const sortedIdx = pendGetSortedChecklistIndices(stats, sortDir);
+  sortedIdx.forEach((chkIdx, seq) => {
+    display.push({
+      row, stateIdx: idx, chkIdx, chkSeq: seq + 1, virtual: seq > 0,
+      itemStats: pendGetChecklistItemStats(stats, chkIdx),
+      stats,
+    });
+  });
+}
+
+function pendBuildDisplayRows(tableName, rows) {
+  const detailed = pendIsListaDetalhada(tableName);
+  const display = [];
+  const seenNorm = new Set();
+
+  rows.forEach((row, idx) => {
+    if (!row.modelo) {
+      display.push({ row, stateIdx: idx, chkIdx: null, chkSeq: null, virtual: false, itemStats: null, stats: null });
+      return;
+    }
+    const norm = pendNormModelo(row.modelo);
+    if (detailed && seenNorm.has(norm)) return;
+    if (detailed) seenNorm.add(norm);
+
+    const stats = fluxolabPlanGetChecklistStats(row.modelo);
+
+    if (!detailed || stats.count <= 1) {
+      display.push({
+        row, stateIdx: idx, chkIdx: stats.count === 1 ? 0 : null, chkSeq: stats.count === 1 ? 1 : null, virtual: false,
+        itemStats: stats.count === 1 ? pendGetChecklistItemStats(stats, 0) : null,
+        stats,
+      });
+      return;
+    }
+
+    pendPushDetailedChecklists(display, row, idx, stats, tableName);
+  });
+
+  if (detailed) {
+    const empty = display.filter(d => !d.row.modelo);
+    const filled = display.filter(d => d.row.modelo);
+    const activeCol = _pendActiveSortCol[tableName] || 'media';
+    const sortDir = activeCol === 'diasab'
+      ? ((_pendAbertoSortDir[tableName] === 'asc') ? 'asc' : 'desc')
+      : ((_pendMediaSortDir[tableName] === 'asc') ? 'asc' : 'desc');
+    filled.sort((a, b) => {
+      if (activeCol === 'diasab') {
+        const da = a.itemStats ? a.itemStats.diasAberto : 0;
+        const db = b.itemStats ? b.itemStats.diasAberto : 0;
+        const diff = sortDir === 'asc' ? da - db : db - da;
+        if (diff !== 0) return diff;
+        const ua = a.itemStats ? a.itemStats.diasUteis : 0;
+        const ub = b.itemStats ? b.itemStats.diasUteis : 0;
+        const uDiff = sortDir === 'asc' ? ua - ub : ub - ua;
+        if (uDiff !== 0) return uDiff;
+      } else {
+        const da = a.itemStats ? a.itemStats.diasUteis : 0;
+        const db = b.itemStats ? b.itemStats.diasUteis : 0;
+        const diff = sortDir === 'asc' ? da - db : db - da;
+        if (diff !== 0) return diff;
+        const aa = a.itemStats ? a.itemStats.diasAberto : 0;
+        const ab = b.itemStats ? b.itemStats.diasAberto : 0;
+        const abDiff = sortDir === 'asc' ? aa - ab : ab - aa;
+        if (abDiff !== 0) return abDiff;
+      }
+      return (a.stateIdx - b.stateIdx) || ((a.chkSeq || 0) - (b.chkSeq || 0));
+    });
+    return filled.concat(empty);
+  }
+
+  return display;
+}
+
+function pendTotalChkUnico(rows) {
+  const seen = new Set();
+  let total = 0;
+  rows.forEach(row => {
+    if (!row.modelo) return;
+    const norm = pendNormModelo(row.modelo);
+    if (seen.has(norm)) return;
+    seen.add(norm);
+    total += (fluxolabPlanGetChecklistStats(row.modelo).count || 0);
+  });
+  return total;
+}
+
 function pendToggleColMenu(tableName) {
   _pendColMenuOpen[tableName] = !_pendColMenuOpen[tableName];
   const m = document.getElementById(`pnd-${tableName}-colmenu`);
@@ -174,26 +334,7 @@ function fluxolabApplyRemoteSyncPend(remoteData) {
 
           // Se for modelo, precisa recalcular Checklists/Bolsões visualmente
           if (f === 'modelo') {
-            const statsChk = val ? fluxolabPlanGetChecklistStats(val) : { count: 0, media: 0 };
-            const statsBol = val ? fluxolabPlanGetBolsaoStats(val) : { doca: 0, lab: 0 };
-
-            const cellChk = document.getElementById(`pnd-${t}-r${i}-chk`);
-            const cellMedia = document.getElementById(`pnd-${t}-r${i}-media`);
-            const cellDoca = document.getElementById(`pnd-${t}-r${i}-doca`);
-            const cellLab = document.getElementById(`pnd-${t}-r${i}-lab`);
-            const cellBolsao = document.getElementById(`pnd-${t}-r${i}-bolsao`);
-            const cellBadge = document.getElementById(`pnd-${t}-r${i}-badge`);
-
-            if (cellChk) { cellChk.innerText = val ? (statsChk.count || '-') : ''; cellChk.style.color = !val ? 'var(--muted)' : (statsChk.count > 0 ? '#4ade80' : '#f87171'); }
-            if (cellMedia) { cellMedia.innerText = val ? (statsChk.media || '-') : ''; cellMedia.style.color = statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'; }
-            const cellAberto = document.getElementById(`pnd-${t}-r${i}-diasab`);
-            if (cellAberto) { cellAberto.innerHTML = val ? pendDiasAbertoHtml(statsChk) : ''; cellAberto.style.color = statsChk.maxAberto > 0 ? '#fbbf24' : 'var(--muted)'; }
-            if (cellDoca) cellDoca.innerText = val ? (statsBol.doca || '-') : '';
-            if (cellLab) cellLab.innerText = val ? (statsBol.lab || '-') : '';
-            if (cellBolsao) cellBolsao.innerHTML = val ? pendBolsaoLocaisHtml(val) : '';
-            if (cellBadge) cellBadge.innerHTML = pendBadgeHtml(statsChk.count, !!val);
-            const activeBadge = document.getElementById(`pnd-${t}-r${i}-active-users`);
-            if (activeBadge) activeBadge.dataset.modelo = val || '';
+            needRender = true;
           }
         }
       });
@@ -215,14 +356,14 @@ function fluxolabApplyRemoteSyncPend(remoteData) {
 // Recalcula e atualiza os totais de DOCA/LAB/Checklists exibidos no cabeçalho da tabela
 function pendUpdateHeaderTotals(tableName) {
   const rows = _fluxolabPendenciasState[tableName] || [];
-  let totalDoca = 0, totalLab = 0, totalChk = 0;
+  let totalDoca = 0, totalLab = 0;
   rows.forEach(row => {
     if (!row.modelo) return;
     const statsBol = fluxolabPlanGetBolsaoStats(row.modelo);
     totalDoca += statsBol.doca || 0;
     totalLab += statsBol.lab || 0;
-    totalChk += (fluxolabPlanGetChecklistStats(row.modelo).count || 0);
   });
+  const totalChk = pendTotalChkUnico(rows);
   const elDoca = document.getElementById(`pnd-${tableName}-doca-total`);
   const elLab = document.getElementById(`pnd-${tableName}-lab-total`);
   const elChk = document.getElementById(`pnd-${tableName}-chk-total`);
@@ -234,14 +375,25 @@ function pendUpdateHeaderTotals(tableName) {
 // Atualização local pelo usuário atual
 function fluxolabUpdateRowElemPend(elem, tableName, field) {
   const tr = elem.closest('tr');
-  if (!tr) return;
-  const tbody = tr.parentNode;
-  const index = Array.from(tbody.children).indexOf(tr);
+  if (!tr || tr.dataset.pndVirtual === '1') return;
+  const index = parseInt(tr.dataset.pndIdx, 10);
+  if (isNaN(index)) return;
 
   if (!_fluxolabPendenciasState[tableName]) return;
   if (!_fluxolabPendenciasState[tableName][index]) return;
 
+  const oldValue = _fluxolabPendenciasState[tableName][index][field] || '';
   const value = elem.value;
+
+  if (field === 'modelo') {
+    const err = pendValidateModeloQuota(tableName, value, index);
+    if (err) {
+      elem.value = oldValue;
+      alert(err);
+      return;
+    }
+  }
+
   _fluxolabPendenciasState[tableName][index][field] = value;
 
   const isLastRow = index === _fluxolabPendenciasState[tableName].length - 1;
@@ -297,37 +449,16 @@ function fluxolabUpdateRowElemPend(elem, tableName, field) {
 
 
   if (field === 'modelo') {
-    const statsChk = value ? fluxolabPlanGetChecklistStats(value) : { count: 0, media: 0 };
-    const statsBol = value ? fluxolabPlanGetBolsaoStats(value) : { doca: 0, lab: 0 };
-
-    const cellChk = document.getElementById(`pnd-${tableName}-r${index}-chk`);
-    const cellMedia = document.getElementById(`pnd-${tableName}-r${index}-media`);
-    const cellDoca = document.getElementById(`pnd-${tableName}-r${index}-doca`);
-    const cellLab = document.getElementById(`pnd-${tableName}-r${index}-lab`);
-    const cellBolsao = document.getElementById(`pnd-${tableName}-r${index}-bolsao`);
-    const cellBadge = document.getElementById(`pnd-${tableName}-r${index}-badge`);
-    const activeBadge = document.getElementById(`pnd-${tableName}-r${index}-active-users`);
-
-    if (cellChk) { cellChk.innerText = value ? (statsChk.count || '-') : ''; cellChk.style.color = !value ? 'var(--muted)' : (statsChk.count > 0 ? '#4ade80' : '#f87171'); }
-    if (cellMedia) { cellMedia.innerText = value ? (statsChk.media || '-') : ''; cellMedia.style.color = statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'; }
-    const cellAberto = document.getElementById(`pnd-${tableName}-r${index}-diasab`);
-    if (cellAberto) { cellAberto.innerHTML = value ? pendDiasAbertoHtml(statsChk) : ''; cellAberto.style.color = statsChk.maxAberto > 0 ? '#fbbf24' : 'var(--muted)'; }
-    if (cellDoca) cellDoca.innerText = value ? (statsBol.doca || '-') : '';
-    if (cellLab) cellLab.innerText = value ? (statsBol.lab || '-') : '';
-    if (cellBolsao) cellBolsao.innerHTML = value ? pendBolsaoLocaisHtml(value) : '';
-    if (cellBadge) {
-      const urgQtd2 = (value && typeof _fluxolabModeloUrgenteQtd === 'function') ? _fluxolabModeloUrgenteQtd(value) : 0;
-      const urgBadge2 = (urgQtd2 && typeof _fluxolabUrgBadge === 'function') ? _fluxolabUrgBadge(urgQtd2) : '';
-      cellBadge.innerHTML = pendBadgeHtml(statsChk.count, !!value) + urgBadge2;
-      // Destaca a linha se urgente
-      const tr = cellBadge.closest('tr');
-      if (tr) {
-        tr.style.borderLeft = urgQtd2 ? '3px solid rgba(239,68,68,0.8)' : '';
-      }
-    }
-    if (activeBadge) activeBadge.dataset.modelo = value || '';
     pendUpdateHeaderTotals(tableName);
     if (typeof updateActiveUsersInTables === 'function') updateActiveUsersInTables();
+    const activeId = `pnd-${tableName}-r${index}-modelo`;
+    fluxolabRenderPendencias();
+    const inp = document.getElementById(activeId);
+    if (inp) {
+      inp.focus();
+      try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch(e){}
+    }
+    return;
   }
 }
 
@@ -340,10 +471,119 @@ function fluxolabClearPendTable(tableName) {
   }
 }
 
+// HTML da célula Checklists — clicável quando há mais de um checklist
+function pendChkCellHtml(stats, tableName, idx, isFilled) {
+  if (!isFilled) return '';
+  if (!stats || !stats.count) return '-';
+  if (stats.count <= 1) return String(stats.count);
+  const isExpanded = (_pendExpandedRows[tableName] || new Set()).has(idx);
+  return `<span onclick="pendToggleExpand('${tableName}',${idx})" style="cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:3px" title="Clique para expandir os ${stats.count} checklists">
+    ${stats.count}
+    <span id="pnd-${tableName}-r${idx}-expand-arr" style="font-size:10px;color:var(--muted);display:inline-block;transition:transform .2s;${isExpanded ? 'transform:rotate(180deg)' : ''}">▾</span>
+  </span>`;
+}
+
 // Texto/HTML da célula "Dias em Aberto" (maior valor entre os checklists do modelo)
 function pendDiasAbertoHtml(stats) {
   if (!stats || !stats.count || !stats.maxAberto) return '-';
-  return `${stats.maxAberto}<span style="display:block;font-size:10px;font-weight:700;color:var(--muted)">méd ${stats.mediaAberto || 0}</span>`;
+  const dias = stats.maxAberto;
+  const color = dias >= 30 ? '#ef4444' : dias >= 15 ? '#f59e0b' : dias >= 7 ? '#facc15' : '#4ade80';
+  return `<span style="font-size:18px;font-weight:900;color:${color};font-family:var(--mono);line-height:1">${dias}d</span>`;
+}
+
+// Texto/HTML da coluna "Dias Úteis Andamento"
+function pendDiasUteisHtml(stats) {
+  if (!stats || !stats.count) return '-';
+  const max = stats.maxDiasUteis || stats.media || 0;
+  if (!max && !stats.media) return '-';
+  const color = max >= 20 ? '#ef4444' : max >= 10 ? '#f59e0b' : max >= 4 ? '#facc15' : 'var(--text)';
+  return `<span style="font-size:18px;font-weight:900;color:${color};font-family:var(--mono);line-height:1">${max}d</span>`;
+}
+
+function pendDiasUteisItemHtml(itemStats) {
+  if (!itemStats) return '-';
+  const dias = itemStats.diasUteis;
+  if (dias == null || isNaN(dias)) return '-';
+  const color = dias >= 20 ? '#ef4444' : dias >= 10 ? '#f59e0b' : dias >= 4 ? '#facc15' : 'var(--text)';
+  return `<span style="font-size:18px;font-weight:900;color:${color};font-family:var(--mono);line-height:1">${dias}d</span>`;
+}
+
+function pendDiasAbertoItemHtml(itemStats) {
+  if (!itemStats || !itemStats.diasAberto) return '-';
+  const dias = itemStats.diasAberto;
+  const color = dias >= 30 ? '#ef4444' : dias >= 15 ? '#f59e0b' : dias >= 7 ? '#facc15' : '#4ade80';
+  return `<span style="font-size:18px;font-weight:900;color:${color};font-family:var(--mono);line-height:1">${dias}d</span>`;
+}
+
+function pendRenderChecklistDetalhes(stats) {
+  if (!stats || !stats.rows || !stats.rows.length) {
+    return '<div style="padding:10px 14px;color:var(--muted);font-size:12px">Nenhum checklist encontrado.</div>';
+  }
+  const sample = stats.rows[0];
+  const fk = (label, ...alts) => {
+    if (typeof _fluxolabFindKey !== 'function') return null;
+    return _fluxolabFindKey(sample, label) || alts.map(a => _fluxolabFindKey(sample, a)).find(Boolean) || null;
+  };
+  const kAndamento = fk('Andamento');
+  const kPedido = fk('Pedido');
+  const kDiasUteis = (stats.keys && stats.keys.kDias) || fk('Dias Úteis Andamento', 'Dias Uteis Andamento', 'Dias Úteis');
+  const kDiasAb = (stats.keys && stats.keys.kAberto) || fk('Dias Aberto', 'Dias em Aberto', 'Dias Abertos');
+  const kStatus = fk('Status Checklist', 'Status');
+  const kObs = fk('Obs', 'Observação');
+
+  const headers = [
+    ['Andamento', kAndamento],
+    ['Pedido', kPedido],
+    ['Dias Úteis', kDiasUteis],
+    ['Dias Aberto', kDiasAb],
+    ['Status', kStatus],
+    ['Obs', kObs],
+  ].filter(([, key]) => key);
+
+  const ths = headers.map(([h]) =>
+    `<th style="padding:6px 10px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border2);white-space:nowrap">${h}</th>`
+  ).join('');
+
+  const trs = stats.rows.map(r => {
+    const tds = headers.map(([, key]) => {
+      let val = '—';
+      if (key && (key === kDiasUteis || key === kDiasAb)) {
+        const n = parseFloat(String(r[key] || '').replace(',', '.'));
+        val = isNaN(n) ? '—' : String(Number.isInteger(n) ? n : n.toFixed(1).replace('.', ','));
+      } else if (key && r[key] != null && String(r[key]).trim() !== '') {
+        val = esc(r[key]);
+      }
+      return `<td style="padding:6px 10px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border);vertical-align:top">${val}</td>`;
+    }).join('');
+    return `<tr>${tds}</tr>`;
+  }).join('');
+
+  return `<div style="background:rgba(0,0,0,.25);padding:8px 12px 12px;border-top:1px dashed var(--border2)">
+    <div style="font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">${stats.rows.length} checklist(s) deste modelo</div>
+    <div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;min-width:640px">
+        <thead><tr style="background:rgba(0,0,0,.2)">${ths}</tr></thead>
+        <tbody>${trs}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+function pendToggleExpand(tableName, idx) {
+  if (!_pendExpandedRows[tableName]) _pendExpandedRows[tableName] = new Set();
+  const detId = `pnd-${tableName}-det-${idx}`;
+  const det = document.getElementById(detId);
+  const arr = document.getElementById(`pnd-${tableName}-r${idx}-expand-arr`);
+  if (!det) return;
+  const open = det.style.display !== 'none';
+  det.style.display = open ? 'none' : '';
+  if (arr) {
+    arr.style.display = 'inline-block';
+    arr.style.transition = 'transform .2s';
+    arr.style.transform = open ? '' : 'rotate(180deg)';
+  }
+  if (open) _pendExpandedRows[tableName].delete(idx);
+  else _pendExpandedRows[tableName].add(idx);
 }
 
 // Ordena a tabela pela coluna "Dias em Aberto" (clique alterna maior→menor / menor→maior)
@@ -354,6 +594,12 @@ function fluxolabSortPendByDiasAberto(tableName) {
   const currentDir = _pendAbertoSortDir[tableName];
   const nextDir = currentDir === 'desc' ? 'asc' : 'desc';
   _pendAbertoSortDir[tableName] = nextDir;
+  _pendActiveSortCol[tableName] = 'diasab';
+
+  if (pendIsListaDetalhada(tableName)) {
+    fluxolabRenderPendencias();
+    return;
+  }
 
   const filled = [];
   const empty = [];
@@ -381,13 +627,19 @@ function fluxolabSortPendByMedia(tableName) {
   const currentDir = _pendMediaSortDir[tableName];
   const nextDir = currentDir === 'desc' ? 'asc' : 'desc';
   _pendMediaSortDir[tableName] = nextDir;
+  _pendActiveSortCol[tableName] = 'media';
+
+  if (pendIsListaDetalhada(tableName)) {
+    fluxolabRenderPendencias();
+    return;
+  }
 
   // Separa linhas preenchidas das vazias — vazias permanecem sempre no final
   const filled = [];
   const empty = [];
   list.forEach(row => {
     if (row.modelo) {
-      filled.push({ row, media: fluxolabPlanGetChecklistStats(row.modelo).media || 0 });
+      filled.push({ row, media: (fluxolabPlanGetChecklistStats(row.modelo).maxDiasUteis || fluxolabPlanGetChecklistStats(row.modelo).media || 0) });
     } else {
       empty.push(row);
     }
@@ -424,37 +676,18 @@ function pendDropTr(e, tableName) {
   const dropTr = e.currentTarget;
   dropTr.style.borderTop = '';
 
-  if (_pendDraggedTableName === tableName && _pendDraggedTr && _pendDraggedTr !== dropTr) {
-    const tbody = dropTr.parentNode;
-    const oldIdx = Array.from(tbody.children).indexOf(_pendDraggedTr);
-    let newIdx = Array.from(tbody.children).indexOf(dropTr);
+  if (_pendDraggedTableName !== tableName || !_pendDraggedTr || _pendDraggedTr === dropTr) return;
+  if (_pendDraggedTr.dataset.pndVirtual === '1' || dropTr.dataset.pndVirtual === '1') return;
 
-    if (newIdx > oldIdx) dropTr.after(_pendDraggedTr);
-    else dropTr.before(_pendDraggedTr);
+  const oldIdx = parseInt(_pendDraggedTr.dataset.pndIdx, 10);
+  const newIdx = parseInt(dropTr.dataset.pndIdx, 10);
+  if (isNaN(oldIdx) || isNaN(newIdx) || oldIdx === newIdx) return;
 
-    // Atualizar HTML visual
-    Array.from(tbody.children).forEach((tr, i) => {
-      tr.cells[0].innerHTML = `<span style="opacity:0.4;margin-right:4px">≡</span>${i + 1}º`;
-      tr.cells[1].innerHTML = `${i + 1}`;
-
-      // Update IDs to match new order so realtime sync targets the correct row
-      PEND_FIELDS.forEach(f => {
-        const inp = tr.querySelector(`[id$="-${f}"]`);
-        if (inp) inp.id = `pnd-${tableName}-r${i}-${f}`;
-      });
-      ['chk','media','diasab','doca','lab','badge'].forEach(f => {
-        const cell = tr.querySelector(`[id$="-${f}"]`);
-        if (cell) cell.id = `pnd-${tableName}-r${i}-${f}`;
-      });
-    });
-
-    const finalIdx = Array.from(tbody.children).indexOf(_pendDraggedTr);
-    const list = _fluxolabPendenciasState[tableName];
-    const item = list.splice(oldIdx, 1)[0];
-    list.splice(finalIdx, 0, item);
-
-    fluxolabSavePendenciasDebounced();
-  }
+  const list = _fluxolabPendenciasState[tableName];
+  const item = list.splice(oldIdx, 1)[0];
+  list.splice(newIdx, 0, item);
+  fluxolabSavePendenciasDebounced();
+  fluxolabRenderPendencias();
 }
 function pendDragEnd(e) {
   e.target.style.opacity = '1';
@@ -569,14 +802,14 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
   const savedSizes = JSON.parse(localStorage.getItem('fluxolabPendSizes') || '{}');
 
   // Totais atuais de DOCA, LAB e Checklists (soma de todas as linhas preenchidas)
-  let totalDoca = 0, totalLab = 0, totalChk = 0;
+  let totalDoca = 0, totalLab = 0;
   rows.forEach(row => {
     if (!row.modelo) return;
     const statsBol = fluxolabPlanGetBolsaoStats(row.modelo);
     totalDoca += statsBol.doca || 0;
     totalLab += statsBol.lab || 0;
-    totalChk += (fluxolabPlanGetChecklistStats(row.modelo).count || 0);
   });
+  const totalChk = pendTotalChkUnico(rows);
 
   // ── Colunas visíveis / larguras ──
   const hid = k => (pendIsColHidden(tableName, k) ? ';display:none' : '');
@@ -597,13 +830,14 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
     return `<div id="${id}" class="pend-header-resizer" style="resize:horizontal;overflow:hidden;width:${savedW};min-width:${minWidth};max-width:100%;padding:12px 6px;margin:0 auto;color:${color || 'var(--muted)'};font-size:11px;text-transform:uppercase;letter-spacing:0.05em">${content}</div>`;
   };
 
+  const activeSortCol = _pendActiveSortCol[tableName] || 'media';
   const mediaSortDir = _pendMediaSortDir[tableName] || null;
-  const mediaSortArrow = mediaSortDir === 'desc' ? ' ↓' : (mediaSortDir === 'asc' ? ' ↑' : '');
-  const mediaHeaderContent = `<span onclick="fluxolabSortPendByMedia('${tableName}')" style="cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:2px" title="Ordenar por Média Dias (maior → menor)">Média Dias${mediaSortArrow}</span>`;
+  const mediaSortArrow = activeSortCol === 'media' ? (mediaSortDir === 'desc' ? ' ↓' : (mediaSortDir === 'asc' ? ' ↑' : '')) : '';
+  const mediaHeaderContent = `<span onclick="fluxolabSortPendByMedia('${tableName}')" style="cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:2px" title="Ordenar por Dias Úteis Andamento (maior → menor)">⏱ Dias Úteis Andamento${mediaSortArrow}</span>`;
 
   const abertoSortDir = _pendAbertoSortDir[tableName] || null;
-  const abertoSortArrow = abertoSortDir === 'desc' ? ' ↓' : (abertoSortDir === 'asc' ? ' ↑' : '');
-  const abertoHeaderContent = `<span onclick="fluxolabSortPendByDiasAberto('${tableName}')" style="cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:2px" title="Dias em aberto (coluna Dias Aberto da planilha de checklists). Ordenar maior → menor">Dias em Aberto${abertoSortArrow}</span>`;
+  const abertoSortArrow = activeSortCol === 'diasab' ? (abertoSortDir === 'desc' ? ' ↓' : (abertoSortDir === 'asc' ? ' ↑' : '')) : '';
+  const abertoHeaderContent = `<span onclick="fluxolabSortPendByDiasAberto('${tableName}')" style="cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:2px" title="Ordenar por Dias em Aberto (maior → menor)">Dias em Aberto${abertoSortArrow}</span>`;
 
   const docaHeaderContent = `DOCA <span id="pnd-${tableName}-doca-total" style="font-weight:900">(${totalDoca})</span>`;
   const labHeaderContent = `LAB <span id="pnd-${tableName}-lab-total" style="font-weight:900">(${totalLab})</span>`;
@@ -635,6 +869,10 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
       <button onclick="pendShowAllCols('${tableName}')" style="width:100%;margin-top:6px;background:var(--bg3);color:var(--muted);border:1px solid var(--border2);border-radius:6px;padding:5px;font-size:10px;font-weight:800;cursor:pointer;text-transform:uppercase">Mostrar todas</button>
     </div>`;
 
+  const displayList = pendBuildDisplayRows(tableName, rows);
+  const listaDetalhada = pendIsListaDetalhada(tableName);
+  const regCount = displayList.filter(d => d.row.modelo).length;
+
   let html = `
     <div style="margin-bottom:32px;overflow-x:auto;padding-bottom:14px">
       <table style="${tableStyle}">
@@ -644,8 +882,12 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
             <th colspan="${PEND_COL_DEFS.length}" style="background:rgba(255,255,255,0.03);color:${titleColor};padding:14px;font-size:14px;font-weight:900;letter-spacing:0.08em;text-transform:uppercase;border-bottom:1px solid var(--border2);text-shadow:0 0 12px ${titleColor}50;position:relative;overflow:visible">
               <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${titleColor};margin-right:8px;box-shadow:0 0 8px ${titleColor}"></span>
               ${title}
-              <span style="font-size:10px;color:var(--muted);font-weight:700;margin-left:8px;text-transform:none;letter-spacing:normal">(${rows.length} registros)</span>
+              <span style="font-size:10px;color:var(--muted);font-weight:700;margin-left:8px;text-transform:none;letter-spacing:normal">(${regCount} ${listaDetalhada ? 'linhas' : 'registros'})</span>
               <span id="pnd-${tableName}-chk-total" style="position:absolute;left:14px;top:50%;transform:translateY(-50%);background:rgba(74,222,128,0.12);color:#4ade80;border:1px solid rgba(74,222,128,0.35);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:800;letter-spacing:0.04em;text-transform:none;text-shadow:none">Total Checklists: ${totalChk}</span>
+              <label style="position:absolute;right:168px;top:10px;z-index:55;display:inline-flex;align-items:center;gap:6px;background:var(--bg3);border:1px solid ${listaDetalhada ? 'rgba(79,142,247,.5)' : 'var(--border2)'};border-radius:6px;padding:4px 10px;font-size:10px;font-weight:800;color:${listaDetalhada ? 'var(--accent)' : 'var(--muted)'};cursor:pointer;text-transform:uppercase;letter-spacing:0.04em;user-select:none">
+                <input type="checkbox" ${listaDetalhada ? 'checked' : ''} onchange="pendToggleListaDetalhada('${tableName}', this.checked)" style="width:13px;height:13px;accent-color:var(--accent);cursor:pointer" />
+                Ver lista detalhada
+              </label>
               <span style="position:absolute;right:82px;top:10px;z-index:55">
                 <button onclick="pendToggleColMenu('${tableName}')" style="background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:6px;padding:4px 10px;font-size:10px;font-weight:800;cursor:pointer;text-transform:uppercase;letter-spacing:0.05em">⚙ Colunas</button>
                 ${colMenuDropdownHtml}
@@ -661,108 +903,155 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
   `;
 
 
-  rows.forEach((row, idx) => {
-    const statsChk = row.modelo ? fluxolabPlanGetChecklistStats(row.modelo) : { count: 0, media: 0 };
+  displayList.forEach((disp, dispIdx) => {
+    const row = disp.row;
+    const idx = disp.stateIdx;
+    const statsChk = disp.stats || (row.modelo ? fluxolabPlanGetChecklistStats(row.modelo) : { count: 0, media: 0 });
     const statsBol = row.modelo ? fluxolabPlanGetBolsaoStats(row.modelo) : { doca: 0, lab: 0 };
     const urgQtd = (row.modelo && typeof _fluxolabModeloUrgenteQtd === 'function') ? _fluxolabModeloUrgenteQtd(row.modelo) : 0;
     const urgBadgeHtml = (urgQtd && typeof _fluxolabUrgBadge === 'function') ? _fluxolabUrgBadge(urgQtd) : '';
 
-    const rowBg = idx % 2 === 0 ? (urgQtd ? 'rgba(239,68,68,0.07)' : 'rgba(255,255,255,0.015)') : (urgQtd ? 'rgba(239,68,68,0.04)' : 'transparent');
-    const isFilled = row.modelo ? true : false;
+    const isVirtual = !!disp.virtual;
+    const isDetailed = listaDetalhada && disp.chkIdx != null;
+    const rowBg = dispIdx % 2 === 0 ? (urgQtd ? 'rgba(239,68,68,0.07)' : 'rgba(255,255,255,0.015)') : (urgQtd ? 'rgba(239,68,68,0.04)' : 'transparent');
+    const isFilled = !!row.modelo;
+    const canExpand = !listaDetalhada && isFilled && statsChk.count > 1;
+    const isExpanded = canExpand && (_pendExpandedRows[tableName] || new Set()).has(idx);
+    const visibleColCount = PEND_COL_DEFS.filter(c => !pendIsColHidden(tableName, c.k)).length;
 
     const inpBase = 'width:100%;height:100%;min-height:36px;border:none;background:transparent;text-align:center;font-weight:800;outline:none;font-family:var(--font);font-size:18px;color:var(--text);transition:all .2s;display:block';
     const inpFocus = 'this.style.background="rgba(255,255,255,0.05)"';
     const inpBlur = 'this.style.background="transparent"';
-    const dragHandle = `cursor:grab;`;
+    const dragHandle = isVirtual ? '' : 'cursor:grab;';
 
     const idObs = `pnda-${tableName}-r${idx}-obs`;
     const hObs = savedSizes[idObs] || '36px';
-
     const idPecas = `pnda-${tableName}-r${idx}-pecas`;
     const hPecas = savedSizes[idPecas] || '36px';
-
     const rowBorderLeft = urgQtd ? 'border-left:3px solid rgba(239,68,68,0.8);' : '';
+    const virtualBg = isVirtual ? 'opacity:.78;' : '';
 
-    html += `
-      <tr style="background:${rowBg};transition:background .2s;${rowBorderLeft}"
+    const chkHtml = !isFilled ? '' : (
+      isDetailed ? `<span style="font-size:11px;font-weight:800;color:var(--muted)">${disp.chkSeq}/${statsChk.count}</span>` :
+      pendChkCellHtml(statsChk, tableName, idx, true)
+    );
+    const mediaHtml = !isFilled ? '' : (
+      isDetailed ? pendDiasUteisItemHtml(disp.itemStats) : pendDiasUteisHtml(statsChk)
+    );
+    const diasAbHtml = !isFilled ? '' : (
+      isDetailed ? pendDiasAbertoItemHtml(disp.itemStats) : pendDiasAbertoHtml(statsChk)
+    );
+
+    const modeloCell = isVirtual
+      ? `<div style="padding:0 8px 0 12px;text-align:left;font-weight:800;font-size:14px;color:${themeColor};opacity:.88">
+           ${esc(row.modelo)}
+           <span style="font-size:10px;color:var(--muted);margin-left:6px;font-weight:700">· checklist ${disp.chkSeq}/${statsChk.count}</span>
+         </div>`
+      : `<div style="display:flex;align-items:center;gap:6px;height:100%;padding:0 8px 0 12px">
+           <input id="pnd-${tableName}-r${idx}-modelo" type="text" list="modelos-lista" placeholder="Digite..." value="${row.modelo || ''}"
+                  onfocus="${inpFocus}" onblur="${inpBlur}"
+                  onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'modelo')"
+                  style="flex:1;min-width:0;height:100%;min-height:36px;border:none;background:transparent;text-align:left;font-weight:800;outline:none;font-family:var(--font);font-size:15px;color:${themeColor};transition:all .2s;padding:0" />
+           <span id="pnd-${tableName}-r${idx}-badge" style="display:flex;align-items:center;gap:4px">${pendBadgeHtml(statsChk.count, isFilled)}${urgBadgeHtml}</span>
+           <span class="active-users-badge" id="pnd-${tableName}-r${idx}-active-users" data-modelo="${row.modelo || ''}" style="display:flex;align-items:center"></span>
+         </div>`;
+
+    const editFields = isVirtual
+      ? `<td style="${tdStyle};color:var(--muted);font-size:14px${hid('qtd_wms')}">—</td>
+         <td style="${tdStyle};color:var(--muted);font-size:14px${hid('sugestao')}">—</td>`
+      : `<td style="${tdStyle};background:rgba(255,255,255,0.02)${hid('qtd_wms')}">
+           <input id="pnd-${tableName}-r${idx}-qtd_wms" type="text" value="${row.qtd_wms || ''}"
+                  onfocus="${inpFocus}" onblur="${inpBlur}"
+                  onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'qtd_wms')"
+                  style="${inpBase};min-width:0;box-sizing:border-box" />
+         </td>
+         <td style="${tdStyle};background:rgba(255,255,255,0.02)${hid('sugestao')}">
+           <input id="pnd-${tableName}-r${idx}-sugestao" type="text" value="${row.sugestao || ''}"
+                  onfocus="${inpFocus}" onblur="${inpBlur}"
+                  onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'sugestao')"
+                  style="${inpBase};min-width:0;box-sizing:border-box;color:var(--accent)" />
+         </td>`;
+
+    const obsPecas = isVirtual
+      ? `<td style="${tdStyle};color:var(--muted);font-size:14px${hid('obs')}">—</td>
+         <td style="${tdLastStyle};color:var(--muted);font-size:14px${hid('pecas')}">—</td>`
+      : `<td style="${tdStyle};padding:4px${hid('obs')}">
+           <textarea id="pnd-${tableName}-r${idx}-obs" class="pend-textarea" rows="1" placeholder="..."
+                  onfocus="${inpFocus}" onblur="${inpBlur}"
+                  onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'obs')"
+                  style="${inpBase};height:${hObs};padding-top:10px;font-weight:500;text-transform:uppercase;color:var(--text);resize:vertical;max-width:100%">${esc(row.obs || '')}</textarea>
+         </td>
+         <td style="${tdLastStyle};padding:4px${hid('pecas')}">
+           <textarea id="pnd-${tableName}-r${idx}-pecas" class="pend-textarea" rows="1" placeholder="..."
+                  onfocus="${inpFocus}" onblur="${inpBlur}"
+                  onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'pecas')"
+                  style="${inpBase};height:${hPecas};padding-top:10px;font-weight:500;text-transform:uppercase;color:var(--text);resize:vertical;max-width:100%">${esc(row.pecas || '')}</textarea>
+         </td>`;
+
+    const dragAttrs = isVirtual ? '' : `
           ondragstart="pendDragStartTr(event, '${tableName}')"
           ondragover="pendDragOver(event)"
           ondragleave="pendDragLeave(event)"
           ondrop="pendDropTr(event, '${tableName}')"
-          ondragend="pendDragEnd(event)"
+          ondragend="pendDragEnd(event)"`;
+
+    const dragTd = isVirtual ? '' : `
+            onmousedown="this.parentNode.setAttribute('draggable','true')"
+            onmouseup="this.parentNode.setAttribute('draggable','false')"
+            onmouseleave="this.parentNode.setAttribute('draggable','false')"`;
+
+    html += `
+      <tr data-pnd-idx="${idx}" data-pnd-virtual="${isVirtual ? '1' : '0'}"
+          style="background:${rowBg};transition:background .2s;${rowBorderLeft}${virtualBg}"
+          ${dragAttrs}
           onmouseover="this.style.background='rgba(255,255,255,0.04)'"
           onmouseout="this.style.background='${rowBg}'">
 
         <td style="${tdStyle};color:var(--muted);font-weight:800;font-size:15px;${dragHandle}${hid('ord')}"
-            title="Arraste para reordenar"
-            onmousedown="this.parentNode.setAttribute('draggable','true')"
-            onmouseup="this.parentNode.setAttribute('draggable','false')"
-            onmouseleave="this.parentNode.setAttribute('draggable','false')">
-          <span style="opacity:0.4;margin-right:4px">≡</span>${idx + 1}º
+            title="${isVirtual ? '' : 'Arraste para reordenar'}"${dragTd}>
+          ${isVirtual ? '' : '<span style="opacity:0.4;margin-right:4px">≡</span>'}${dispIdx + 1}º
         </td>
-        <td style="${tdStyle};color:var(--muted);font-weight:800;font-size:15px${hid('lote')}">${idx + 1}</td>
+        <td style="${tdStyle};color:var(--muted);font-weight:800;font-size:15px${hid('lote')}">${dispIdx + 1}</td>
 
-        <td style="${tdStyle}${hid('modelo')}">
-          <div style="display:flex;align-items:center;gap:6px;height:100%;padding:0 8px 0 12px">
-            <input id="pnd-${tableName}-r${idx}-modelo" type="text" list="modelos-lista" placeholder="Digite..." value="${row.modelo || ''}"
-                   onfocus="${inpFocus}" onblur="${inpBlur}"
-                   onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'modelo')"
-                   style="flex:1;min-width:0;height:100%;min-height:36px;border:none;background:transparent;text-align:left;font-weight:800;outline:none;font-family:var(--font);font-size:15px;color:${themeColor};transition:all .2s;padding:0" />
-            <span id="pnd-${tableName}-r${idx}-badge" style="display:flex;align-items:center;gap:4px">${pendBadgeHtml(statsChk.count, isFilled)}${urgBadgeHtml}</span>
-            <span class="active-users-badge" id="pnd-${tableName}-r${idx}-active-users" data-modelo="${row.modelo || ''}" style="display:flex;align-items:center"></span>
-          </div>
-        </td>
+        <td style="${tdStyle}${hid('modelo')}">${modeloCell}</td>
 
         <td id="pnd-${tableName}-r${idx}-chk" class="chk-cell" style="${tdStyle};color:${!isFilled ? 'var(--muted)' : (statsChk.count > 0 ? '#4ade80' : '#f87171')};font-weight:900;font-size:18px${hid('chk')}">
-          ${isFilled ? (statsChk.count || '-') : ''}
+          ${chkHtml}
         </td>
-        <td id="pnd-${tableName}-r${idx}-media" class="media-cell" style="${tdStyle};color:${statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'};font-weight:900;font-size:18px${hid('media')}">
-          ${isFilled ? (statsChk.media || '-') : ''}
-        </td>
-
-        <td id="pnd-${tableName}-r${idx}-diasab" class="diasab-cell" title="Maior tempo em aberto entre os checklists deste modelo (média abaixo)" style="${tdStyle};color:${statsChk.maxAberto > 0 ? '#fbbf24' : 'var(--muted)'};font-weight:900;font-size:18px${hid('diasab')}">
-          ${isFilled ? pendDiasAbertoHtml(statsChk) : ''}
+        <td id="pnd-${tableName}-r${idx}-media" class="media-cell" title="${isDetailed ? 'Dias Úteis Andamento deste checklist' : 'Maior valor de Dias Úteis Andamento entre os checklists deste modelo'}" style="${tdStyle};font-weight:900;font-size:18px${hid('media')}">
+          ${mediaHtml}
         </td>
 
-        <td style="${tdStyle};background:rgba(255,255,255,0.02)${hid('qtd_wms')}">
-          <input id="pnd-${tableName}-r${idx}-qtd_wms" type="text" value="${row.qtd_wms || ''}"
-                 onfocus="${inpFocus}" onblur="${inpBlur}"
-                 onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'qtd_wms')"
-                 style="${inpBase};min-width:0;box-sizing:border-box" />
+        <td id="pnd-${tableName}-r${idx}-diasab" class="diasab-cell" title="${isDetailed ? 'Dias em Aberto deste checklist' : 'Maior tempo em aberto entre os checklists deste modelo'}" style="${tdStyle};font-weight:900;font-size:18px${hid('diasab')}">
+          ${diasAbHtml}
         </td>
-        <td style="${tdStyle};background:rgba(255,255,255,0.02)${hid('sugestao')}">
-          <input id="pnd-${tableName}-r${idx}-sugestao" type="text" value="${row.sugestao || ''}"
-                 onfocus="${inpFocus}" onblur="${inpBlur}"
-                 onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'sugestao')"
-                 style="${inpBase};min-width:0;box-sizing:border-box;color:var(--accent)" />
-        </td>
+
+        ${editFields}
 
         <td id="pnd-${tableName}-r${idx}-doca" class="doca-cell" style="${tdStyle};background:rgba(34,211,238,0.05);color:#22d3ee;font-weight:900;font-size:18px;text-shadow:0 0 8px rgba(34,211,238,0.4)${hid('doca')}">
-          ${isFilled ? (statsBol.doca || '-') : ''}
+          ${isFilled && !isVirtual ? (statsBol.doca || '-') : (isFilled && isVirtual ? '—' : '')}
         </td>
         <td id="pnd-${tableName}-r${idx}-lab" class="lab-cell" style="${tdStyle};background:rgba(167,139,250,0.05);color:#a78bfa;font-weight:900;font-size:18px;text-shadow:0 0 8px rgba(167,139,250,0.4)${hid('lab')}">
-          ${isFilled ? (statsBol.lab || '-') : ''}
+          ${isFilled && !isVirtual ? (statsBol.lab || '-') : (isFilled && isVirtual ? '—' : '')}
         </td>
 
         <td id="pnd-${tableName}-r${idx}-bolsao" class="bolsao-cell" style="${tdStyle};padding:4px 6px;white-space:normal;word-break:break-word${hid('bolsao')}">
-          ${isFilled ? pendBolsaoLocaisHtml(row.modelo) : ''}
+          ${isFilled && !isVirtual ? pendBolsaoLocaisHtml(row.modelo) : ''}
         </td>
 
-        <td style="${tdStyle};padding:4px${hid('obs')}">
-          <textarea id="pnd-${tableName}-r${idx}-obs" class="pend-textarea" rows="1" placeholder="..."
-                 onfocus="${inpFocus}" onblur="${inpBlur}"
-                 onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'obs')"
-                 style="${inpBase};height:${hObs};padding-top:10px;font-weight:500;text-transform:uppercase;color:var(--text);resize:vertical;max-width:100%">${esc(row.obs || '')}</textarea>
-        </td>
-        <td style="${tdLastStyle};padding:4px${hid('pecas')}">
-          <textarea id="pnd-${tableName}-r${idx}-pecas" class="pend-textarea" rows="1" placeholder="..."
-                 onfocus="${inpFocus}" onblur="${inpBlur}"
-                 onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'pecas')"
-                 style="${inpBase};height:${hPecas};padding-top:10px;font-weight:500;text-transform:uppercase;color:var(--text);resize:vertical;max-width:100%">${esc(row.pecas || '')}</textarea>
-        </td>
+        ${obsPecas}
 
       </tr>
     `;
+
+    if (canExpand) {
+      html += `
+      <tr id="pnd-${tableName}-det-${idx}" style="display:${isExpanded ? '' : 'none'}">
+        <td colspan="${visibleColCount}" style="padding:0;border-bottom:1px solid var(--border2)">
+          ${pendRenderChecklistDetalhes(statsChk)}
+        </td>
+      </tr>`;
+    }
   });
 
   html += `

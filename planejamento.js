@@ -420,14 +420,22 @@ function fluxolabPlanGetChecklistStats(modeloName) {
   let somaAberto = 0;
   let countAberto = 0;
   let maxAberto = 0;
+  let maxDiasUteis = 0;
+  let minDiasUteis = Infinity;
+  const rows = [];
   for (const r of _fluxolabChecklistsImported) {
     const rowM = r[kModelo] || '';
     const rm = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(rowM) : rowM.toUpperCase().replace(/\s+/g,'');
     if (rm === normAlvo) {
       count++;
+      rows.push(r);
       if (kDias) {
         let d = parseInt(r[kDias]);
-        if (!isNaN(d)) somaDias += d;
+        if (!isNaN(d)) {
+          somaDias += d;
+          if (d > maxDiasUteis) maxDiasUteis = d;
+          if (d < minDiasUteis) minDiasUteis = d;
+        }
       }
       if (kAberto) {
         let a = parseInt(r[kAberto]);
@@ -444,6 +452,10 @@ function fluxolabPlanGetChecklistStats(modeloName) {
     media: count > 0 ? Math.round(somaDias / count) : 0,
     mediaAberto: countAberto > 0 ? Math.round(somaAberto / countAberto) : 0,
     maxAberto,
+    maxDiasUteis,
+    minDiasUteis: minDiasUteis === Infinity ? 0 : minDiasUteis,
+    rows,
+    keys: { kModelo, kDias, kAberto },
   };
 }
 

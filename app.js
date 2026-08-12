@@ -163,6 +163,8 @@ function _fluxolabLogEntry(selb, de, para, equipamento, detalhes) {
     destinoEscolhido: det.destinoEscolhido || '',  // valor escolhido manualmente pelo usuário (quando aplicável)
     automatico: det.automatico !== undefined ? !!det.automatico : true, // false = usuário escolheu o destino manualmente
     obs:        det.obs || '',
+    motivo:     det.motivo || '',
+    solicitacaoPecas: det.solicitacaoPecas || '',
   };
   // Push para Supabase com retry em caso de falha
   _db.ref('/fluxolab_log').push(entry).catch(err => {
@@ -175,6 +177,8 @@ function _fluxolabLogEntry(selb, de, para, equipamento, detalhes) {
   _fluxolabLogUpdateBadge();
   // Atualiza painel se estiver aberto
   _fluxolabRenderLog();
+  _processarNovasEtiquetasMovimentacao(entry);
+  renderEtiquetasMovimentacao();
 }
 
 // Contador de entradas novas desde última abertura do log
@@ -194,25 +198,61 @@ function _fluxolabLogUpdateBadge() {
   }
 }
 
-function fluxolabStartLogListener() {
-  if (_fluxolabLogListener) return;
-  // Carrega os últimos 500 registros ordenados por ts desc
-  _fluxolabLogListener = _db.ref('/fluxolab_log')
-    .orderByChild('ts')
-    .limitToLast(500)
-    .on('value', snap => {
-      if (!snap.exists()) { _fluxolabMovLog = []; _fluxolabRenderLog(); return; }
-      const arr = [];
-      snap.forEach(child => arr.push(child.val()));
-      // Ordena mais recente primeiro
-      arr.sort((a, b) => (b.ts || 0) - (a.ts || 0));
-      // Merge: mantém entradas locais recentes que ainda não chegaram ao Supabase
-      // (push assíncrono pode não ter completado antes do listener disparar)
-      const syncedKeys = new Set(arr.map(e => String(e.ts) + '|' + e.selb));
-      const localOnly = _fluxolabMovLog.filter(e => !syncedKeys.has(String(e.ts) + '|' + e.selb));
-      _fluxolabMovLog = [...localOnly, ...arr].sort((a, b) => (b.ts || 0) - (a.ts || 0));
-      if (_fluxolabMovLog.length > 500) _fluxolabMovLog.length = 500;
+function _fluxolabMergeMovLogArr(arr) {
+  arr.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  const keyOf = e => String(e.ts) + '|' + e.selb + '|' + (e.de || '') + '|' + (e.para || '');
+  const syncedKeys = new Set(arr.map(keyOf));
+  const localOnly = _fluxolabMovLog.filter(e => !syncedKeys.has(keyOf(e)));
+  _fluxolabMovLog = [...localOnly, ...arr].sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  if (_fluxolabMovLog.length > 500) _fluxolabMovLog.length = 500;
+  _fluxolabRenderLog();
+  _initMovEtiquetasTracking();
+  _detectarNovasEtiquetasMovimentacao();
+  renderEtiquetasMovimentacao();
+}
+
+function _fluxolabApplyMovLogFromSnapshot(snap) {
+  if (!snap || !snap.exists()) {
+    if (!_fluxolabMovLog.length) {
+      _fluxolabMovLog = [];
       _fluxolabRenderLog();
+      renderEtiquetasMovimentacao();
+    }
+    return;
+  }
+  const arr = [];
+  snap.forEach(child => arr.push(child.val()));
+  _fluxolabMergeMovLogArr(arr);
+}
+
+async function _fluxolabFetchMovLogRecent() {
+  if (typeof _supa === 'undefined') return;
+  try {
+    const { data, error } = await _supa
+      .from('fluxolab_log')
+      .select('raw')
+      .order('id', { ascending: false })
+      .limit(500);
+    if (error) throw error;
+    const arr = (data || []).map(r => r.raw).filter(Boolean);
+    if (arr.length) _fluxolabMergeMovLogArr(arr);
+    else if (!_fluxolabMovLog.length) renderEtiquetasMovimentacao();
+  } catch (e) {
+    console.warn('[FluxoLAB Log] fetch recent:', e);
+  }
+}
+
+function fluxolabStartLogListener() {
+  if (_fluxolabLogListener) {
+    _fluxolabFetchMovLogRecent();
+    return;
+  }
+  _fluxolabFetchMovLogRecent();
+  // Sem limitToLast: no Supabase o corte por id não reflete o campo ts.
+  // Ordenamos sempre por ts no cliente após carregar.
+  _fluxolabLogListener = _db.ref('/fluxolab_log')
+    .on('value', snap => {
+      _fluxolabApplyMovLogFromSnapshot(snap);
     }, err => console.warn('[FluxoLAB Log]', err));
 }
 
@@ -1906,6 +1946,11 @@ function loginAs(u){
   if (typeof fluxolabStartChecklistsListener === 'function') {
     try { fluxolabStartChecklistsListener(); } catch(e) { console.warn('[Qualidade] Falha ao iniciar listener de checklists:', e); }
   }
+  // Listener do log de movimentações — necessário para impressão automática
+  // de etiquetas na aba Aguardando Peças sem abrir o FluxoLAB antes.
+  if (typeof fluxolabStartLogListener === 'function') {
+    try { fluxolabStartLogListener(); } catch(e) { console.warn('[FluxoLAB Log] Falha ao iniciar listener pós-login:', e); }
+  }
   // Carrega locks dos bolsões de peças do Supabase (persistência compartilhada)
   if (typeof _loadBolsaoLocksSupabase === 'function') {
     try { _loadBolsaoLocksSupabase(); } catch(e) { console.warn('[Bolsões] Falha ao carregar locks:', e); }
@@ -2362,10 +2407,13 @@ function setView(v,btn){
   if(v==='consulta'){
     cFilter=''; resetStabs('cons-tabs',0);
     _initConsultaDateSelect();
-    // Se ainda não carregou nenhum range, mostra aviso de filtro
-    if(!_consultaDateKey){
+    // Se ainda não carregou nenhum range, mostra aviso — ou busca SELB se já houver texto
+    const q0 = (document.getElementById('search-q')?.value || '').trim();
+    if(_consultaIsSelbQuery(q0)){
+      onConsultaSearchInput();
+    } else if(!_consultaDateKey){
       const cBody = document.getElementById('consulta-body');
-      if (cBody) cBody.innerHTML = '<tr><td colspan="15" class="empty" style="text-align:center;padding:24px;color:var(--muted)">Selecione um período nos filtros acima para visualizar os registros.</td></tr>';
+      if (cBody) cBody.innerHTML = '<tr><td colspan="15" class="empty" style="text-align:center;padding:24px;color:var(--muted)">Selecione um período nos filtros acima — ou digite um SELB (3+ caracteres) para buscar sem data.</td></tr>';
     } else {
       renderConsulta();
     }
@@ -4008,14 +4056,24 @@ async function confirmarFin(){
 
   renderCard(actionUid); closeModal('modal-finish'); updateSummary();
   // FluxoLAB: ao finalizar, move o SELB conforme fluxo definido em _fluxolabDestinoFinal.
-  // 'ok'    → próximo bolsão (LIMPEZA→LINHA_LIMPEZA, MONTAGEM/COMPLEXA→QUALIDADE)
-  // 'scrap' → bolsão SCRAP
-  // 'rep'   → mantém no bolsão atual (SELB reprovado fica no último bolsão registrado)
-  // Usa h.selb como fonte principal; fallback para selbAtualSnapshot caso h seja nulo
-  // (evita SELB ficar preso no bolsão quando listener Supabase limpa s.selb antes do fim do await)
   const selbParaMover = (h && h.selb) ? h.selb : selbAtualSnapshot;
+  const solicitacaoPecas = selbParaMover ? Object.values(_solicitacoesPecas || {})
+    .filter(p => String(p.selb || '').trim().toUpperCase() === String(selbParaMover).trim().toUpperCase())
+    .map(p => `${p.peca || 'Peça'}${Number(p.quantidade) > 1 ? ' x' + p.quantidade : ''}${p.obs ? ' (' + p.obs + ')' : ''}`)
+    .filter((v, i, arr) => arr.indexOf(v) === i)
+    .join(', ') : '';
+
   if(selbParaMover){
-    fluxolabFinalizarSelb(selbParaMover, u.sector, res, destinoEscolhido || null).catch(e => console.warn('[FluxoLAB] Erro ao mover SELB no FluxoLAB:', e));
+    fluxolabFinalizarSelb(selbParaMover, u.sector, res, destinoEscolhido || null, {
+      motivo: motivo || comentario,
+      solicitacaoPecas,
+    }).catch(e => console.warn('[FluxoLAB] Erro ao mover SELB no FluxoLAB:', e));
+  }
+
+  if (res !== 'ok') {
+    // Só alerta no operador — a etiqueta cai no spool "Imprimir movimentações"
+    // e a estação com agente/impressão automática imprime em segundo plano
+    _mostrarAlertaEtiquetaMovOperador();
   }
   if(currentUser && !currentUser.isAdmin && currentUser.id === actionUid &&
      document.getElementById('view-operador').classList.contains('active')){
@@ -4342,6 +4400,111 @@ setTimeout(fetchDashboardSaudeEquipe, 3000);
 // ════ CONSULTA ════
 let _consultaDateKey = null;   // dateKey currently shown in consulta (kept for compat)
 let _consultaRecords = [];     // records for the selected date range
+let _consultaSelbSearchRecs = null; // resultados da busca por SELB (ignora data)
+let _consultaSelbSearchQ = '';
+let _consultaSelbSearchTimer = null;
+let _consultaSelbSearchToken = 0;
+
+function _consultaIsSelbQuery(q){
+  const s = String(q || '').trim().toUpperCase();
+  // A partir de 3 caracteres alfanuméricos (ex.: 6RC, SDM8) — busca SELB sem filtro de data
+  return s.length >= 3 && /^[A-Z0-9_-]+$/.test(s);
+}
+
+function onConsultaSearchInput(){
+  const q = (document.getElementById('search-q')?.value || '').trim().toUpperCase();
+  clearTimeout(_consultaSelbSearchTimer);
+
+  if(!_consultaIsSelbQuery(q)){
+    _consultaSelbSearchRecs = null;
+    _consultaSelbSearchQ = '';
+    _consultaSelbSearchToken++;
+    renderConsulta();
+    return;
+  }
+
+  // Feedback imediato com o que já estiver em memória
+  renderConsulta();
+
+  _consultaSelbSearchTimer = setTimeout(() => {
+    _consultaBuscarSelbGlobal(q);
+  }, 280);
+}
+
+async function _consultaBuscarSelbGlobal(qRaw){
+  const q = String(qRaw || '').trim().toUpperCase();
+  if(!_consultaIsSelbQuery(q)) return;
+
+  const token = ++_consultaSelbSearchToken;
+  const loading = document.getElementById('consulta-loading');
+  if(loading) loading.style.display = 'block';
+
+  try {
+    const byId = new Map();
+    const addRec = (rec) => {
+      if(!rec || !rec.selb) return;
+      if(String(rec.selb).toUpperCase().indexOf(q) < 0) return;
+      if(rec.status === 'closed_stale') return;
+      const id = rec._docId || (rec.id + '|' + (rec._dateKey || ''));
+      if(!id || byId.has(id)) return;
+      byId.set(id, rec);
+    };
+
+    // Cache local do período + history do dia
+    (_consultaRecords || []).forEach(addRec);
+    (typeof history !== 'undefined' ? history : []).forEach(addRec);
+
+    // Busca global no Supabase (sem filtro de data)
+    if(typeof _supa !== 'undefined'){
+      const { data, error } = await _supa
+        .from('history')
+        .select('id,date_key,raw,selb,status,start_epoch')
+        .ilike('selb', '%' + q + '%')
+        .order('start_epoch', { ascending: false })
+        .limit(300);
+      if(error) throw error;
+      (data || []).forEach(row => {
+        const raw = (row.raw && typeof row.raw === 'object') ? row.raw : {};
+        addRec({
+          ...raw,
+          selb: raw.selb || row.selb,
+          status: raw.status || row.status,
+          startEpoch: raw.startEpoch || row.start_epoch,
+          _docId: row.id,
+          _dateKey: row.date_key || raw._dateKey || '',
+        });
+      });
+    }
+
+    if(token !== _consultaSelbSearchToken) return; // busca antiga descartada
+
+    const arr = Array.from(byId.values()).sort((a, b) => (b.startEpoch || 0) - (a.startEpoch || 0));
+    _consultaSelbSearchRecs = arr;
+    _consultaSelbSearchQ = q;
+  } catch(e) {
+    console.warn('[Consulta] busca SELB global:', e);
+    if(token === _consultaSelbSearchToken){
+      // Mantém o que houver em memória
+      const local = []
+        .concat(_consultaRecords || [])
+        .concat(typeof history !== 'undefined' ? history : [])
+        .filter(h => h && h.selb && String(h.selb).toUpperCase().includes(q) && h.status !== 'closed_stale');
+      const seen = new Set();
+      _consultaSelbSearchRecs = local.filter(h => {
+        const id = h._docId || '';
+        if(seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+      _consultaSelbSearchQ = q;
+    }
+  } finally {
+    if(token === _consultaSelbSearchToken){
+      if(loading) loading.style.display = 'none';
+      renderConsulta();
+    }
+  }
+}
 
 function _dateKeysInRange(fromIso, toIso){
   const keys = [];
@@ -4408,6 +4571,8 @@ async function loadConsultaRange(){
 
 // ════ AGUARDANDO PEÇAS ════
 async function renderPecasView(){
+  fluxolabStartLogListener();
+  renderEtiquetasMovimentacao();
   const tbody = document.getElementById('pecas-body');
   const q = (document.getElementById('pecas-search').value||'').toUpperCase();
   if(!tbody) return;
@@ -6576,9 +6741,22 @@ function setCFilter(f,btn){
 }
 
 function renderConsulta(){
-  const src = _consultaRecords;
-  const q = (document.getElementById('search-q').value||'').toUpperCase();
+  const q = (document.getElementById('search-q').value||'').toUpperCase().trim();
+  const selbMode = _consultaIsSelbQuery(q);
+  const src = (selbMode && _consultaSelbSearchRecs && _consultaSelbSearchQ === q)
+    ? _consultaSelbSearchRecs
+    : (selbMode
+        ? [].concat(_consultaRecords || [], typeof history !== 'undefined' ? history : [])
+            .filter(h => h && h.selb && String(h.selb).toUpperCase().includes(q))
+        : _consultaRecords);
   const tbody = document.getElementById('consulta-body');
+  if(!tbody) return;
+
+  // Sem período e sem busca de SELB → pede filtro de data
+  if(!selbMode && (!_consultaRecords || !_consultaRecords.length) && !_consultaDateKey){
+    tbody.innerHTML = '<tr><td colspan="15" class="empty" style="text-align:center;padding:24px;color:var(--muted)">Selecione um período nos filtros acima — ou digite um SELB (3+ caracteres) para buscar sem data.</td></tr>';
+    return;
+  }
 
   const isAdmin = currentUser && currentUser.isAdmin;
   const podeReprovar = currentUser && (isAdmin || (!currentUser.isAdmin && currentUser.sector==='QUALIDADE'));
@@ -6594,16 +6772,38 @@ function renderConsulta(){
 
   const stFilter = document.getElementById('consulta-status-filter') ? document.getElementById('consulta-status-filter').value : '';
 
+  const seenIds = new Set();
   const fl = src.filter(h=>{
-    if(h.status==='closed_stale') return false;
-    const mq=!q||h.selb.includes(q)||h.name.toUpperCase().includes(q)||h.pin.includes(q)||(h.local||'').toUpperCase().includes(q)||(h.code||'').toUpperCase().includes(q);
+    if(!h || h.status==='closed_stale') return false;
+    const id = h._docId || (String(h.selb||'') + '|' + String(h.startEpoch||'') + '|' + String(h._dateKey||''));
+    if(seenIds.has(id)) return false;
+    seenIds.add(id);
+    // Em modo SELB (≥3 chars), filtra só pelo código e ignora o range de data
+    const mq = selbMode
+      ? String(h.selb||'').toUpperCase().includes(q)
+      : (!q||h.selb.includes(q)||h.name.toUpperCase().includes(q)||h.pin.includes(q)||(h.local||'').toUpperCase().includes(q)||(h.code||'').toUpperCase().includes(q));
     const ms = !stFilter || h.status === stFilter || (stFilter === 'Máquina A' && h.status === 'Máquina A') || (stFilter === 'Retomada A.G' && h.status === 'Retomada A.G');
     return mq&&ms&&(!cFilter||h.sector===cFilter);
   });
 
+  const hintEl = document.getElementById('consulta-selb-hint');
+  if(hintEl){
+    if(selbMode){
+      hintEl.style.display = 'block';
+      hintEl.textContent = '🔍 Busca por SELB "' + q + '" — filtro de data ignorado' + (fl.length ? ' · ' + fl.length + ' registro(s)' : '');
+    } else {
+      hintEl.style.display = 'none';
+    }
+  }
+
   const extraCols = (podeReprovar ? 1 : 0) + (isAdmin ? 1 : 0) + ((temReprovados || isAdmin) ? 1 : 0);
   const colspan = 12 + extraCols;
-  if(!fl.length){ tbody.innerHTML=`<tr><td colspan="${colspan}" class="empty">Nenhum registro encontrado.</td></tr>`; return; }
+  if(!fl.length){
+    tbody.innerHTML = selbMode
+      ? `<tr><td colspan="${colspan}" class="empty">Nenhum SELB encontrado com "${q}".</td></tr>`
+      : `<tr><td colspan="${colspan}" class="empty">Nenhum registro encontrado.</td></tr>`;
+    return;
+  }
 
   const bm={ok:'bok',rep:'brep',running:'brun',scrap:'bscr',aguardando:'bpec',cancelado:'brep',closed_stale:'brun'};
   const lm={ok:'Aprovado',rep:'Reprovado',running:'Em andamento',scrap:'SCRAP',aguardando:'Aguardando Peça',cancelado:'Cancelado',closed_stale:'—'};
@@ -7136,11 +7336,16 @@ async function confirmarEdicaoStatus(){
 
 // ════ COPIAR SELBs ════
 function copiarSelbs(){
-  const q=(document.getElementById('search-q').value||'').toUpperCase();
-  const src = (_consultaRecords && _consultaRecords.length > 0) ? _consultaRecords : history;
+  const q=(document.getElementById('search-q').value||'').toUpperCase().trim();
+  const selbMode = _consultaIsSelbQuery(q);
+  const src = (selbMode && _consultaSelbSearchRecs && _consultaSelbSearchQ === q)
+    ? _consultaSelbSearchRecs
+    : ((_consultaRecords && _consultaRecords.length > 0) ? _consultaRecords : history);
   const fl=src.filter(h=>{
     if(h.status==='closed_stale') return false;
-    const mq=!q||h.selb.includes(q)||h.name.toUpperCase().includes(q)||h.pin.includes(q)||(h.local||'').toUpperCase().includes(q)||(h.code||'').toUpperCase().includes(q);
+    const mq = selbMode
+      ? String(h.selb||'').toUpperCase().includes(q)
+      : (!q||h.selb.includes(q)||h.name.toUpperCase().includes(q)||h.pin.includes(q)||(h.local||'').toUpperCase().includes(q)||(h.code||'').toUpperCase().includes(q));
     return mq&&(!cFilter||h.sector===cFilter);
   });
   // unique SELBs preserving order
@@ -8696,6 +8901,127 @@ function copiarScrapSelbs(){
     btn.style.borderColor='var(--purple)'; btn.style.color='var(--purple)';
     setTimeout(()=>{ btn.innerHTML=orig; btn.style.borderColor='var(--border2)'; btn.style.color='var(--muted)'; },2000);
   }).catch(()=>{ alert('✅ '+selbs.length+' SELBs SCRAP copiados!'); });
+}
+
+// Varre bolsões do FluxoLAB e remove SELBs que já têm registro SCRAP nos relatórios
+async function scrapVarrerBolsoesFluxolab(){
+  if(!currentUser){
+    alert('Faça login para usar esta ferramenta.');
+    return;
+  }
+  if(!confirm('Varrer os bolsões do FluxoLAB?\n\nSerão removidos os SELBs que já possuem registro SCRAP nos relatórios e ainda estão em algum bolsão.')) return;
+
+  const btn = document.getElementById('btn-scrap-varrer-bolsoes');
+  const origHtml = btn ? btn.innerHTML : '';
+  if(btn){ btn.disabled = true; btn.innerHTML = '⏳ Varrendo…'; }
+
+  try {
+    // 1) Atualiza snapshot dos bolsões
+    let data = {};
+    try {
+      data = (typeof dbGet === 'function' ? await dbGet('/fluxolab') : null) || {};
+      _fluxolabData = data;
+    } catch(e) {
+      data = (typeof _fluxolabData === 'object' && _fluxolabData) ? _fluxolabData : {};
+    }
+
+    // 2) Coleta SELBs presentes nos bolsões (ignora chaves internas _*)
+    const found = [];
+    Object.entries(data).forEach(([bolsao, items]) => {
+      if(!bolsao || String(bolsao).charAt(0) === '_') return;
+      if(!items || typeof items !== 'object') return;
+      Object.values(items).forEach(v => {
+        const code = String(v && v.selb ? v.selb : '').trim().toUpperCase();
+        if(code) found.push({ code, bolsao });
+      });
+    });
+
+    const uniqueCodes = [...new Set(found.map(x => x.code))];
+    if(!uniqueCodes.length){
+      alert('Nenhum SELB encontrado nos bolsões do FluxoLAB.');
+      return;
+    }
+
+    // 3) Monta conjunto de SELBs com registro SCRAP (relatório carregado + histórico do dia)
+    const scrapSet = new Set();
+    const addScrap = (list) => {
+      (list || []).forEach(h => {
+        if(h && h.status === 'scrap' && h.selb){
+          scrapSet.add(String(h.selb).trim().toUpperCase());
+        }
+      });
+    };
+    addScrap(_scrapAllRecs);
+    addScrap(typeof history !== 'undefined' ? history : []);
+
+    // 4) Confirma no banco os SELBs dos bolsões que ainda não batem no cache local
+    const pending = uniqueCodes.filter(c => !scrapSet.has(c));
+    if(pending.length && typeof _supa !== 'undefined'){
+      const CHUNK = 80;
+      for(let i = 0; i < pending.length; i += CHUNK){
+        const chunk = pending.slice(i, i + CHUNK);
+        try {
+          const { data: rows, error } = await _supa
+            .from('history')
+            .select('selb,status')
+            .eq('status', 'scrap')
+            .in('selb', chunk);
+          if(error) throw error;
+          (rows || []).forEach(r => {
+            if(r && r.selb) scrapSet.add(String(r.selb).trim().toUpperCase());
+          });
+        } catch(e) {
+          console.warn('[SCRAP Varredura] Falha ao consultar history:', e);
+        }
+      }
+    }
+
+    // 5) Quais SELBs dos bolsões têm scrap → remover
+    const toRemove = uniqueCodes.filter(c => scrapSet.has(c));
+    if(!toRemove.length){
+      alert('Varredura concluída.\n\n' + uniqueCodes.length + ' SELB(s) nos bolsões — nenhum com registro SCRAP.');
+      return;
+    }
+
+    const bolsaoPorSelb = {};
+    found.forEach(({ code, bolsao }) => {
+      if(!bolsaoPorSelb[code]) bolsaoPorSelb[code] = [];
+      if(bolsaoPorSelb[code].indexOf(bolsao) < 0) bolsaoPorSelb[code].push(bolsao);
+    });
+
+    const results = await Promise.allSettled(toRemove.map(async code => {
+      await fluxolabRemoveSelbGlobal(code);
+      const de = (bolsaoPorSelb[code] || []).join(', ') || '—';
+      const equipNome = (typeof getEquipName === 'function' ? getEquipName(code) : '') || '';
+      if(typeof _fluxolabLogEntry === 'function'){
+        _fluxolabLogEntry(code, de, '— (varredura SCRAP)', equipNome, {
+          tipo: 'auditoria', automatico: true, obs: 'Removido por registro SCRAP nos relatórios',
+        });
+      }
+      return code;
+    }));
+
+    const ok = results.filter(r => r.status === 'fulfilled').length;
+    const fail = results.filter(r => r.status === 'rejected').length;
+    const lista = toRemove.slice(0, 20).join(', ') + (toRemove.length > 20 ? '…' : '');
+
+    if(typeof _fluxolabRenderGrid === 'function'){
+      try { _fluxolabRenderGrid(); } catch(e){}
+    }
+
+    alert(
+      '✅ Varredura concluída.\n\n' +
+      'SELBs nos bolsões: ' + uniqueCodes.length + '\n' +
+      'Com registro SCRAP: ' + toRemove.length + '\n' +
+      'Removidos: ' + ok + (fail ? '\nFalhas: ' + fail : '') + '\n\n' +
+      (lista ? 'SELBs: ' + lista : '')
+    );
+  } catch(e) {
+    console.error('[SCRAP Varredura]', e);
+    alert('Erro na varredura: ' + (e && e.message ? e.message : e));
+  } finally {
+    if(btn){ btn.disabled = false; btn.innerHTML = origHtml; }
+  }
 }
 
 // ════ REPROVADAS ════
@@ -14532,7 +14858,6 @@ function qualMakeLabel({selb, serie, sku, modelo, unit, auditado, checklist, ped
     const bar = qualEl('div','ped-auditado-bar');
     bar.textContent = 'AUDITADO';
     root.appendChild(bar);
-    root.style.paddingTop = '0.75cm';
   }
 
   // ── Checklist flag (sem barra vertical — apenas o divider horizontal) ──
@@ -15535,7 +15860,10 @@ ${headStyles}
   html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; width: 15cm !important; height: 10cm !important; overflow: hidden !important; }
   .no-print, .ped-unit-pill { display: none !important; }
   .ped-label-wrap { display: block !important; position: relative !important; width: 15cm !important; height: 10cm !important; margin: 0 !important; padding: 0 !important; transform: none !important; overflow: hidden !important; }
-  .ped-etiqueta { width: 15cm !important; height: 10cm !important; box-sizing: border-box !important; margin: 0 !important; padding: 0 !important; overflow: hidden !important; }
+  .ped-etiqueta { width: 15cm !important; height: 10cm !important; box-sizing: border-box !important; margin: 0 !important; padding: 0.12cm 0.18cm 0.48cm 0.18cm !important; overflow: hidden !important; display: flex !important; flex-direction: column !important; justify-content: flex-start !important; }
+  .ped-etiq-row { max-height: 2.95cm !important; flex: 0 0 2.95cm !important; }
+  .ped-etiq-row:last-child { max-height: 2.85cm !important; flex: 0 0 2.85cm !important; padding-bottom: 0.18cm !important; }
+  .ped-etiq-qr { width: 2.25cm !important; height: 2.25cm !important; }
   @media print {
     html, body { width: 15cm !important; height: 10cm !important; overflow: hidden !important; }
     * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
@@ -18021,6 +18349,8 @@ async function fmovExecutar() {
   if (_fmovQueue.length === 0) { alert('Adicione pelo menos um SELB.'); return; }
   if (!destEl) { alert('Selecione o bolsão de destino.'); return; }
   const destBolsao = destEl.value;
+  const motivoEl = document.getElementById('fmov-motivo');
+  const motivoMovimentacao = motivoEl ? motivoEl.value.trim() : '';
 
   const btn = document.getElementById('btn-fmov-mover');
   if (btn) { btn.disabled = true; btn.textContent = 'Movendo ' + _fmovQueue.length + ' SELB(s)…'; }
@@ -18042,7 +18372,10 @@ async function fmovExecutar() {
         movidoPor:   currentUser ? currentUser.name : '',
       });
       // Log de movimentação manual
-      _fluxolabLogEntry(item.code, item.bolsaoAtual || '—', destBolsao, item.equip || 'DESCONHECIDO');
+      _fluxolabLogEntry(item.code, item.bolsaoAtual || '—', destBolsao, item.equip || 'DESCONHECIDO', {
+        tipo: 'manual', automatico: false,
+        motivo: motivoMovimentacao || 'Movimentação manual',
+      });
     } catch (e) {
       erros.push(item.code + ': ' + e.message);
     }
@@ -18057,6 +18390,7 @@ async function fmovExecutar() {
   // Limpa tudo
   _fmovQueue = [];
   if (inp) inp.value = '';
+  if (motivoEl) motivoEl.value = '';
   const fb = document.getElementById('fmov-typing-feedback');
   if (fb) fb.textContent = '';
   _fmovRenderChips();
@@ -18494,7 +18828,7 @@ async function fluxolabRemoveSelbGlobal(selbCode) {
   }
 }
 
-async function fluxolabFinalizarSelb(selbCode, sector, res, destinoOverride){
+async function fluxolabFinalizarSelb(selbCode, sector, res, destinoOverride, detalhesFinalizacao){
   try{
     // Reprovado: SELB permanece no último bolsão registrado (não move nem remove)
     if(res === 'rep'){
@@ -18549,6 +18883,8 @@ async function fluxolabFinalizarSelb(selbCode, sector, res, destinoOverride){
     _fluxolabLogEntry(selbCode, bolsaoAtual || sector, dest, equipNome, {
       tipo: 'finalizar', setor: sector, resultado: res,
       destinoEscolhido: destinoOverride || '', automatico: !destinoOverride,
+      motivo: detalhesFinalizacao?.motivo || '',
+      solicitacaoPecas: detalhesFinalizacao?.solicitacaoPecas || '',
     });
   }catch(e){ console.warn('[FluxoLAB] Erro ao finalizar:', e); }
 }
@@ -19680,6 +20016,9 @@ function fluxolabRenderModelos() {
     `<th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);white-space:nowrap;text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3)">${b.icon} ${b.label}</th>`
   ).join('');
 
+  // Modelos já listados em Programação Entrada em Lote / Pendências Mistas / Complexas
+  const modelosNoPlano = _fluxolabModelosEmProgramacaoOuPendencias();
+
   const rows = entradas.map(([modelo, dados], idx) => {
     const clTotal = checklistIdx.get(_fluxolabNormModel(modelo)) || 0;
     // Total de SELBs do modelo (soma de todos os bolsões, incluindo SCRAP) para base proporcional
@@ -19808,13 +20147,26 @@ function fluxolabRenderModelos() {
     })();
     const _urgBadge = _fluxolabUrgBadge(_urgQtd);
 
-    const mainRow = `<tr style="background:${_urgQtd ? 'rgba(239,68,68,.10)' : rowBg};${_urgQtd ? 'box-shadow:inset 4px 0 0 #ef4444;' : ''}transition:background .12s;cursor:${hasDet?'pointer':'default'}"
+    // Azul: modelo/pedido fora da Programação Entrada em Lote e das Pendências Mistas/Complexas
+    const foraDoPlano = !modelosNoPlano.has(normKey);
+    const _foraBadge = foraDoPlano ? _fluxolabBadgeForaProgramacao() : '';
+    const rowBgFinal = _urgQtd
+      ? 'rgba(239,68,68,.10)'
+      : (foraDoPlano ? 'rgba(59,130,246,.08)' : rowBg);
+    const rowInset = _urgQtd
+      ? 'box-shadow:inset 4px 0 0 #ef4444;'
+      : (foraDoPlano ? 'box-shadow:inset 4px 0 0 #3b82f6;' : '');
+
+    const modeloEnc = encodeURIComponent(modelo);
+    const mainRow = `<tr style="background:${rowBgFinal};${rowInset}transition:background .12s;cursor:${hasDet?'pointer':'default'}"
+      data-modelo-enc="${modeloEnc}"
+      oncontextmenu="return fluxolabModeloCtxMenu(event, this.getAttribute('data-modelo-enc'))"
       ${hasDet ? `onclick="(function(el,id,nk){var t=document.getElementById(id);var open=t.style.display!=='none';t.style.display=open?'none':'';var a=el.querySelector('.fxmod-arr');if(a)a.style.transform=open?'':'rotate(180deg)';if(open)window._fluxolabModelosExpanded.delete(nk);else window._fluxolabModelosExpanded.add(nk);})(this,'${detId}','${normKey}')"` : ''}
-      onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background='${_urgQtd ? 'rgba(239,68,68,.10)' : rowBg}'">
+      onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background='${rowBgFinal}'">
       <td style="padding:10px 16px;border-bottom:1px solid var(--border);min-width:220px;max-width:340px">
         <div style="display:flex;align-items:center;gap:10px">
           ${hasDet ? `<span class="fxmod-arr" style="color:var(--muted);font-size:12px;transition:transform .2s;flex-shrink:0;${isOpen ? 'transform:rotate(180deg)' : ''}">▾</span>` : `<span style="width:12px;flex-shrink:0"></span>`}
-          <div style="font-size:13px;font-weight:600;color:var(--text);line-height:1.3;word-break:break-word;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span>${modelo}</span>${_urgBadge}</div>
+          <div style="font-size:13px;font-weight:600;color:var(--text);line-height:1.3;word-break:break-word;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span>${modelo}</span>${_urgBadge}${_foraBadge}</div>
         </div>
       </td>
       <td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">
@@ -19835,6 +20187,9 @@ function fluxolabRenderModelos() {
 
     return mainRow + detRow;
   }).join('');
+
+  // Contagem de modelos fora do plano (para card resumo)
+  const _sumForaPlano = entradas.reduce((s, [m]) => s + (_fluxolabNormModel(m) && !modelosNoPlano.has(_fluxolabNormModel(m)) ? 1 : 0), 0);
 
   // ── Painel de resumo: modelos com faltantes e/ou doca disponível ──
   const alertas = entradas
@@ -19869,6 +20224,7 @@ function fluxolabRenderModelos() {
       ${_sumCard('Checklists', _sumTotalCL, '#f59e0b',      '📋')}
       ${_sumCard('No LAB',    _sumTotalLAB, '#22d3ee',      '🔬')}
       ${_sumCard('Faltantes', _sumFaltantes, _sumFaltantes > 0 ? '#ef4444' : '#22c55e', '⚠')}
+      ${_sumCard('Fora do plano', _sumForaPlano, _sumForaPlano > 0 ? '#60a5fa' : '#22c55e', '●')}
     </div>
 
     <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:16px;overflow:hidden">
@@ -20765,6 +21121,164 @@ function _fluxolabNormModel(s){
     .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
     .replace(/[-_./\\()\[\]{}|#@!?*,;:'"]/g,' ')
     .replace(/\s+/g,' ').trim();
+}
+
+/** Modelos presentes em Programação Entrada em Lote (tabela1) OU Pendências Mistas/Complexas */
+function _fluxolabModelosEmProgramacaoOuPendencias(){
+  const set = new Set();
+  const add = (modelo) => {
+    const n = _fluxolabNormModel(modelo);
+    if (n) set.add(n);
+  };
+  try {
+    const t1 = (typeof _fluxolabPlanejamentoState !== 'undefined' && _fluxolabPlanejamentoState && _fluxolabPlanejamentoState.tabela1) || [];
+    t1.forEach(r => { if (r && String(r.modelo || '').trim()) add(r.modelo); });
+  } catch (e) {}
+  try {
+    const st = (typeof _fluxolabPendenciasState !== 'undefined' && _fluxolabPendenciasState) ? _fluxolabPendenciasState : null;
+    if (st) {
+      (st.mistas || []).forEach(r => { if (r && String(r.modelo || '').trim()) add(r.modelo); });
+      (st.complexas || []).forEach(r => { if (r && String(r.modelo || '').trim()) add(r.modelo); });
+    }
+  } catch (e) {}
+  return set;
+}
+
+function _fluxolabBadgeForaProgramacao(){
+  return `<span title="Este modelo/pedido NÃO está na Programação Entrada em Lote Laboratório nem em Pendências Mistas/Complexas" style="display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:800;letter-spacing:.02em;background:rgba(59,130,246,.16);color:#60a5fa;border:1px solid rgba(59,130,246,.45);border-radius:7px;padding:2px 8px;white-space:nowrap;flex-shrink:0">● Fora do plano</span>`;
+}
+
+function _fluxolabModeloJaNaLista(destino, modelo){
+  const norm = _fluxolabNormModel(modelo);
+  if (!norm) return false;
+  try {
+    if (destino === 'lote') {
+      const list = (_fluxolabPlanejamentoState && _fluxolabPlanejamentoState.tabela1) || [];
+      return list.some(r => r && r.modelo && _fluxolabNormModel(r.modelo) === norm);
+    }
+    if (destino === 'mistas' || destino === 'complexas') {
+      const list = (_fluxolabPendenciasState && _fluxolabPendenciasState[destino]) || [];
+      return list.some(r => r && r.modelo && _fluxolabNormModel(r.modelo) === norm);
+    }
+  } catch (e) {}
+  return false;
+}
+
+function _fluxolabHideModeloCtxMenu(){
+  const el = document.getElementById('fluxolab-modelo-ctx-menu');
+  if (el) el.style.display = 'none';
+}
+
+/** Menu botão direito na tabela Agrupamento por Modelo */
+function fluxolabModeloCtxMenu(e, modeloEnc){
+  try { e.preventDefault(); e.stopPropagation(); } catch (err) {}
+  const modelo = decodeURIComponent(modeloEnc || '');
+  if (!modelo) return false;
+
+  let menu = document.getElementById('fluxolab-modelo-ctx-menu');
+  if (!menu) {
+    menu = document.createElement('div');
+    menu.id = 'fluxolab-modelo-ctx-menu';
+    menu.style.cssText = 'position:fixed;z-index:999999;min-width:280px;background:#1e1526;border:1px solid rgba(232,121,249,.4);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.55);padding:6px;display:none;font-family:var(--font)';
+    document.body.appendChild(menu);
+    document.addEventListener('click', _fluxolabHideModeloCtxMenu);
+    document.addEventListener('scroll', _fluxolabHideModeloCtxMenu, true);
+    window.addEventListener('resize', _fluxolabHideModeloCtxMenu);
+  }
+
+  const opt = (destino, label, color, already) => {
+    const dis = already ? 'opacity:.45;cursor:default' : 'cursor:pointer';
+    const hint = already ? ' <span style="font-size:10px;color:var(--muted)">(já incluso)</span>' : '';
+    const click = already ? '' : `onclick="fluxolabIncluirModeloNoPlano('${destino}', decodeURIComponent('${encodeURIComponent(modelo)}'))"`;
+    return `<button type="button" ${click} style="display:block;width:100%;text-align:left;background:transparent;border:none;border-radius:8px;padding:10px 12px;color:${color};font-family:var(--font);font-size:12px;font-weight:700;${dis}"
+      onmouseover="if(!this.disabled)this.style.background='rgba(255,255,255,.06)'" onmouseout="this.style.background='transparent'" ${already ? 'disabled' : ''}>${label}${hint}</button>`;
+  };
+
+  menu.innerHTML = `
+    <div style="padding:8px 12px 6px;font-size:10px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Incluir modelo</div>
+    <div style="padding:0 12px 8px;font-size:11px;color:var(--text);font-weight:600;line-height:1.3;max-width:300px;word-break:break-word">${String(modelo).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</div>
+    <div style="height:1px;background:rgba(255,255,255,.08);margin:2px 8px 6px"></div>
+    ${opt('lote', '📥 Entrada em Lote Laboratório', '#22d3ee', _fluxolabModeloJaNaLista('lote', modelo))}
+    ${opt('mistas', '⚠ Pendências Mistas', '#fbbf24', _fluxolabModeloJaNaLista('mistas', modelo))}
+    ${opt('complexas', '🧩 Complexas', '#f472b6', _fluxolabModeloJaNaLista('complexas', modelo))}
+  `;
+
+  menu.style.display = 'block';
+  const pad = 8;
+  let x = e.clientX;
+  let y = e.clientY;
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  requestAnimationFrame(() => {
+    const r = menu.getBoundingClientRect();
+    if (r.right > window.innerWidth - pad) x = Math.max(pad, window.innerWidth - r.width - pad);
+    if (r.bottom > window.innerHeight - pad) y = Math.max(pad, window.innerHeight - r.height - pad);
+    menu.style.left = x + 'px';
+    menu.style.top = y + 'px';
+  });
+  return false;
+}
+
+function fluxolabIncluirModeloNoPlano(destino, modelo){
+  _fluxolabHideModeloCtxMenu();
+  modelo = String(modelo || '').trim();
+  if (!modelo) return;
+
+  const emptyRow = () => ({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
+  const ensureTrailingEmpty = (list) => {
+    if (!list.length || String(list[list.length - 1].modelo || '').trim()) list.push(emptyRow());
+  };
+  const fillFirstEmpty = (list) => {
+    let idx = list.findIndex(r => !String((r && r.modelo) || '').trim());
+    if (idx < 0) {
+      list.push(emptyRow());
+      idx = list.length - 1;
+    }
+    list[idx].modelo = modelo;
+    ensureTrailingEmpty(list);
+    return idx;
+  };
+
+  if (destino === 'lote') {
+    if (typeof _fluxolabPlanejamentoState === 'undefined') {
+      alert('Planejamento ainda não carregou. Abra a aba Planejamento do Dia e tente de novo.');
+      return;
+    }
+    if (_fluxolabModeloJaNaLista('lote', modelo)) {
+      alert('Este modelo já está na Programação Entrada em Lote Laboratório.');
+      return;
+    }
+    if (!_fluxolabPlanejamentoState.tabela1) _fluxolabPlanejamentoState.tabela1 = [];
+    fillFirstEmpty(_fluxolabPlanejamentoState.tabela1);
+    if (typeof fluxolabSavePlanejamentoDebounced === 'function') fluxolabSavePlanejamentoDebounced();
+    if (typeof fluxolabRenderPlanejamento === 'function') fluxolabRenderPlanejamento();
+    if (typeof toast === 'function') toast('Incluído em Entrada em Lote: ' + modelo);
+    else if (typeof showToast === 'function') showToast('Incluído em Entrada em Lote', 'ok');
+    try { fluxolabRenderModelos(); } catch (e) {}
+    return;
+  }
+
+  if (destino === 'mistas' || destino === 'complexas') {
+    if (typeof _fluxolabPendenciasState === 'undefined') {
+      alert('Pendências ainda não carregaram. Abra a aba Pendências Mistas & Complexas e tente de novo.');
+      return;
+    }
+    if (typeof pendValidateModeloQuota === 'function') {
+      const err = pendValidateModeloQuota(destino, modelo, -1);
+      if (err) { alert(err); return; }
+    } else if (_fluxolabModeloJaNaLista(destino, modelo)) {
+      alert('Este modelo já está na lista.');
+      return;
+    }
+    if (!_fluxolabPendenciasState[destino]) _fluxolabPendenciasState[destino] = [];
+    fillFirstEmpty(_fluxolabPendenciasState[destino]);
+    if (typeof fluxolabSavePendenciasDebounced === 'function') fluxolabSavePendenciasDebounced();
+    if (typeof fluxolabRenderPendencias === 'function') fluxolabRenderPendencias();
+    const nome = destino === 'mistas' ? 'Pendências Mistas' : 'Complexas';
+    if (typeof toast === 'function') toast('Incluído em ' + nome + ': ' + modelo);
+    else if (typeof showToast === 'function') showToast('Incluído em ' + nome, 'ok');
+    try { fluxolabRenderModelos(); } catch (e) {}
+  }
 }
 function _fluxolabBuildChecklistIndex(){
   const idx = new Map();
@@ -22116,7 +22630,9 @@ window._bolsaoUnlock = function(groupKey){
   var st = document.createElement('style');
   st.id = 'bolsoes-css';
   st.textContent =
-    '.bolsao-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}'+
+    // Mantém os cinco bolsões sempre lado a lado no desktop. O auto-fit
+    // podia colapsar para uma única coluna após re-renderizações do painel.
+    '.bolsao-grid{display:grid;grid-template-columns:repeat(5,minmax(260px,1fr));gap:12px;overflow-x:auto;padding-bottom:4px}'+
     '.bolsao-col{background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:10px;display:flex;flex-direction:column;min-height:200px;transition:background .15s}'+
     '.bolsao-col.drop-hover{background:rgba(61,214,140,.06);border-color:rgba(61,214,140,.4)}'+
     '.bolsao-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 4px 10px;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:8px}'+
@@ -22175,7 +22691,7 @@ window._renderSolicitacoesPanel = function(panelId, q){
       : '';
     var emptyColsHtml = window._BOLSOES_PECAS.map(function(b){
       var colExtraCls = b.manual ? ' bolsao-col-stock' : '';
-      return '<div class="bolsao-col'+colExtraCls+'">'
+      return '<div class="bolsao-col'+colExtraCls+'" style="flex:1 1 0;min-width:0">'
         + '<div class="bolsao-head">'
           + '<div class="bolsao-title" style="color:'+b.color+'">'+b.icon+' '+b.label+'</div>'
           + '<span class="bolsao-count">0</span>'
@@ -22193,7 +22709,7 @@ window._renderSolicitacoesPanel = function(panelId, q){
         + '</div>'
         + emptyMarcarBtn
       + '</div>'
-      + '<div class="bolsao-grid">' + emptyColsHtml + '</div>';
+      + '<div class="bolsao-grid" style="display:flex!important;flex-flow:row nowrap!important;align-items:stretch!important;gap:12px;width:100%!important;overflow-x:auto!important">' + emptyColsHtml + '</div>';
     return;
   }
 
@@ -22314,7 +22830,7 @@ window._renderSolicitacoesPanel = function(panelId, q){
     var visible = arr.slice(0, 3);    // mostra 3; o restante fica acessível pelo scroll
     var listHtml = arr.map(renderCard).join('') || '<div style="font-size:11px;color:var(--muted);text-align:center;padding:14px 0;opacity:.6">Vazio</div>';
     var colExtraCls = b.manual ? ' bolsao-col-stock' : '';
-    return '<div class="bolsao-col' + colExtraCls + '" '
+    return '<div class="bolsao-col' + colExtraCls + '" style="flex:1 1 0;min-width:0" '
       + 'ondragover="window._bolsaoDragOver(event);this.classList.add(\'drop-hover\')" '
       + 'ondragleave="this.classList.remove(\'drop-hover\')" '
       + 'ondrop="this.classList.remove(\'drop-hover\');window._bolsaoDrop(event,\''+b.key+'\')">'
@@ -22359,8 +22875,27 @@ window._renderSolicitacoesPanel = function(panelId, q){
         + '<span style="font-size:10px;color:var(--muted);margin-left:4px">arraste para travar em outro bolsão</span>'
       + '</div>'
       + marcarTodasBtn
-    + '</div>'
-    + '<div class="bolsao-grid">' + colsHtml + '</div>';
+    + '</div>';
+
+  // Cada bolsão é anexado ao DOM separadamente. Assim, mesmo se algum texto
+  // vindo do cadastro tiver HTML inválido, ele não consegue "engolir" as
+  // colunas seguintes e transformá-las em uma lista dentro do bolsão anterior.
+  var gridEl = document.createElement('div');
+  gridEl.className = 'bolsao-grid';
+  gridEl.style.cssText = 'display:flex!important;flex-flow:row nowrap!important;align-items:stretch!important;gap:12px;width:100%!important;overflow-x:auto!important';
+  window._BOLSOES_PECAS.forEach(function(b){
+    var arr = byBolsao[b.key] || [];
+    var listHtml = arr.map(renderCard).join('') || '<div style="font-size:11px;color:var(--muted);text-align:center;padding:14px 0;opacity:.6">Vazio</div>';
+    var colEl = document.createElement('div');
+    colEl.className = 'bolsao-col' + (b.manual ? ' bolsao-col-stock' : '');
+    colEl.style.cssText = 'flex:1 1 0;min-width:0';
+    colEl.setAttribute('ondragover', "window._bolsaoDragOver(event);this.classList.add('drop-hover')");
+    colEl.setAttribute('ondragleave', "this.classList.remove('drop-hover')");
+    colEl.setAttribute('ondrop', "this.classList.remove('drop-hover');window._bolsaoDrop(event,'" + b.key + "')");
+    colEl.innerHTML = '<div class="bolsao-head"><div class="bolsao-title" style="color:' + b.color + '">' + b.icon + ' ' + b.label + '</div><span class="bolsao-count">' + arr.length + (arr.length > 3 ? ' · rolar' : '') + '</span></div><div class="bolsao-list">' + listHtml + '</div>';
+    gridEl.appendChild(colEl);
+  });
+  panel.appendChild(gridEl);
 };
 
 // Tick para reclassificar conforme o tempo avança
@@ -22643,6 +23178,7 @@ window.entregarPeca = async function(id, selb){
 
 // ── 5. Sobrescreve renderSolicitacoesDoDia → linha por peça + coluna Código ───
 window.renderSolicitacoesDoDia = function(){
+  renderEtiquetasMovimentacao();
   const tbody = document.getElementById('solicitacoes-dia-body');
   if(!tbody) return;
 
@@ -22789,6 +23325,643 @@ window.renderSolicitacoesDoDia = function(){
 
   _renderSolicitacoesStats(filtered);
 };
+
+// ── ETIQUETAS DE MOVIMENTAÇÃO MANUAL ──
+// Uma etiqueta nasce do próprio log do FluxoLAB: assim ela permanece disponível
+// na aba de Solicitações mesmo depois que o SELB for movimentado novamente.
+let _movEtiquetasKnownKeys = new Set();
+let _movEtiquetasTrackingReady = false;
+let _movPrintQueue = [];
+let _movPrintBusy = false;
+let _movSpoolPingTimer = null;
+let _movEtiquetasViewIso = null;
+let _movEtiquetasListaAtual = [];
+
+function _movEtiquetaIsoDia(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+function _movEtiquetaHojeIso() {
+  return _movEtiquetaIsoDia(Date.now());
+}
+
+function _movEtiquetasViewIsoAtual() {
+  return _movEtiquetasViewIso || _movEtiquetaHojeIso();
+}
+
+function movSetEtiquetasDia(iso) {
+  const hoje = _movEtiquetaHojeIso();
+  _movEtiquetasViewIso = (iso && iso !== hoje) ? iso : null;
+  renderEtiquetasMovimentacao();
+}
+
+function _etiquetaBolsaoLabel(chave){
+  if(!chave) return '—';
+  const b = (typeof FLUXOLAB_BOLSOES !== 'undefined') && FLUXOLAB_BOLSOES.find(item => item.key === chave);
+  return b ? b.label : chave;
+}
+
+function _isMovimentacaoComDestino(item) {
+  if (!item || !item.para) return false;
+  const para = String(item.para);
+  if (!para || para === '—' || para.indexOf('—') === 0) return false;
+  return String(item.de || '') !== para;
+}
+
+function _isDestinoEscolhidoPeloOperador(item) {
+  const auto = item.automatico;
+  return auto === false || auto === 'false' || auto === 0;
+}
+
+function _isEtiquetaMovimentacaoManual(item){
+  if (!_isMovimentacaoComDestino(item)) return false;
+  // Painel "Mover SELBs" do FluxoLAB
+  if (item.tipo === 'manual') return true;
+  if (item.tipo === 'finalizar') {
+    const res = String(item.resultado || '').toLowerCase();
+    // Aprovada (ok) não gera etiqueta — ex.: Montagem aprovado → Qualidade automático
+    if (res === 'ok') return false;
+    if (res) return true;
+    // Legado: registros antigos sem resultado, mas com destino manual
+    return _isDestinoEscolhidoPeloOperador(item);
+  }
+  return false;
+}
+
+function _etiquetaMovKey(item){
+  return String(item.ts || 0) + '|' + (item.selb || '') + '|' + (item.de || '') + '|' + (item.para || '');
+}
+
+function _etiquetaMovJaImpressa(key){
+  try { return localStorage.getItem('mov_etiq_' + key) === '1'; } catch(e){ return false; }
+}
+
+function _marcarEtiquetaMovImpressa(key){
+  try { localStorage.setItem('mov_etiq_' + key, '1'); } catch(e){}
+}
+
+function _autoPrintMovimentacaoEnabled(){
+  try {
+    const stored = localStorage.getItem('mov_auto_print');
+    if(stored === '0') return false;
+  } catch(e){}
+  return true;
+}
+
+// Não dispara impressão na tela do operador — só no spool (Aguardando Peças / estação de impressão)
+function _movPodeImprimirSpool(){
+  const op = document.getElementById('view-operador');
+  if (op && op.classList.contains('active')) return false;
+  return true;
+}
+
+function toggleAutoPrintMovimentacao(checked){
+  try { localStorage.setItem('mov_auto_print', checked ? '1' : '0'); } catch(e){}
+}
+
+function _initMovEtiquetasTracking(){
+  if(_movEtiquetasTrackingReady) return;
+  _movEtiquetasTrackingReady = true;
+  _etiquetasMovimentacaoManuais().forEach(item => {
+    _movEtiquetasKnownKeys.add(_etiquetaMovKey(item));
+  });
+  _pingSpoolInvisivel();
+  try {
+    if (!_movSpoolPingTimer) {
+      _movSpoolPingTimer = setInterval(() => { _pingSpoolInvisivel(); }, 15000);
+    }
+  } catch (e) {}
+}
+
+function _processarNovasEtiquetasMovimentacao(entry){
+  if(!entry || !_isEtiquetaMovimentacaoManual(entry)) return;
+  if (_movEtiquetaIsoDia(entry.ts) !== _movEtiquetaHojeIso()) return;
+  const key = _etiquetaMovKey(entry);
+  if(_movEtiquetasKnownKeys.has(key)) return;
+  _movEtiquetasKnownKeys.add(key);
+  renderEtiquetasMovimentacao();
+  _enqueueAutoPrintMovimentacao([entry]);
+}
+
+function _detectarNovasEtiquetasMovimentacao(){
+  const hoje = _movEtiquetaHojeIso();
+  const novas = [];
+  _etiquetasMovimentacaoManuais().forEach(item => {
+    if (_movEtiquetaIsoDia(item.ts) !== hoje) return;
+    const key = _etiquetaMovKey(item);
+    if(_movEtiquetasKnownKeys.has(key)) return;
+    _movEtiquetasKnownKeys.add(key);
+    novas.push(item);
+  });
+  if(novas.length){
+    renderEtiquetasMovimentacao();
+    _enqueueAutoPrintMovimentacao(novas);
+  }
+}
+
+function _enqueueAutoPrintMovimentacao(itens){
+  if(!_autoPrintMovimentacaoEnabled()) return;
+  if(!_movPodeImprimirSpool()) return;
+  itens.forEach(item => {
+    const key = _etiquetaMovKey(item);
+    if(!_etiquetaMovJaImpressa(key)) _movPrintQueue.push(item);
+  });
+  _processMovPrintQueue();
+}
+
+function _processMovPrintQueue(){
+  if(_movPrintBusy || !_movPrintQueue.length) return;
+  if(!_movPodeImprimirSpool()) {
+    _movPrintBusy = false;
+    return;
+  }
+  _movPrintBusy = true;
+  const item = _movPrintQueue.shift();
+  _mostrarToastMovPrint('🏷️ Spool: imprimindo ' + (item.selb || '') + '…');
+  _imprimirEtiquetaSpoolBackground([item], {
+    onAfterPrint: () => {
+      _movPrintBusy = false;
+      setTimeout(_processMovPrintQueue, 600);
+    },
+    onCancel: () => {
+      _movPrintBusy = false;
+      setTimeout(_processMovPrintQueue, 800);
+    }
+  });
+}
+
+function _mostrarToastMovPrint(msg){
+  let toast = document.getElementById('mov-print-toast');
+  if(!toast){
+    toast = document.createElement('div');
+    toast.id = 'mov-print-toast';
+    toast.style.cssText = 'position:fixed;bottom:18px;right:18px;z-index:999999;background:#7e215d;color:#fff;font-family:var(--font);font-size:12px;font-weight:700;padding:10px 16px;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.35);pointer-events:none;transition:opacity .3s';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  toast.style.opacity = '1';
+  clearTimeout(toast._hideTimer);
+  toast._hideTimer = setTimeout(() => { toast.style.opacity = '0'; }, 3200);
+}
+
+function _etiquetasMovimentacaoManuais(){
+  return (_fluxolabMovLog || []).filter(_isEtiquetaMovimentacaoManual)
+    .sort((a, b) => (b.ts || 0) - (a.ts || 0));
+}
+
+function _etiquetasMovimentacaoManuais(){
+  return (_fluxolabMovLog || []).filter(_isEtiquetaMovimentacaoManual)
+    .sort((a, b) => (b.ts || 0) - (a.ts || 0));
+}
+
+function _movEtiquetasDiasDisponiveis() {
+  const dias = new Set();
+  _etiquetasMovimentacaoManuais().forEach(item => {
+    const iso = _movEtiquetaIsoDia(item.ts);
+    if (iso) dias.add(iso);
+  });
+  return Array.from(dias).sort((a, b) => b.localeCompare(a));
+}
+
+function _etiquetasMovimentacaoVisiveis() {
+  const iso = _movEtiquetasViewIsoAtual();
+  return _etiquetasMovimentacaoManuais().filter(item => _movEtiquetaIsoDia(item.ts) === iso);
+}
+
+function _renderMovEtiquetasDiaBar(visiveis) {
+  const hoje = _movEtiquetaHojeIso();
+  const viewIso = _movEtiquetasViewIsoAtual();
+  const isHoje = viewIso === hoje;
+  const label = document.getElementById('mov-etiq-dia-label');
+  const input = document.getElementById('mov-etiq-dia-historico');
+  const btnHoje = document.getElementById('mov-etiq-voltar-hoje');
+  const dias = _movEtiquetasDiasDisponiveis();
+
+  if (label) {
+    if (isHoje) {
+      label.textContent = 'Hoje · ' + visiveis.length + ' movimentação(ões)';
+    } else {
+      const fmt = new Date(viewIso + 'T12:00:00').toLocaleDateString('pt-BR', { weekday:'short', day:'2-digit', month:'2-digit', year:'numeric' });
+      label.textContent = fmt + ' · ' + visiveis.length + ' movimentação(ões)';
+    }
+  }
+  if (input) {
+    input.value = viewIso;
+    if (dias.length) {
+      input.min = dias[dias.length - 1];
+      input.max = dias[0];
+    }
+  }
+  if (btnHoje) btnHoje.style.display = isHoje ? 'none' : 'inline-block';
+}
+
+function _htmlLinhaEtiquetaMov(item, index) {
+  const motivo = item.motivo || item.solicitacaoPecas || 'Movimentação ao finalizar o SELB';
+  const data = new Date(item.ts || Date.now()).toLocaleString('pt-BR', { dateStyle:'short', timeStyle:'short' });
+  const key = _etiquetaMovKey(item);
+  const impressa = _etiquetaMovJaImpressa(key);
+  const statusHtml = impressa
+    ? '<span style="font-size:10px;font-weight:800;color:#4ade80">✓ Impressa</span>'
+    : '<span style="font-size:10px;font-weight:800;color:#e879f9">Pendente</span>';
+  return `<tr style="${impressa ? 'opacity:.72' : ''}">
+    <td style="font-family:var(--mono);font-size:11px">${esc(data)}</td>
+    <td style="font-family:var(--mono);font-weight:800;color:#e879f9">${esc(item.selb || '—')}</td>
+    <td style="font-size:12px;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(item.equipamento || '')}">${esc(item.equipamento || '—')}</td>
+    <td style="font-size:11px;font-weight:700">${esc(_etiquetaBolsaoLabel(item.de))}</td>
+    <td style="font-size:11px;font-weight:700">${esc(_etiquetaBolsaoLabel(item.para))}</td>
+    <td style="font-size:11px;max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(motivo)}">${esc(motivo)}</td>
+    <td style="font-size:11px;color:var(--muted)">${esc(item.user || 'Sistema')}</td>
+    <td style="text-align:center">${statusHtml}</td>
+    <td style="text-align:center">
+      <button onclick="imprimirEtiquetaMovimentacao(${index})" style="background:rgba(232,121,249,.18);border:1px solid rgba(232,121,249,.45);border-radius:7px;color:#e879f9;font-family:var(--font);font-size:10px;font-weight:800;padding:5px 10px;cursor:pointer">🖨️</button>
+    </td>
+  </tr>`;
+}
+
+function renderEtiquetasMovimentacao(){
+  const todas = _etiquetasMovimentacaoManuais();
+  const visiveis = _etiquetasMovimentacaoVisiveis();
+  _movEtiquetasListaAtual = visiveis;
+
+  const hojeCount = todas.filter(item => _movEtiquetaIsoDia(item.ts) === _movEtiquetaHojeIso()).length;
+  const badge = document.getElementById('badge-imprimir-movimentacoes');
+  if(badge) badge.textContent = hojeCount > 99 ? '99+' : hojeCount;
+
+  const chkAuto = document.getElementById('chk-auto-print-movimentacao');
+  if(chkAuto) chkAuto.checked = _autoPrintMovimentacaoEnabled();
+
+  _renderMovEtiquetasDiaBar(visiveis);
+
+  const lista = document.getElementById('pecas-etiquetas-movimentacao-lista');
+  if(!lista) return;
+  if(!visiveis.length){
+    const msg = _movEtiquetasViewIsoAtual() === _movEtiquetaHojeIso()
+      ? 'Nenhuma movimentação (não aprovada) registrada hoje.'
+      : 'Nenhuma movimentação neste dia.';
+    lista.innerHTML = '<tr><td colspan="9" class="empty">' + msg + '</td></tr>';
+    return;
+  }
+  lista.innerHTML = visiveis.slice(0, 100).map((item, index) => _htmlLinhaEtiquetaMov(item, index)).join('');
+
+  const modalLista = document.getElementById('etiquetas-movimentacao-lista');
+  if(modalLista){
+    if(!visiveis.length){
+      modalLista.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:38px 18px;color:var(--muted);font-size:13px">Nenhuma etiqueta de movimentação neste dia.</div>';
+    } else {
+      modalLista.innerHTML = visiveis.slice(0, 100).map((item, index) => {
+        const motivo = item.motivo || item.solicitacaoPecas || 'Movimentação ao finalizar o SELB';
+        const data = new Date(item.ts || Date.now()).toLocaleString('pt-BR', { dateStyle:'short', timeStyle:'short' });
+        return `<div style="aspect-ratio:1.5;background:#fff;color:#151515;border:2px solid #e879f9;border-radius:9px;padding:15px;display:flex;flex-direction:column;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.22);min-width:0">
+          <div style="font-size:10px;font-weight:900;letter-spacing:.08em;color:#7e215d">ETIQUETA DE MOVIMENTAÇÃO</div>
+          <div style="font-family:var(--mono);font-size:20px;font-weight:900;line-height:1">${esc(item.selb || '—')}</div>
+          <div style="font-size:11px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(item.equipamento || '—')}</div>
+          <div style="display:grid;grid-template-columns:1fr 22px 1fr;gap:5px;align-items:center;border-block:1px solid #bbb;padding:7px 0"><div><div style="font-size:8px;font-weight:900;color:#666">SAIU DE</div><div style="font-size:11px;font-weight:900">${esc(_etiquetaBolsaoLabel(item.de))}</div></div><div style="font-size:19px;text-align:center;color:#7e215d">→</div><div><div style="font-size:8px;font-weight:900;color:#666">VAI PARA</div><div style="font-size:11px;font-weight:900">${esc(_etiquetaBolsaoLabel(item.para))}</div></div></div>
+          <div style="font-size:8px;font-weight:900;color:#666">MOTIVO / SOLICITAÇÃO DE PEÇA</div><div style="font-size:10px;font-weight:700;line-height:1.22;flex:1;overflow:auto">${esc(motivo)}</div>
+          <div style="display:flex;justify-content:space-between;gap:6px;align-items:end;font-size:8px;color:#555"><span>${data}<br>${esc(item.user || 'Sistema')}</span><button onclick="imprimirEtiquetaMovimentacao(${index})" style="background:#7e215d;border:none;border-radius:5px;color:#fff;font-family:var(--font);font-size:9px;font-weight:800;padding:6px 8px;cursor:pointer">🖨️ Imprimir</button></div>
+        </div>`;
+      }).join('');
+    }
+  }
+}
+
+function _resolveDestinoFin(sector, res, destinoEscolhido) {
+  if (destinoEscolhido) return destinoEscolhido;
+  if (typeof _fluxolabDestinoFinal === 'function') return _fluxolabDestinoFinal(sector, res);
+  return null;
+}
+
+function _buildEtiquetaMovOperador(selb, sector, res, destinoEscolhido, motivo, solicitacaoPecas) {
+  const dest = _resolveDestinoFin(sector, res, destinoEscolhido);
+  if (!dest || dest === '__MANTER__') return null;
+  const bolsaoAtual = (typeof _fmovGetBolsaoAtual === 'function' ? _fmovGetBolsaoAtual(selb) : '') || sector || '—';
+  let para = dest;
+  if (dest === '__ESTOQUE__') para = '— (Retorno Estoque)';
+  if (!para || para === bolsaoAtual) return null;
+  if (String(para).indexOf('—') === 0) return null;
+  const equip = (typeof getEquipName === 'function' ? getEquipName(selb) : '') || '';
+  return {
+    selb,
+    de: bolsaoAtual,
+    para,
+    user: (currentUser && currentUser.name) || 'Operador',
+    ts: Date.now(),
+    equipamento: equip,
+    tipo: 'finalizar',
+    resultado: res,
+    automatico: !!destinoEscolhido ? false : (res !== 'ok'),
+    motivo: motivo || '',
+    solicitacaoPecas: solicitacaoPecas || '',
+  };
+}
+
+let _movOperadorEtiquetaPendente = null;
+
+function _mostrarAlertaEtiquetaMovOperador() {
+  document.getElementById('modal-etiqueta-mov-operador')?.classList.remove('hidden');
+}
+
+function _mostrarModalEtiquetaMovOperador(item) {
+  // Compat: redireciona para o alerta simples
+  _movOperadorEtiquetaPendente = item || null;
+  _mostrarAlertaEtiquetaMovOperador();
+}
+
+function concluirEtiquetaMovOperador() {
+  closeModal('modal-etiqueta-mov-operador');
+  _movOperadorEtiquetaPendente = null;
+}
+
+function abrirEtiquetasMovimentacao(){
+  renderEtiquetasMovimentacao();
+  document.getElementById('modal-etiquetas-movimentacao')?.classList.remove('hidden');
+}
+
+function _etiquetaTextoSeguro(valor){
+  return String(valor || '—').replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
+}
+
+function _htmlEtiquetasMovimentacao(itens){
+  return itens.map(item => {
+    const motivo = item.motivo || item.solicitacaoPecas || 'Movimentação manual ao finalizar o SELB';
+    return `<section class="mov-etiq-label"><div class="title">ETIQUETA DE MOVIMENTAÇÃO</div><div class="selb">${_etiquetaTextoSeguro(item.selb)}</div><div class="equip">${_etiquetaTextoSeguro(item.equipamento)}</div><div class="route"><div><small>SAIU DE</small><strong>${_etiquetaTextoSeguro(_etiquetaBolsaoLabel(item.de))}</strong></div><span>→</span><div><small>VAI PARA</small><strong>${_etiquetaTextoSeguro(_etiquetaBolsaoLabel(item.para))}</strong></div></div><div class="reason"><small>MOTIVO / SOLICITAÇÃO DE PEÇA</small><b>${_etiquetaTextoSeguro(motivo)}</b></div><footer>${_etiquetaTextoSeguro(new Date(item.ts || Date.now()).toLocaleString('pt-BR'))} · ${_etiquetaTextoSeguro(item.user || 'Sistema')}</footer></section>`;
+  }).join('');
+}
+
+function _htmlDocumentoImpressaoMov(itens){
+  const css = `
+    @page { size: 10cm 15cm; margin: 0; }
+    * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    html, body { margin: 0; padding: 0; background: #fff; }
+    .mov-etiq-label {
+      width: 10cm; height: 15cm; padding: 6mm; display: flex; flex-direction: column; gap: 4mm;
+      font-family: Arial, sans-serif; color: #111; border: 1px solid #111; page-break-after: always;
+    }
+    .mov-etiq-label:last-child { page-break-after: auto; }
+    .mov-etiq-label .title { font-size: 13pt; font-weight: 800; letter-spacing: 1px; }
+    .mov-etiq-label .selb { font: bold 27pt monospace; }
+    .mov-etiq-label .equip { font-size: 13pt; min-height: 16pt; }
+    .mov-etiq-label .route { display: grid; grid-template-columns: 1fr 22px 1fr; gap: 4mm; align-items: center; border-block: 1px solid #111; padding: 3mm 0; }
+    .mov-etiq-label .route div { display: flex; flex-direction: column; gap: 2mm; }
+    .mov-etiq-label .route span { text-align: center; font-size: 26pt; font-weight: bold; }
+    .mov-etiq-label .route strong { font-size: 17pt; }
+    .mov-etiq-label .reason { display: flex; flex-direction: column; gap: 2mm; flex: 1; }
+    .mov-etiq-label .reason b { font-size: 14pt; line-height: 1.3; }
+    .mov-etiq-label small { font-size: 9pt; font-weight: bold; letter-spacing: .4px; }
+    .mov-etiq-label footer { font-size: 9pt; border-top: 1px solid #111; padding-top: 3mm; }
+  `;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Etiqueta Movimentação</title><style>${css}</style></head><body>${_htmlEtiquetasMovimentacao(itens)}</body></html>`;
+}
+
+const MOV_PRINT_AGENT_URL = 'http://127.0.0.1:17325/print';
+const MOV_PRINT_AGENT_HEALTH = 'http://127.0.0.1:17325/health';
+let _movSpoolOnline = null;
+
+async function _pingSpoolInvisivel(){
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), 1200) : null;
+  try {
+    const res = await fetch(MOV_PRINT_AGENT_HEALTH, {
+      method: 'GET',
+      cache: 'no-store',
+      signal: ctrl ? ctrl.signal : undefined,
+    });
+    if (timer) clearTimeout(timer);
+    _movSpoolOnline = !!(res && res.ok);
+  } catch (e) {
+    if (timer) clearTimeout(timer);
+    _movSpoolOnline = false;
+  }
+  _atualizarBadgeSpoolInvisivel();
+  return _movSpoolOnline;
+}
+
+function _atualizarBadgeSpoolInvisivel(){
+  const el = document.getElementById('mov-spool-status');
+  if (!el) return;
+  if (_movSpoolOnline === true) {
+    el.textContent = 'Spool invisível: online';
+    el.style.color = '#4ade80';
+    el.style.borderColor = 'rgba(74,222,128,.45)';
+    el.style.background = 'rgba(74,222,128,.12)';
+  } else if (_movSpoolOnline === false) {
+    const viaFile = (typeof location !== 'undefined' && location.protocol === 'file:');
+    el.textContent = viaFile
+      ? 'Spool offline no file:// — abra com print-agent/abrir-com-spool.bat'
+      : 'Spool invisível: offline — rode print-agent/reiniciar-spool.bat';
+    el.style.color = '#fbbf24';
+    el.style.borderColor = 'rgba(251,191,36,.45)';
+    el.style.background = 'rgba(251,191,36,.12)';
+  } else {
+    el.textContent = 'Spool invisível:…';
+    el.style.color = 'var(--muted)';
+  }
+}
+
+async function _enviarParaAgenteImpressao(itens){
+  const selb = (itens[0] && itens[0].selb) || '';
+  const labels = (itens || []).map(item => {
+    const motivo = item.motivo || item.solicitacaoPecas || 'Movimentação manual ao finalizar o SELB';
+    return {
+      selb: item.selb || '',
+      equipamento: item.equipamento || 'MOVIMENTAÇÃO',
+      de: _etiquetaBolsaoLabel(item.de),
+      para: _etiquetaBolsaoLabel(item.para),
+      motivo,
+      ts: new Date(item.ts || Date.now()).toLocaleString('pt-BR'),
+      user: item.user || 'Sistema',
+    };
+  });
+  // Agente imprime RAW (ZPL/EPL) direto na ZDesigner — sem Chrome/dialogo
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), 4000) : null;
+  try {
+    const res = await fetch(MOV_PRINT_AGENT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ selb, labels, ts: Date.now() }),
+      signal: ctrl ? ctrl.signal : undefined,
+    });
+    if (timer) clearTimeout(timer);
+    if (!res.ok) throw new Error('agent status ' + res.status);
+    _movSpoolOnline = true;
+    _atualizarBadgeSpoolInvisivel();
+    return true;
+  } catch (e) {
+    if (timer) clearTimeout(timer);
+    _movSpoolOnline = false;
+    _atualizarBadgeSpoolInvisivel();
+    return false;
+  }
+}
+
+function _imprimirEtiquetaIframeOculto(itens, opts){
+  opts = opts || {};
+  let iframe = document.getElementById('mov-print-iframe');
+  if (!iframe) {
+    iframe = document.createElement('iframe');
+    iframe.id = 'mov-print-iframe';
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;opacity:0;pointer-events:none';
+    document.body.appendChild(iframe);
+  }
+
+  const docHtml = _htmlDocumentoImpressaoMov(itens);
+  let finished = false;
+  const finish = (printed) => {
+    if (finished) return;
+    finished = true;
+    try {
+      const w = iframe.contentWindow;
+      if (w) w.removeEventListener('afterprint', onAfter);
+    } catch (e) {}
+    try { iframe.srcdoc = ''; } catch (e) {}
+    if (printed && opts.onAfterPrint) opts.onAfterPrint();
+    else if (!printed && opts.onCancel) opts.onCancel();
+  };
+  const onAfter = () => finish(true);
+
+  iframe.onload = () => {
+    try {
+      const w = iframe.contentWindow;
+      if (!w) { finish(false); return; }
+      w.addEventListener('afterprint', onAfter);
+      setTimeout(() => {
+        try { w.focus(); w.print(); } catch (e) { finish(false); }
+        // Se o diálogo for cancelado / kiosk não disparar afterprint, libera a fila
+        setTimeout(() => finish(true), 4000);
+      }, 180);
+    } catch (e) {
+      finish(false);
+    }
+  };
+
+  try {
+    iframe.srcdoc = docHtml;
+  } catch (e) {
+    finish(false);
+  }
+}
+
+// Spool invisível: SOMENTE agente local (nunca abre o diálogo do Chrome)
+function _imprimirEtiquetaSpoolBackground(itens, opts){
+  opts = opts || {};
+  if (!itens || !itens.length) {
+    if (opts.onCancel) opts.onCancel();
+    return;
+  }
+
+  const doneOk = () => {
+    itens.forEach(item => _marcarEtiquetaMovImpressa(_etiquetaMovKey(item)));
+    renderEtiquetasMovimentacao();
+    if (opts.onAfterPrint) opts.onAfterPrint();
+  };
+
+  _enviarParaAgenteImpressao(itens).then(ok => {
+    if (ok) {
+      _mostrarToastMovPrint('🏷️ Spool invisível: ' + (itens[0].selb || '') + ' enviada à impressora');
+      doneOk();
+      return;
+    }
+    // NÃO chama window.print() — isso abriria a tela de Imprimir.
+    _mostrarToastMovPrint('⚠️ Spool offline. Abra print-agent/iniciar-spool-invisivel.vbs e mantenha rodando');
+    if (opts.onCancel) opts.onCancel();
+  });
+}
+
+function _imprimirEtiquetaInPage(itens, opts){
+  opts = opts || {};
+  const gallery = document.getElementById('mov-print-gallery');
+  if(!gallery || !itens.length) {
+    if(opts.onCancel) opts.onCancel();
+    return;
+  }
+
+  gallery.innerHTML = _htmlEtiquetasMovimentacao(itens);
+  gallery.style.display = 'block';
+
+  let finished = false;
+  const finish = (printed) => {
+    if(finished) return;
+    finished = true;
+    document.body.classList.remove('printing-movimentacao');
+    gallery.innerHTML = '';
+    gallery.style.display = 'none';
+    window.removeEventListener('afterprint', onAfterPrint);
+    if(printed && opts.onAfterPrint) opts.onAfterPrint();
+    else if(!printed && opts.onCancel) opts.onCancel();
+  };
+
+  const onAfterPrint = () => finish(true);
+  window.addEventListener('afterprint', onAfterPrint);
+  document.body.classList.add('printing-movimentacao');
+
+  requestAnimationFrame(() => {
+    setTimeout(() => {
+      try { window.print(); } catch(e) { finish(false); }
+    }, 120);
+  });
+}
+
+function _abrirImpressaoEtiquetas(itens, opts){
+  opts = opts || {};
+  if(!itens.length) return;
+  _imprimirEtiquetaInPage(itens, {
+    onAfterPrint: () => {
+      itens.forEach(item => _marcarEtiquetaMovImpressa(_etiquetaMovKey(item)));
+      renderEtiquetasMovimentacao();
+      if(opts.onAfterPrint) opts.onAfterPrint();
+    },
+    onCancel: opts.onCancel
+  });
+}
+
+function imprimirEtiquetaMovimentacao(index){
+  const item = _movEtiquetasListaAtual[index];
+  if(item) _abrirImpressaoEtiquetas([item]);
+}
+function imprimirTodasEtiquetasMovimentacao(){ _abrirImpressaoEtiquetas(_movEtiquetasListaAtual.slice(0, 100)); }
+
+/** Teste interno: manda 1 etiqueta RAW ao spool sem fluxo do operador */
+async function testarSpoolEtiquetaMovimentacao(){
+  const selbEl = document.getElementById('mov-spool-test-selb');
+  const deEl = document.getElementById('mov-spool-test-de');
+  const paraEl = document.getElementById('mov-spool-test-para');
+  const selb = String((selbEl && selbEl.value) || 'TEST').trim().toUpperCase() || 'TEST';
+  const de = String((deEl && deEl.value) || 'Montagem').trim() || 'Montagem';
+  const para = String((paraEl && paraEl.value) || 'Eletrônica').trim() || 'Eletrônica';
+  let user = 'TESTE';
+  try {
+    if (typeof CURRENT_USER !== 'undefined' && CURRENT_USER && (CURRENT_USER.nome || CURRENT_USER.name)) {
+      user = CURRENT_USER.nome || CURRENT_USER.name;
+    } else if (typeof currentUser !== 'undefined' && currentUser && (currentUser.nome || currentUser.name)) {
+      user = currentUser.nome || currentUser.name;
+    }
+  } catch (e) {}
+
+  const item = {
+    selb,
+    equipamento: 'MOVIMENTAÇÃO',
+    de,
+    para,
+    motivo: 'Teste interno do spool RAW (sem operador)',
+    ts: Date.now(),
+    user,
+    automatico: false,
+  };
+
+  _mostrarToastMovPrint('🧪 Teste spool: ' + selb + '…');
+  const online = await _pingSpoolInvisivel();
+  if (!online) {
+    _mostrarToastMovPrint('⚠️ Spool offline — rode print-agent/abrir-com-spool.bat');
+    return;
+  }
+  const ok = await _enviarParaAgenteImpressao([item]);
+  _mostrarToastMovPrint(ok
+    ? ('🧪 Teste enviado à impressora: ' + selb)
+    : '⚠️ Falha ao enviar teste ao spool');
+}
 
 
 // ── 6. Adiciona Bolsão Eletrônica ao FluxoLAB (movimentação apenas manual) ───

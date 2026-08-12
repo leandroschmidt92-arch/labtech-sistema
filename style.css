@@ -1448,10 +1448,11 @@ html,body{
 /* Etiqueta: 15cm largura × 10.8cm altura (paisagem) — cores fixas independente do tema */
 .ped-etiqueta {
   position: relative;
-  display: flex; flex-direction: column; justify-content: space-between; align-items: center;
+  display: flex; flex-direction: column; justify-content: flex-start; align-items: center;
   width: 15cm; height: 10.8cm; border-radius: 10px; border: 0.1cm solid #000; background: #fff;
-  padding: 0.2cm; margin: 0.5cm auto; page-break-inside: avoid;
+  padding: 0.18cm 0.2cm 0.5cm 0.2cm; margin: 0.5cm auto; page-break-inside: avoid;
   font-family: Inter, system-ui, Arial, sans-serif; color: #000;
+  box-sizing: border-box; overflow: hidden;
 }
 .ped-pedido-bar {
   position: absolute; left: 0.18cm; top: 0.18cm;
@@ -1465,15 +1466,17 @@ html,body{
   color: #fff; font-weight: 900; font-size: 13px; letter-spacing: 3px;
   print-color-adjust: exact; -webkit-print-color-adjust: exact;
 }
-/* Largura interna: 15 - 2*0.2 = 14.6cm | Altura interna: 10.8 - 2*0.2 = 10.4cm → 3 linhas ~3.47cm */
-.ped-etiq-row { display: flex; flex-direction: row; justify-content: space-evenly; width: 14.6cm; height: 3.4cm; align-items: center; text-align: center; }
+/* Largura interna: ~14.6cm | 3 linhas cabem com folga inferior para SKU/QR */
+.ped-etiq-row { display: flex; flex-direction: row; justify-content: space-evenly; width: 14.6cm; height: 3.15cm; align-items: center; text-align: center; flex: 0 0 auto; box-sizing: border-box; }
 .ped-etiq-row2 { border-top: solid black; }
-.ped-etiq-elem { width: 9cm; height: 3.4cm; color: black; display: flex; justify-content: center; align-items: center; text-align: center; }
-.ped-etiq-elem1 { width: 9cm; height: 3.4cm; color: black; display: flex; justify-content: center; align-items: center; text-align: center; border-top: solid black; border-radius: 3px; }
+.ped-etiq-row:last-child { height: 3.0cm; padding-bottom: 0.12cm; }
+.ped-etiq-elem { width: 9cm; height: 100%; color: black; display: flex; justify-content: center; align-items: center; text-align: center; box-sizing: border-box; }
+.ped-etiq-elem1 { width: 9cm; height: 100%; color: black; display: flex; justify-content: center; align-items: center; text-align: center; border-top: solid black; border-radius: 3px; box-sizing: border-box; padding-bottom: 0.08cm; }
 .ped-etiq-titulo { font-weight: 900; text-transform: uppercase; font-size: 50px; line-height: 1.05; margin: 0; }
 .ped-etiq-valor  { font-weight: 800; text-transform: uppercase; font-size: 24px; line-height: 1.05; margin: 0; }
 .ped-etiq-modelo { font-weight: 900; text-transform: uppercase; font-size: 58px; line-height: 1.05; margin: 0; }
-.ped-etiq-qr { width: 2.8cm; height: 2.8cm; object-fit: contain; }
+.ped-etiq-qr { width: 2.55cm; height: 2.55cm; object-fit: contain; }
+.ped-etiqueta:has(.ped-auditado-bar) { padding-top: 0.65cm; }
 
 @media print {
   /* Esconde tudo */
@@ -1555,20 +1558,22 @@ html,body{
 
   .ped-etiqueta {
     width: 15cm !important; height: 10cm !important;
-    margin: 0 !important; padding: 0.2cm !important;
+    margin: 0 !important; padding: 0.12cm 0.18cm 0.48cm 0.18cm !important;
     page-break-inside: avoid !important; page-break-after: always !important;
     break-after: page !important; box-sizing: border-box !important;
     overflow: hidden !important; border: 0.1cm solid #000 !important;
     background: #fff !important; color: #000 !important;
     display: flex !important; flex-direction: column !important;
-    justify-content: space-between !important; align-items: center !important;
+    justify-content: flex-start !important; align-items: center !important;
     border-radius: 0 !important;
   }
   .ped-etiqueta:last-child { page-break-after: auto !important; break-after: auto !important; }
   .ped-etiqueta * { color: #000 !important; background: transparent !important; }
-  .ped-etiq-row  { width: 14.6cm !important; height: 3.1cm !important; }
-  .ped-etiq-elem { height: 3.1cm !important; }
-  .ped-etiq-elem1{ height: 3.1cm !important; }
+  .ped-etiq-row  { width: 14.5cm !important; height: 2.95cm !important; max-height: 2.95cm !important; flex: 0 0 2.95cm !important; }
+  .ped-etiq-row:last-child { height: 2.85cm !important; max-height: 2.85cm !important; flex: 0 0 2.85cm !important; padding-bottom: 0.18cm !important; }
+  .ped-etiq-elem { height: 100% !important; }
+  .ped-etiq-elem1{ height: 100% !important; padding-bottom: 0.12cm !important; }
+  .ped-etiq-qr { width: 2.25cm !important; height: 2.25cm !important; }
   .ped-pedido-bar   { background: #b91c1c !important; print-color-adjust: exact !important; -webkit-print-color-adjust: exact !important; }
   .ped-auditado-bar { background: #1a6b35 !important; color: #fff !important; print-color-adjust: exact !important; -webkit-print-color-adjust: exact !important; }
   .ped-auditado-bar * { color: #fff !important; }
@@ -1788,7 +1793,7 @@ html,body{
     width: 15cm !important;
     height: 10cm !important;
     margin: 0 !important;
-    padding: 0.2cm !important;
+    padding: 0.12cm 0.18cm 0.48cm 0.18cm !important;
     page-break-inside: avoid !important;
     page-break-after: always !important;
     break-after: page !important;
@@ -1799,7 +1804,7 @@ html,body{
     color: #000 !important;
     display: flex !important;
     flex-direction: column !important;
-    justify-content: space-between !important;
+    justify-content: flex-start !important;
     align-items: center !important;
     border-radius: 0 !important;
   }
@@ -1812,14 +1817,45 @@ html,body{
     background: transparent !important;
   }
   body.printing-qualidade .ped-etiq-row {
-    width: 14.6cm !important;
-    height: 3.1cm !important;
+    width: 14.5cm !important;
+    height: 2.95cm !important;
+    max-height: 2.95cm !important;
+    flex: 0 0 2.95cm !important;
+    box-sizing: border-box !important;
+  }
+  body.printing-qualidade .ped-etiq-row:last-child {
+    height: 2.85cm !important;
+    max-height: 2.85cm !important;
+    flex: 0 0 2.85cm !important;
+    padding-bottom: 0.18cm !important;
   }
   body.printing-qualidade .ped-etiq-elem {
-    height: 3.1cm !important;
+    height: 100% !important;
+    max-height: 100% !important;
   }
   body.printing-qualidade .ped-etiq-elem1 {
-    height: 3.1cm !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    padding-bottom: 0.12cm !important;
+    align-items: center !important;
+  }
+  body.printing-qualidade .ped-etiq-qr {
+    width: 2.25cm !important;
+    height: 2.25cm !important;
+  }
+  /* Com barra AUDITADO sobra menos altura — encolhe as linhas */
+  body.printing-qualidade .ped-etiqueta:has(.ped-auditado-bar) {
+    padding-top: 0.65cm !important;
+  }
+  body.printing-qualidade .ped-etiqueta:has(.ped-auditado-bar) .ped-etiq-row {
+    height: 2.7cm !important;
+    max-height: 2.7cm !important;
+    flex-basis: 2.7cm !important;
+  }
+  body.printing-qualidade .ped-etiqueta:has(.ped-auditado-bar) .ped-etiq-row:last-child {
+    height: 2.6cm !important;
+    max-height: 2.6cm !important;
+    flex-basis: 2.6cm !important;
   }
   body.printing-qualidade * {
     -webkit-print-color-adjust: exact !important;
@@ -1834,6 +1870,75 @@ html,body{
     margin: 0 !important;
     padding: 0 !important;
     background: #fff !important;
+  }
+}
+
+/* ═══ IMPRESSÃO AUTOMÁTICA — ETIQUETAS DE MOVIMENTAÇÃO ═══ */
+#mov-print-gallery .mov-etiq-label {
+  width: 150mm;
+  height: 100mm;
+  padding: 9mm;
+  border: 1px solid #111;
+  display: flex;
+  flex-direction: column;
+  gap: 4mm;
+  color: #111;
+  font-family: Arial, sans-serif;
+  background: #fff;
+  box-sizing: border-box;
+}
+#mov-print-gallery .mov-etiq-label .title { font-size: 13pt; font-weight: 800; letter-spacing: 1px; }
+#mov-print-gallery .mov-etiq-label .selb { font: bold 27pt monospace; }
+#mov-print-gallery .mov-etiq-label .equip { font-size: 13pt; min-height: 16pt; }
+#mov-print-gallery .mov-etiq-label .route {
+  display: grid;
+  grid-template-columns: 1fr 25mm 1fr;
+  align-items: center;
+  border-top: 1px solid #111;
+  border-bottom: 1px solid #111;
+  padding: 4mm 0;
+}
+#mov-print-gallery .mov-etiq-label .route div { display: flex; flex-direction: column; gap: 2mm; }
+#mov-print-gallery .mov-etiq-label .route span { text-align: center; font-size: 26pt; font-weight: bold; }
+#mov-print-gallery .mov-etiq-label .route strong { font-size: 17pt; }
+#mov-print-gallery .mov-etiq-label .reason { display: flex; flex-direction: column; gap: 2mm; flex: 1; }
+#mov-print-gallery .mov-etiq-label .reason b { font-size: 14pt; line-height: 1.3; }
+#mov-print-gallery .mov-etiq-label small { font-size: 9pt; font-weight: bold; letter-spacing: .4px; }
+#mov-print-gallery .mov-etiq-label footer { font-size: 9pt; border-top: 1px solid #111; padding-top: 3mm; }
+
+@media print {
+  body.printing-movimentacao {
+    background: #fff !important;
+  }
+  body.printing-movimentacao #layer-app,
+  body.printing-movimentacao #layer-login,
+  body.printing-movimentacao #layer-loader,
+  body.printing-movimentacao .modal-overlay,
+  body.printing-movimentacao .modal,
+  body.printing-movimentacao .schedule-overlay {
+    display: none !important;
+  }
+  body.printing-movimentacao #mov-print-gallery {
+    display: block !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+  body.printing-movimentacao .mov-etiq-label {
+    width: 150mm !important;
+    height: 100mm !important;
+    page-break-after: always !important;
+    break-after: page !important;
+    margin: 0 !important;
+    box-shadow: none !important;
+  }
+  body.printing-movimentacao .mov-etiq-label:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+  body.printing-movimentacao * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
 }
 
