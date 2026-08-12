@@ -245,19 +245,25 @@ async function fluxolabLoadPendencias() {
       if (!error && data && data.data) {
         _fluxolabPendenciasState = Object.assign({ mistas: [], complexas: [] }, data.data);
       }
+      if (error) console.warn('[pend] load erro:', error);
     } catch(e) { console.error('Erro ao carregar pendências:', e); }
 
-    // Configura o sincronismo em tempo real (Multiplayer)
-    // Agora via canal único fluxolab_state_bus (app.js), em vez de canal próprio —
-    // reduz canais Realtime duplicados, já que pendencias-viewer.js e
-    // pendencias-viewer-complexas.js escutam essa MESMA key.
+    // Realtime — nunca bloqueia o loaded se o helper falhar
     if (!_pendSyncChannel) {
       _pendSyncChannel = true;
-      window._fluxolabStateOn('pendencias_mistas_complexas', payload => {
-        if (payload.new && payload.new.data) {
-          fluxolabApplyRemoteSyncPend(payload.new.data);
+      try {
+        if (typeof window._fluxolabStateOn === 'function') {
+          window._fluxolabStateOn('pendencias_mistas_complexas', payload => {
+            if (payload.new && payload.new.data) {
+              fluxolabApplyRemoteSyncPend(payload.new.data);
+            }
+          });
+        } else {
+          console.warn('[pend] _fluxolabStateOn indisponível — sync realtime desligado');
         }
-      });
+      } catch (e) {
+        console.warn('[pend] falha ao registrar realtime:', e);
+      }
     }
   }
 
@@ -272,6 +278,7 @@ async function fluxolabLoadPendencias() {
   });
 
   _fluxolabPendLoaded = true;
+  try { _fluxolabPendLastSavedJSON = JSON.stringify(_fluxolabPendenciasState); } catch (e) { _fluxolabPendLastSavedJSON = null; }
 
   if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'pendencias') {
     fluxolabRenderPendencias();
@@ -279,37 +286,71 @@ async function fluxolabLoadPendencias() {
 }
 
 // Salva o estado no Supabase
-// OTIMIZAÇÃO: debounce de 5s + dedupe por snapshot + guarda contra concorrência.
 let _fluxolabPendSaveTimer;
 let _fluxolabPendLastSavedJSON = null;
 let _fluxolabPendSaving = false;
+
+async function fluxolabSavePendenciasNow() {
+  if (!_fluxolabPendLoaded) return false;
+  if (typeof _supa === 'undefined') return false;
+  if (_fluxolabPendSaving) {
+    clearTimeout(_fluxolabPendSaveTimer);
+    _fluxolabPendSaveTimer = setTimeout(() => { fluxolabSavePendenciasDebounced(); }, 400);
+    return false;
+  }
+  let snap;
+  try { snap = JSON.stringify(_fluxolabPendenciasState); } catch (e) { snap = null; }
+  if (snap && snap === _fluxolabPendLastSavedJSON) return true;
+  _fluxolabPendSaving = true;
+  try {
+    const { error } = await _supa.from('fluxolab_state').upsert(
+      { key: 'pendencias_mistas_complexas', data: _fluxolabPendenciasState },
+      { onConflict: 'key' }
+    );
+    if (error) {
+      console.warn('[pend] save erro:', error);
+      return false;
+    }
+    _fluxolabPendLastSavedJSON = snap;
+    return true;
+  } catch (e) {
+    console.warn('[pend] save falhou:', e);
+    return false;
+  } finally {
+    _fluxolabPendSaving = false;
+  }
+}
+
 function fluxolabSavePendenciasDebounced() {
   if (!_fluxolabPendLoaded) return;
   clearTimeout(_fluxolabPendSaveTimer);
-  _fluxolabPendSaveTimer = setTimeout(async () => {
-    if (typeof _supa === 'undefined') return;
-    if (_fluxolabPendSaving) {
-      _fluxolabPendSaveTimer = setTimeout(fluxolabSavePendenciasDebounced, 1000);
-      return;
+  _fluxolabPendSaveTimer = setTimeout(() => { fluxolabSavePendenciasNow(); }, 900);
+}
+
+if (typeof window !== 'undefined' && !window._pendFlushBound) {
+  window._pendFlushBound = true;
+  window.addEventListener('beforeunload', () => {
+    try { fluxolabSavePendenciasNow(); } catch (e) {}
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      try { fluxolabSavePendenciasNow(); } catch (e) {}
     }
-    let snap;
-    try { snap = JSON.stringify(_fluxolabPendenciasState); } catch(e){ snap = null; }
-    if (snap && snap === _fluxolabPendLastSavedJSON) return;
-    _fluxolabPendSaving = true;
-    try {
-      const { error } = await _supa.from('fluxolab_state').upsert(
-        { key: 'pendencias_mistas_complexas', data: _fluxolabPendenciasState },
-        { onConflict: 'key' }
-      );
-      if (!error) _fluxolabPendLastSavedJSON = snap;
-    } catch(e) { console.warn('[pend] save falhou:', e); }
-    finally { _fluxolabPendSaving = false; }
-  }, 5000);
+  });
 }
 
 // Aplica as atualizações que vieram de outros usuários (Tempo Real)
 function fluxolabApplyRemoteSyncPend(remoteData) {
-  if (!_fluxolabPendLoaded) return;
+  if (!_fluxolabPendLoaded || !remoteData) return;
+
+  try {
+    const localSnap = JSON.stringify(_fluxolabPendenciasState);
+    if (_fluxolabPendLastSavedJSON != null && localSnap !== _fluxolabPendLastSavedJSON) {
+      fluxolabSavePendenciasDebounced();
+      return;
+    }
+  } catch (e) {}
+
   let needRender = false;
 
 
@@ -351,6 +392,7 @@ function fluxolabApplyRemoteSyncPend(remoteData) {
     if (!activeId || activeId.indexOf('pnd-') !== 0) fluxolabRenderPendencias();
   }
   if (typeof updateActiveUsersInTables === 'function') updateActiveUsersInTables();
+  try { _fluxolabPendLastSavedJSON = JSON.stringify(_fluxolabPendenciasState); } catch (e) {}
 }
 
 // Recalcula e atualiza os totais de DOCA/LAB/Checklists exibidos no cabeçalho da tabela
@@ -694,43 +736,158 @@ function pendDragEnd(e) {
   e.target.setAttribute('draggable', 'false');
 }
 
-// Salvamento de Larguras e Alturas no LocalStorage
+// ─── Larguras de coluna: alça na borda (sem CSS resize — evitava “puxar de volta”) ───
 let _pendResizeObserver = null;
+let _pendColDrag = null; // { id, startX, startW, minW }
+let _pendRenderQueued = false;
+const PEND_SIZES_VER = 3; // bump quando o formato/comportamento de larguras mudar
+
+function pendMigrateColSizes() {
+  try {
+    const ver = parseInt(localStorage.getItem('fluxolabPendSizesVer') || '0', 10) || 0;
+    if (ver >= PEND_SIZES_VER) return;
+    const saved = JSON.parse(localStorage.getItem('fluxolabPendSizes') || '{}');
+    Object.keys(saved).forEach(k => {
+      if (/^ph-pnd-/.test(k)) delete saved[k];
+    });
+    localStorage.setItem('fluxolabPendSizes', JSON.stringify(saved));
+    localStorage.setItem('fluxolabPendSizesVer', String(PEND_SIZES_VER));
+  } catch (e) {
+    try { localStorage.setItem('fluxolabPendSizesVer', String(PEND_SIZES_VER)); } catch (e2) {}
+  }
+}
+
+function pendGetSavedSizes() {
+  pendMigrateColSizes();
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem('fluxolabPendSizes') || '{}'); } catch (e) { saved = {}; }
+  let changed = false;
+  Object.keys(saved).forEach(id => {
+    if (!/^ph-pnd-/.test(id)) return; // textareas usam outros ids
+    const n = parseInt(saved[id], 10);
+    const def = PEND_COL_DEFS.find(c => id.endsWith('-' + c.rz));
+    const min = def ? (parseInt(def.min, 10) || 40) : 40;
+    const fallback = def ? (parseInt(def.w, 10) || 80) : 80;
+    if (!n || n < min || n > 1200) {
+      saved[id] = fallback + 'px';
+      changed = true;
+    }
+  });
+  if (changed) {
+    try { localStorage.setItem('fluxolabPendSizes', JSON.stringify(saved)); } catch (e) {}
+  }
+  return saved;
+}
+
+function pendSetSavedSize(id, wPx) {
+  const saved = pendGetSavedSizes();
+  saved[id] = wPx;
+  try { localStorage.setItem('fluxolabPendSizes', JSON.stringify(saved)); } catch (e) {}
+}
+
+function pendApplyColWidth(resizerId, wPx) {
+  const colEl = Array.from(document.querySelectorAll('col[data-rz]')).find(c => c.getAttribute('data-rz') === resizerId);
+  if (colEl) colEl.style.width = wPx;
+  const th = document.querySelector(`th[data-rz="${resizerId}"]`);
+  if (th) {
+    th.style.width = wPx;
+    th.style.minWidth = wPx;
+    th.style.maxWidth = wPx;
+  }
+  const label = document.getElementById(resizerId);
+  if (label) label.style.width = '100%';
+  const tbl = (colEl && colEl.closest('table')) || (th && th.closest('table'));
+  if (tbl) {
+    let total = 0;
+    tbl.querySelectorAll('colgroup col').forEach(c => {
+      if (c.style.display === 'none') return;
+      const cw = parseInt(c.style.width, 10);
+      if (cw) total += cw;
+    });
+    if (total) tbl.style.width = total + 'px';
+  }
+}
+
+function pendColDragStart(e, resizerId, minPx) {
+  e.preventDefault();
+  e.stopPropagation();
+  const colEl = Array.from(document.querySelectorAll('col[data-rz]')).find(c => c.getAttribute('data-rz') === resizerId);
+  const startW = (colEl && parseInt(colEl.style.width, 10)) || minPx || 40;
+  _pendColDrag = {
+    id: resizerId,
+    startX: e.clientX,
+    startW,
+    minW: minPx || 40,
+  };
+  document.body.style.cursor = 'col-resize';
+  document.body.style.userSelect = 'none';
+}
+
+function pendColDragMove(e) {
+  if (!_pendColDrag) return;
+  const dx = e.clientX - _pendColDrag.startX;
+  const w = Math.max(_pendColDrag.minW, Math.min(1200, Math.round(_pendColDrag.startW + dx)));
+  pendApplyColWidth(_pendColDrag.id, w + 'px');
+}
+
+function pendColDragEnd() {
+  if (!_pendColDrag) return;
+  const colEl = Array.from(document.querySelectorAll('col[data-rz]')).find(c => c.getAttribute('data-rz') === _pendColDrag.id);
+  const w = (colEl && parseInt(colEl.style.width, 10)) || _pendColDrag.startW;
+  pendSetSavedSize(_pendColDrag.id, w + 'px');
+  _pendColDrag = null;
+  document.body.style.cursor = '';
+  document.body.style.userSelect = '';
+  if (_pendRenderQueued) {
+    _pendRenderQueued = false;
+    fluxolabRenderPendencias();
+  }
+}
+
+if (typeof window !== 'undefined' && !window._pendColDragBound) {
+  window._pendColDragBound = true;
+  window.addEventListener('mousemove', pendColDragMove);
+  window.addEventListener('mouseup', pendColDragEnd);
+  window.addEventListener('blur', pendColDragEnd);
+}
+
+/** Só textareas (altura). Colunas usam alça dedicada. */
 function pendInitResizeObserver() {
   if (_pendResizeObserver) _pendResizeObserver.disconnect();
-
   _pendResizeObserver = new ResizeObserver(entries => {
-    let savedSizes = JSON.parse(localStorage.getItem('fluxolabPendSizes') || '{}');
+    let savedSizes = null;
     let changed = false;
-    for (let entry of entries) {
-      if (entry.target.id) {
-        if (entry.target.classList.contains('pend-header-resizer')) {
-          savedSizes[entry.target.id] = entry.target.style.width;
-          changed = true;
-          // Aplica a largura na coluna imediatamente (<col>), sem esperar re-render
-          const col = document.querySelector(`col[data-rz="${entry.target.id}"]`);
-          if (col && entry.target.style.width) {
-            col.style.width = entry.target.style.width;
-            const tbl = col.closest('table');
-            if (tbl) {
-              let total = 0;
-              tbl.querySelectorAll('colgroup col').forEach(c => {
-                if (c.style.display === 'none') return;
-                total += parseInt(c.style.width, 10) || 0;
-              });
-              if (total) tbl.style.width = total + 'px';
-            }
-          }
-        } else if (entry.target.tagName.toLowerCase() === 'textarea') {
-          savedSizes[entry.target.id] = entry.target.style.height;
-          changed = true;
-        }
+    for (const entry of entries) {
+      if (!entry.target.id) continue;
+      if (!entry.target.classList.contains('pend-textarea')) continue;
+      if (!savedSizes) {
+        try { savedSizes = JSON.parse(localStorage.getItem('fluxolabPendSizes') || '{}'); } catch (e) { savedSizes = {}; }
+      }
+      const h = Math.round(entry.contentRect.height || entry.target.offsetHeight || 0);
+      if (h > 0) {
+        savedSizes[entry.target.id] = h + 'px';
+        changed = true;
       }
     }
-    if (changed) localStorage.setItem('fluxolabPendSizes', JSON.stringify(savedSizes));
+    if (changed && savedSizes) {
+      try { localStorage.setItem('fluxolabPendSizes', JSON.stringify(savedSizes)); } catch (e) {}
+    }
   });
+  document.querySelectorAll('.pend-textarea').forEach(el => _pendResizeObserver.observe(el));
+}
 
-  document.querySelectorAll('.pend-header-resizer, .pend-textarea').forEach(el => _pendResizeObserver.observe(el));
+function pendResetColWidths() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('fluxolabPendSizes') || '{}');
+    Object.keys(saved).forEach(k => {
+      if (/^ph-pnd-/.test(k)) delete saved[k];
+    });
+    localStorage.setItem('fluxolabPendSizes', JSON.stringify(saved));
+    localStorage.setItem('fluxolabPendSizesVer', String(PEND_SIZES_VER));
+  } catch (e) {
+    try { localStorage.removeItem('fluxolabPendSizes'); } catch (e2) {}
+  }
+  fluxolabRenderPendencias();
 }
 
 // Badge visual ao lado do modelo: indica se existe checklist importado para ele
@@ -799,7 +956,7 @@ function updateActiveUsersInTables() {
 
 function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
   const rows = _fluxolabPendenciasState[tableName] || [];
-  const savedSizes = JSON.parse(localStorage.getItem('fluxolabPendSizes') || '{}');
+  const savedSizes = pendGetSavedSizes();
 
   // Totais atuais de DOCA, LAB e Checklists (soma de todas as linhas preenchidas)
   let totalDoca = 0, totalLab = 0;
@@ -821,13 +978,17 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
   // table-layout:fixed => a largura definida no cabeçalho MANDA na coluna
   // (o conteúdo do Bolsão quebra a linha em vez de esticar a tabela).
   const tableStyle = `width:${totalW}px;table-layout:fixed;border-collapse:separate;border-spacing:0;font-family:var(--font);font-size:14px;text-align:center;border-radius:12px;overflow:hidden;background:rgba(0,0,0,0.2);border:1px solid var(--border2);box-shadow:0 8px 32px rgba(0,0,0,0.3)`;
-  const thStyle = 'border-bottom:1px solid var(--border2);border-right:1px solid var(--border2);padding:0;font-weight:800;vertical-align:middle;background:rgba(0,0,0,0.4);overflow:hidden';
+  const thStyle = 'border-bottom:1px solid var(--border2);border-right:1px solid var(--border2);padding:0;font-weight:800;vertical-align:middle;background:rgba(0,0,0,0.4);overflow:visible';
   const tdStyle = 'border-bottom:1px solid var(--border2);border-right:1px solid var(--border2);padding:0;vertical-align:middle;overflow:hidden';
   const tdLastStyle = tdStyle;
 
   const resizableHeader = (content, id, defWidth, minWidth, color) => {
-    const savedW = savedSizes[id] || defWidth;
-    return `<div id="${id}" class="pend-header-resizer" style="resize:horizontal;overflow:hidden;width:${savedW};min-width:${minWidth};max-width:100%;padding:12px 6px;margin:0 auto;color:${color || 'var(--muted)'};font-size:11px;text-transform:uppercase;letter-spacing:0.05em">${content}</div>`;
+    const minPx = parseInt(minWidth, 10) || 40;
+    return `<div style="position:relative;width:100%;height:100%;min-height:36px;box-sizing:border-box">
+      <div id="${id}" class="pend-header-label" style="padding:12px 10px 12px 6px;color:${color || 'var(--muted)'};font-size:11px;text-transform:uppercase;letter-spacing:0.05em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${content}</div>
+      <div class="pend-col-grip" title="Arraste para ajustar largura" onmousedown="pendColDragStart(event,'${id}',${minPx})"
+           style="position:absolute;top:0;right:-2px;width:12px;height:100%;cursor:col-resize;z-index:5;background:linear-gradient(90deg,transparent 40%,rgba(255,255,255,.18) 100%)"></div>
+    </div>`;
   };
 
   const activeSortCol = _pendActiveSortCol[tableName] || 'media';
@@ -855,7 +1016,7 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
   ).join('');
 
   const theadColsHtml = PEND_COL_DEFS.map(c =>
-    `<th style="${thStyle}${hid(c.k)}">${resizableHeader(headerContent[c.k], colId(c), c.w, c.min, headerColor[c.k])}</th>`
+    `<th data-rz="${colId(c)}" style="${thStyle};width:${colW(c)};min-width:${colW(c)};max-width:${colW(c)};position:relative${hid(c.k)}">${resizableHeader(headerContent[c.k], colId(c), c.w, c.min, headerColor[c.k])}</th>`
   ).join('');
 
   // Menu "Colunas" — permite ocultar/exibir qualquer coluna
@@ -1063,6 +1224,10 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
 }
 
 function fluxolabRenderPendencias() {
+  if (_pendColDrag) {
+    _pendRenderQueued = true;
+    return;
+  }
   const panel = document.getElementById('fluxolab-tab-pendencias-panel');
   if (!panel) return;
 
@@ -1078,14 +1243,17 @@ function fluxolabRenderPendencias() {
   let html = dataListHtml;
 
   html += `
-    <div style="margin-bottom:24px;display:flex;align-items:center;gap:14px">
-      <div style="background:var(--bg3);padding:10px;border-radius:12px;border:1px solid var(--border2);display:inline-flex;align-items:center;justify-content:center;box-shadow:inset 0 2px 10px rgba(0,0,0,0.3)">
-        <span style="font-size:24px;line-height:1">🧩</span>
+    <div style="margin-bottom:24px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;justify-content:space-between">
+      <div style="display:flex;align-items:center;gap:14px">
+        <div style="background:var(--bg3);padding:10px;border-radius:12px;border:1px solid var(--border2);display:inline-flex;align-items:center;justify-content:center;box-shadow:inset 0 2px 10px rgba(0,0,0,0.3)">
+          <span style="font-size:24px;line-height:1">🧩</span>
+        </div>
+        <div>
+          <h2 style="font-size:22px;font-weight:900;color:var(--text);margin:0;letter-spacing:-0.02em">Pendências Mistas & Complexas <span style="font-size:10px;background:#4ade8022;color:#4ade80;padding:2px 6px;border-radius:4px;margin-left:6px;vertical-align:middle;text-transform:uppercase">Online</span></h2>
+          <p style="font-size:13px;color:var(--muted);margin:4px 0 0">Modo Multiplayer: Qualquer alteração feita por você ou por outros usuários atualiza a tela em tempo real sem conflitos. Arraste a borda direita do cabeçalho para ajustar largura.</p>
+        </div>
       </div>
-      <div>
-        <h2 style="font-size:22px;font-weight:900;color:var(--text);margin:0;letter-spacing:-0.02em">Pendências Mistas & Complexas <span style="font-size:10px;background:#4ade8022;color:#4ade80;padding:2px 6px;border-radius:4px;margin-left:6px;vertical-align:middle;text-transform:uppercase">Online</span></h2>
-        <p style="font-size:13px;color:var(--muted);margin:4px 0 0">Modo Multiplayer: Qualquer alteração feita por você ou por outros usuários atualiza a tela em tempo real sem conflitos.</p>
-      </div>
+      <button type="button" onclick="pendResetColWidths()" style="background:var(--bg3);color:var(--muted);border:1px solid var(--border2);border-radius:8px;padding:8px 12px;font-size:11px;font-weight:800;cursor:pointer;font-family:var(--font)">↺ Restaurar larguras</button>
     </div>
   `;
 

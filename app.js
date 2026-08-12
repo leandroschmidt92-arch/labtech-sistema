@@ -446,6 +446,36 @@ function _supaAuthed(){ return _operatorAccessToken ? _supaOp : _supa; }
 const _db = createSupabaseCompatShim(_supa);
 window._db = _db; // exposto globalmente para os patches de integração
 
+// ── Canal único Realtime para fluxolab_state (planejamento / pendências / etc.) ──
+// planejamento.js e pendencias.js dependem de window._fluxolabStateOn(key, handler).
+// Sem isso o load quebrava ANTES de marcar *_Loaded=true e o save nunca gravava.
+window._fluxolabStateHandlers = window._fluxolabStateHandlers || Object.create(null);
+window._fluxolabStateChannel = window._fluxolabStateChannel || null;
+window._fluxolabStateOn = function(key, handler){
+  if (!key || typeof handler !== 'function') return;
+  if (!window._fluxolabStateHandlers[key]) window._fluxolabStateHandlers[key] = [];
+  window._fluxolabStateHandlers[key].push(handler);
+  if (typeof _supa === 'undefined' || !_supa) return;
+  if (window._fluxolabStateChannel) return;
+  try {
+    window._fluxolabStateChannel = _supa.channel('fluxolab_state_bus')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'fluxolab_state' }, function(payload){
+        try {
+          const k = payload && payload.new && payload.new.key;
+          if (!k) return;
+          const list = window._fluxolabStateHandlers[k] || [];
+          for (let i = 0; i < list.length; i++) {
+            try { list[i](payload); } catch (e) { console.warn('[fluxolab_state] handler', k, e); }
+          }
+        } catch (e) { console.warn('[fluxolab_state] payload', e); }
+      })
+      .subscribe();
+  } catch (e) {
+    console.warn('[fluxolab_state] canal realtime falhou:', e);
+    window._fluxolabStateChannel = null;
+  }
+};
+
 // ── OTIMIZAÇÃO CONSUMO REALTIME: canal único para tabela 'app_config' ────
 // Antes: 4 canais Realtime separados (app_config_celebration, app_config_alerts,
 // sectorTabPerms, relSubTabPerms), cada um com seu próprio filtro key=eq.X na
@@ -23452,8 +23482,28 @@ function _isDestinoEscolhidoPeloOperador(item) {
   return auto === false || auto === 'false' || auto === 0;
 }
 
+/** Setores autorizados a gerar/imprimir etiqueta de movimentação */
+const MOV_ETIQ_SETORES_OK = new Set([
+  'MONTAGEM', 'LIMPEZA', 'COMPLEXA', 'COMPLEXAS',
+  'DESMEMBRAMENTO', 'ELETRONICA',
+]);
+
+function _normSetorMovEtiqueta(setor) {
+  return String(setor || '')
+    .trim()
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function _setorPodeEtiquetaMovimentacao(setor) {
+  return MOV_ETIQ_SETORES_OK.has(_normSetorMovEtiqueta(setor));
+}
+
 function _isEtiquetaMovimentacaoManual(item){
   if (!_isMovimentacaoComDestino(item)) return false;
+  // Só Montagem, Limpeza, Complexa, Desmembramento e Eletrônica
+  if (!_setorPodeEtiquetaMovimentacao(item.setor)) return false;
   // Painel "Mover SELBs" do FluxoLAB
   if (item.tipo === 'manual') return true;
   if (item.tipo === 'finalizar') {
@@ -24032,12 +24082,16 @@ async function testarSpoolEtiquetaMovimentacao(){
   _mostrarToastMovPrint('🧪 Teste spool: registrando ' + selb + '…');
 
   // 1) Grava no fluxolab_log → aparece na tabela de Imprimir movimentações
+  const setorTeste = (currentUser && _setorPodeEtiquetaMovimentacao(currentUser.sector))
+    ? currentUser.sector
+    : 'MONTAGEM';
   if (typeof _fluxolabLogEntry === 'function') {
     _fluxolabLogEntry(selb, de, para, 'MOVIMENTAÇÃO', {
       tipo: 'manual',
       automatico: false,
       motivo: 'Teste interno do spool RAW (sem operador)',
       resultado: 'teste',
+      setor: setorTeste,
     });
   } else {
     _mostrarToastMovPrint('⚠️ Log de movimentação indisponível');

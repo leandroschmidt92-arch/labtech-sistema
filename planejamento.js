@@ -71,21 +71,31 @@ async function fluxolabLoadPlanejamento() {
       if (!error && data && data.data) {
         _fluxolabPlanejamentoState = Object.assign({ tabela1: [], tabela2: [], tabela3: [] }, data.data);
       }
+      if (error) console.warn('[plan] load erro:', error);
     } catch(e) { console.error('Erro ao carregar planejamento:', e); }
     
-    // Configura o sincronismo em tempo real (Multiplayer)
+    // Configura o sincronismo em tempo real (Multiplayer) — nunca bloqueia o loaded
     if (!_planSyncChannel) {
       _planSyncChannel = true;
-      window._fluxolabStateOn('planejamento_lote_dia', payload => {
-        if (payload.new && payload.new.data) {
-          fluxolabApplyRemoteSync(payload.new.data);
+      try {
+        if (typeof window._fluxolabStateOn === 'function') {
+          window._fluxolabStateOn('planejamento_lote_dia', payload => {
+            if (payload.new && payload.new.data) {
+              fluxolabApplyRemoteSync(payload.new.data);
+            }
+          });
+        } else {
+          console.warn('[plan] _fluxolabStateOn indisponível — sync realtime desligado');
         }
-      });
+      } catch (e) {
+        console.warn('[plan] falha ao registrar realtime:', e);
+      }
     }
   }
   
   // Garantir linhas mínimas
   ['tabela1', 'tabela2', 'tabela3'].forEach(t => {
+    if (!Array.isArray(_fluxolabPlanejamentoState[t])) _fluxolabPlanejamentoState[t] = [];
     const minRows = FLUXOLAB_PLAN_MIN_ROWS[t] || 5;
     while (_fluxolabPlanejamentoState[t].length < minRows) {
       _fluxolabPlanejamentoState[t].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
@@ -96,6 +106,7 @@ async function fluxolabLoadPlanejamento() {
   });
   
   _fluxolabPlanLoaded = true;
+  try { _fluxolabPlanLastSavedJSON = JSON.stringify(_fluxolabPlanejamentoState); } catch (e) { _fluxolabPlanLastSavedJSON = null; }
   
   if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'planejamento') {
     fluxolabRenderPlanejamento();
@@ -103,41 +114,91 @@ async function fluxolabLoadPlanejamento() {
 }
 
 // Salva o estado no Supabase
-// OTIMIZAÇÃO: debounce de 5s + dedupe (não regrava se o snapshot é idêntico ao
-// último enviado) + guarda contra chamadas concorrentes. Reduz drasticamente
-// os POSTs ao fluxolab_state quando o usuário clica sem alterar de fato,
-// ou quando eventos Realtime disparam handlers redundantes.
+// Debounce curto + dedupe + flush em beforeunload / troca de aba.
 let _fluxolabPlanSaveTimer;
 let _fluxolabPlanLastSavedJSON = null;
 let _fluxolabPlanSaving = false;
-function fluxolabSavePlanejamentoDebounced() {
-  if (!_fluxolabPlanLoaded) return;
-  clearTimeout(_fluxolabPlanSaveTimer);
-  _fluxolabPlanSaveTimer = setTimeout(async () => {
-    if (typeof _supa === 'undefined') return;
-    if (_fluxolabPlanSaving) {
-      // Reagenda para depois do save atual terminar
-      _fluxolabPlanSaveTimer = setTimeout(fluxolabSavePlanejamentoDebounced, 1000);
-      return;
-    }
-    let snap;
-    try { snap = JSON.stringify(_fluxolabPlanejamentoState); } catch(e){ snap = null; }
-    if (snap && snap === _fluxolabPlanLastSavedJSON) return; // sem mudança real
-    _fluxolabPlanSaving = true;
-    try {
-      const { error } = await _supa.from('fluxolab_state').upsert(
+
+async function fluxolabSavePlanejamentoNow() {
+  if (!_fluxolabPlanLoaded) return false;
+  if (typeof _supa === 'undefined') return false;
+  if (_fluxolabPlanSaving) {
+    clearTimeout(_fluxolabPlanSaveTimer);
+    _fluxolabPlanSaveTimer = setTimeout(() => { fluxolabSavePlanejamentoDebounced(); }, 400);
+    return false;
+  }
+  let snap;
+  try { snap = JSON.stringify(_fluxolabPlanejamentoState); } catch (e) { snap = null; }
+  if (snap && snap === _fluxolabPlanLastSavedJSON) return true;
+  _fluxolabPlanSaving = true;
+  try {
+    const { error } = await _supa.from('fluxolab_state').upsert(
+      { key: 'planejamento_lote_dia', data: _fluxolabPlanejamentoState, updated_at: new Date().toISOString() },
+      { onConflict: 'key' }
+    );
+    if (error) {
+      console.warn('[plan] save erro:', error);
+      // tenta sem updated_at (coluna pode não existir)
+      const { error: err2 } = await _supa.from('fluxolab_state').upsert(
         { key: 'planejamento_lote_dia', data: _fluxolabPlanejamentoState },
         { onConflict: 'key' }
       );
-      if (!error) _fluxolabPlanLastSavedJSON = snap;
-    } catch(e) { console.warn('[plan] save falhou:', e); }
-    finally { _fluxolabPlanSaving = false; }
-  }, 5000);
+      if (err2) {
+        console.warn('[plan] save erro (retry):', err2);
+        return false;
+      }
+    }
+    _fluxolabPlanLastSavedJSON = snap;
+    return true;
+  } catch (e) {
+    console.warn('[plan] save falhou:', e);
+    return false;
+  } finally {
+    _fluxolabPlanSaving = false;
+  }
+}
+
+function fluxolabSavePlanejamentoDebounced() {
+  if (!_fluxolabPlanLoaded) return;
+  clearTimeout(_fluxolabPlanSaveTimer);
+  _fluxolabPlanSaveTimer = setTimeout(() => { fluxolabSavePlanejamentoNow(); }, 900);
+}
+
+// Garante flush ao sair / ocultar a página
+if (typeof window !== 'undefined' && !window._planFlushBound) {
+  window._planFlushBound = true;
+  window.addEventListener('beforeunload', () => {
+    try {
+      if (!_fluxolabPlanLoaded) return;
+      const snap = JSON.stringify(_fluxolabPlanejamentoState);
+      if (snap && snap !== _fluxolabPlanLastSavedJSON && typeof _supa !== 'undefined') {
+        // best-effort sync via keepalive fetch is hard with supabase-js; dispara save
+        fluxolabSavePlanejamentoNow();
+      }
+    } catch (e) {}
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      try { fluxolabSavePlanejamentoNow(); } catch (e) {}
+    }
+  });
 }
 
 // Aplica as atualizações que vieram de outros usuários (Tempo Real)
 function fluxolabApplyRemoteSync(remoteData) {
-  if (!_fluxolabPlanLoaded) return;
+  if (!_fluxolabPlanLoaded || !remoteData) return;
+
+  // Não sobrescrever edições locais ainda não salvas
+  try {
+    const localSnap = JSON.stringify(_fluxolabPlanejamentoState);
+    if (_fluxolabPlanLastSavedJSON != null && localSnap !== _fluxolabPlanLastSavedJSON) {
+      fluxolabSavePlanejamentoDebounced();
+      return;
+    }
+    // Eco do nosso próprio save — ignora
+    const remoteSnap = JSON.stringify(Object.assign({ tabela1: [], tabela2: [], tabela3: [] }, remoteData));
+    if (_fluxolabPlanLastSavedJSON && remoteSnap === _fluxolabPlanLastSavedJSON) return;
+  } catch (e) {}
   
   ['tabela1', 'tabela2', 'tabela3'].forEach(t => {
     if (!remoteData[t]) return;
@@ -194,6 +255,8 @@ function fluxolabApplyRemoteSync(remoteData) {
     }
     fluxolabUpdateTotalChk(t);
   });
+
+  try { _fluxolabPlanLastSavedJSON = JSON.stringify(_fluxolabPlanejamentoState); } catch (e) {}
 }
 
 // Atualização local pelo usuário atual
@@ -623,6 +686,7 @@ function fluxolabRenderPlanTable(title, tableName, titleColor, themeColor) {
           <div style="display:flex;align-items:center;gap:6px;height:100%;padding:0 8px 0 12px">
             <input id="plan-${tableName}-r${idx}-modelo" type="text" list="modelos-lista" placeholder="Digite..." value="${row.modelo || ''}" 
                    onfocus="${inpFocus}" onblur="${inpBlur}" 
+                   oninput="fluxolabUpdateRowElem(this, '${tableName}', 'modelo')"
                    onchange="fluxolabUpdateRowElem(this, '${tableName}', 'modelo')" 
                    style="flex:1;min-width:0;height:100%;min-height:36px;border:none;background:transparent;text-align:left;font-weight:800;outline:none;font-family:var(--font);font-size:15px;color:${themeColor};transition:all .2s;padding:0" />
             <span id="plan-${tableName}-r${idx}-badge" style="display:flex;align-items:center">${planBadgeHtml(statsChk.count, isFilled)}</span>
@@ -639,12 +703,14 @@ function fluxolabRenderPlanTable(title, tableName, titleColor, themeColor) {
         <td style="${tdStyle};width:72px;min-width:72px;max-width:72px;background:rgba(255,255,255,0.02);overflow:hidden">
           <input id="plan-${tableName}-r${idx}-qtd_wms" type="text" value="${row.qtd_wms || ''}" 
                  onfocus="${inpFocus}" onblur="${inpBlur}" 
+                 oninput="fluxolabUpdateRowElem(this, '${tableName}', 'qtd_wms')"
                  onchange="fluxolabUpdateRowElem(this, '${tableName}', 'qtd_wms')" 
                  style="${inpBase};min-width:0;box-sizing:border-box" />
         </td>
         <td style="${tdStyle};width:72px;min-width:72px;max-width:72px;background:rgba(255,255,255,0.02);overflow:hidden">
           <input id="plan-${tableName}-r${idx}-sugestao" type="text" value="${row.sugestao || ''}" 
                  onfocus="${inpFocus}" onblur="${inpBlur}" 
+                 oninput="fluxolabUpdateRowElem(this, '${tableName}', 'sugestao')"
                  onchange="fluxolabUpdateRowElem(this, '${tableName}', 'sugestao')" 
                  style="${inpBase};min-width:0;box-sizing:border-box;color:var(--accent)" />
         </td>
@@ -662,12 +728,14 @@ function fluxolabRenderPlanTable(title, tableName, titleColor, themeColor) {
         <td style="${tdStyle};padding:4px">
           <textarea id="plan-${tableName}-r${idx}-obs" class="plan-textarea" rows="1" placeholder="..."
                  onfocus="${inpFocus}" onblur="${inpBlur}" 
+                 oninput="fluxolabUpdateRowElem(this, '${tableName}', 'obs')"
                  onchange="fluxolabUpdateRowElem(this, '${tableName}', 'obs')" 
                  style="${inpBase};height:${hObs};padding-top:10px;font-weight:500;text-transform:uppercase;color:var(--text);resize:vertical">${esc(row.obs || '')}</textarea>
         </td>
         <td style="${tdLastStyle};padding:4px">
           <textarea id="plan-${tableName}-r${idx}-pecas" class="plan-textarea" rows="1" placeholder="..."
                  onfocus="${inpFocus}" onblur="${inpBlur}" 
+                 oninput="fluxolabUpdateRowElem(this, '${tableName}', 'pecas')"
                  onchange="fluxolabUpdateRowElem(this, '${tableName}', 'pecas')" 
                  style="${inpBase};height:${hPecas};padding-top:10px;font-weight:500;text-transform:uppercase;color:var(--text);resize:vertical">${esc(row.pecas || '')}</textarea>
         </td>
