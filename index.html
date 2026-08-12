@@ -910,6 +910,25 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     <!-- ══ GESTÃO DE EQUIPE / SAÚDE DA EQUIPE ══ -->
     <div id="admin-team-health-panel" style="margin-bottom:16px"></div>
 
+    <!-- ══ USO SUPABASE (requests deste navegador) ══ -->
+    <div id="admin-sb-usage-panel" style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:14px 18px;margin-bottom:16px;position:relative;z-index:5;isolation:isolate">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;position:relative;z-index:6">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:16px">📡</span>
+          <span style="font-size:13px;font-weight:700;color:var(--text)">Uso Supabase</span>
+          <span style="font-size:11px;color:var(--muted)">Por minuto · dia · semana · mês (este navegador)</span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:7">
+          <button type="button" onclick="_sbUsageReset()" style="background:none;border:1px solid var(--border2);border-radius:9px;color:var(--muted);font-family:var(--font);font-size:12px;font-weight:600;padding:7px 12px;cursor:pointer;position:relative;z-index:8">Zerar sessão</button>
+          <button type="button" onclick="_sbUsageExport('both')" title="Baixa JSON + TXT para colar no Cursor" style="background:rgba(245,166,35,.12);border:1px solid rgba(245,166,35,.4);border-radius:9px;color:var(--warn);font-family:var(--font);font-size:12px;font-weight:600;padding:7px 12px;cursor:pointer;position:relative;z-index:8">⬇ Exportar p/ análise</button>
+          <button type="button" onclick="_sbUsageExport('copy')" title="Copia resumo para colar no chat" style="background:none;border:1px solid var(--border2);border-radius:9px;color:var(--muted);font-family:var(--font);font-size:12px;font-weight:600;padding:7px 12px;cursor:pointer;position:relative;z-index:8">Copiar resumo</button>
+          <button type="button" onclick="renderSbUsagePanel(true)" style="background:rgba(61,214,140,.12);border:1px solid rgba(61,214,140,.35);border-radius:9px;color:var(--accent2);font-family:var(--font);font-size:12px;font-weight:600;padding:7px 12px;cursor:pointer;position:relative;z-index:8">Atualizar</button>
+          <a href="https://supabase.com/dashboard/project/wpawjyqjrzzleojzejuw/reports/api-overview" target="_blank" rel="noopener" style="background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.35);border-radius:9px;color:#60a5fa;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 12px;text-decoration:none;position:relative;z-index:8">Dashboard projeto ↗</a>
+        </div>
+      </div>
+      <div id="admin-sb-usage-body" style="font-size:12px;color:var(--muted);position:relative;z-index:1;overflow:hidden">Abrindo a aba Admin começa a atualizar sozinho…</div>
+    </div>
+
     <!-- ══ CONTROLE DE EXPEDIENTE ══ -->
     <div id="admin-sched-override-card" style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
       <div style="display:flex;align-items:center;gap:12px">
@@ -3819,7 +3838,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="supabase-compat-shim.js?v=2"></script>
-<script src="app.js?v=18"></script>
+<script src="app.js?v=23"></script>
 <script src="planejamento.js?v=2"></script>
 <script src="pendencias.js?v=3"></script>
 

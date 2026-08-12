@@ -388,16 +388,752 @@ function _drainReqQueue() {
     _reqQueue.shift()();
   }
 }
+
+// ── Contador de uso Supabase (este navegador) ───────────────────────────
+// Instrumenta o fetch REST/RPC. Persiste totais por dia no localStorage
+// para mostrar consumo do dia / semana / mês além da sessão atual.
+// Realtime (WebSocket) é contado à parte (canais abertos), não cada evento.
+const _SB_USAGE_LS_KEY = 'labtechSbUsageV1';
+const _SB_USAGE_RECENT_MAX = 80;
+const _SB_USAGE_KEEP_DAYS = 40;
+
+const _sbUsage = {
+  startedAt: Date.now(),
+  total: 0,
+  errors: 0,
+  byResource: Object.create(null),
+  byMinute: Object.create(null),
+  recent: [],
+  channels: Object.create(null),
+  channelTotal: 0,
+};
+
+function _sbUsageDayKey(d) {
+  const x = d || new Date();
+  return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0');
+}
+
+function _sbUsageLoadHist() {
+  try {
+    const o = JSON.parse(localStorage.getItem(_SB_USAGE_LS_KEY) || '{}');
+    if (!o || typeof o !== 'object') return { days: {} };
+    if (!o.days || typeof o.days !== 'object') o.days = {};
+    return o;
+  } catch (e) {
+    return { days: {} };
+  }
+}
+
+let _sbUsageHist = _sbUsageLoadHist();
+let _sbUsagePersistTimer = null;
+
+function _sbUsagePruneAndSave() {
+  try {
+    const days = _sbUsageHist.days || {};
+    const keys = Object.keys(days).sort();
+    if (keys.length > _SB_USAGE_KEEP_DAYS) {
+      keys.slice(0, keys.length - _SB_USAGE_KEEP_DAYS).forEach(k => { delete days[k]; });
+    }
+    localStorage.setItem(_SB_USAGE_LS_KEY, JSON.stringify({ days }));
+  } catch (e) {}
+}
+
+function _sbUsageSchedulePersist() {
+  if (_sbUsagePersistTimer) return;
+  _sbUsagePersistTimer = setTimeout(() => {
+    _sbUsagePersistTimer = null;
+    _sbUsagePruneAndSave();
+  }, 1200);
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    try { _sbUsagePruneAndSave(); } catch (e) {}
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      try { _sbUsagePruneAndSave(); } catch (e) {}
+    }
+  });
+}
+
+function _sbUsageEnsureDay(dayKey) {
+  if (!_sbUsageHist.days) _sbUsageHist.days = {};
+  if (!_sbUsageHist.days[dayKey]) {
+    _sbUsageHist.days[dayKey] = { total: 0, errors: 0, byResource: {}, byHour: {} };
+  }
+  const day = _sbUsageHist.days[dayKey];
+  if (!day.byResource) day.byResource = {};
+  if (!day.byHour) day.byHour = {};
+  return day;
+}
+
+function _sbUsagePeriodStats() {
+  const days = _sbUsageHist.days || {};
+  const todayKey = _sbUsageDayKey();
+  const dayRow = days[todayKey] || { total: 0, errors: 0, byResource: {} };
+
+  let week = 0, weekErr = 0;
+  for (let i = 0; i < 7; i++) {
+    const d = new Date();
+    d.setHours(12, 0, 0, 0);
+    d.setDate(d.getDate() - i);
+    const k = _sbUsageDayKey(d);
+    const row = days[k];
+    if (!row) continue;
+    week += row.total || 0;
+    weekErr += row.errors || 0;
+  }
+
+  let month = 0, monthErr = 0;
+  const ym = todayKey.slice(0, 7); // YYYY-MM
+  Object.keys(days).forEach(k => {
+    if (!k.startsWith(ym)) return;
+    month += days[k].total || 0;
+    monthErr += days[k].errors || 0;
+  });
+
+  // Top recursos do dia
+  const dayTop = Object.keys(dayRow.byResource || {}).map(k => {
+    const r = dayRow.byResource[k];
+    return { key: k, total: r.total || 0, kind: r.kind || 'table', errors: r.errors || 0 };
+  }).sort((a, b) => b.total - a.total).slice(0, 8);
+
+  return {
+    day: dayRow.total || 0,
+    dayErr: dayRow.errors || 0,
+    week,
+    weekErr,
+    month,
+    monthErr,
+    dayTop,
+    todayKey,
+  };
+}
+
+function _sbUsageParse(url) {
+  let path = '';
+  try { path = new URL(url, _SB_URL).pathname || ''; } catch (e) { path = String(url || ''); }
+  const rest = path.match(/\/rest\/v1\/(?:rpc\/)?([^/?#]+)/i);
+  if (rest) {
+    const isRpc = /\/rest\/v1\/rpc\//i.test(path);
+    return { kind: isRpc ? 'rpc' : 'table', resource: (isRpc ? 'rpc:' : '') + decodeURIComponent(rest[1]) };
+  }
+  const auth = path.match(/\/auth\/v1\/([^/?#]+)/i);
+  if (auth) return { kind: 'auth', resource: 'auth:' + decodeURIComponent(auth[1]) };
+  const stor = path.match(/\/storage\/v1\/(?:object|bucket)\/([^/?#]+)/i);
+  if (stor) return { kind: 'storage', resource: 'storage:' + decodeURIComponent(stor[1]) };
+  const other = path.replace(/^\/+/, '').split('/').slice(0, 3).join('/') || '(outro)';
+  return { kind: 'other', resource: other };
+}
+
+function _sbUsageBucket() {
+  const d = new Date();
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
+
+function _sbUsageTrack(meta) {
+  _sbUsage.total++;
+  const key = meta.resource || '(desconhecido)';
+  const kind = meta.kind || 'other';
+  let row = _sbUsage.byResource[key];
+  if (!row) {
+    row = { total: 0, get: 0, post: 0, patch: 0, put: 0, delete: 0, head: 0, errors: 0, ms: 0, kind };
+    _sbUsage.byResource[key] = row;
+  }
+  row.total++;
+  const m = String(meta.method || 'GET').toLowerCase();
+  if (row[m] != null) row[m]++; else row.get++;
+  row.ms += meta.ms || 0;
+  const isErr = !!(meta.error || (meta.status && meta.status >= 400));
+  if (isErr) {
+    row.errors++;
+    _sbUsage.errors++;
+  }
+  const bucket = _sbUsageBucket();
+  _sbUsage.byMinute[bucket] = (_sbUsage.byMinute[bucket] || 0) + 1;
+  _sbUsage.recent.unshift({
+    t: Date.now(),
+    method: String(meta.method || 'GET').toUpperCase(),
+    resource: key,
+    status: meta.status || 0,
+    ms: meta.ms || 0,
+    error: isErr,
+  });
+  if (_sbUsage.recent.length > _SB_USAGE_RECENT_MAX) _sbUsage.recent.length = _SB_USAGE_RECENT_MAX;
+
+  // Persistência dia / semana / mês
+  try {
+    const day = _sbUsageEnsureDay(_sbUsageDayKey());
+    day.total = (day.total || 0) + 1;
+    if (isErr) day.errors = (day.errors || 0) + 1;
+    const hour = String(new Date().getHours()).padStart(2, '0');
+    day.byHour[hour] = (day.byHour[hour] || 0) + 1;
+    let dRow = day.byResource[key];
+    if (!dRow) {
+      dRow = { total: 0, errors: 0, kind };
+      day.byResource[key] = dRow;
+    }
+    dRow.total++;
+    if (isErr) dRow.errors++;
+    _sbUsageSchedulePersist();
+  } catch (e) {}
+
+  if (typeof window._sbUsageOnUpdate === 'function') {
+    try { window._sbUsageOnUpdate(); } catch (e) {}
+  }
+}
+
+function _sbUsageTrackChannel(name) {
+  const n = String(name || '(canal)');
+  _sbUsage.channels[n] = (_sbUsage.channels[n] || 0) + 1;
+  _sbUsage.channelTotal++;
+  if (typeof window._sbUsageOnUpdate === 'function') {
+    try { window._sbUsageOnUpdate(); } catch (e) {}
+  }
+}
+
+function _sbUsageReset() {
+  _sbUsage.startedAt = Date.now();
+  _sbUsage.total = 0;
+  _sbUsage.errors = 0;
+  _sbUsage.byResource = Object.create(null);
+  _sbUsage.byMinute = Object.create(null);
+  _sbUsage.recent = [];
+  if (typeof renderSbUsagePanel === 'function') renderSbUsagePanel(true);
+}
+
+function _sbUsageResetHistory() {
+  if (!confirm('Zerar o histórico salvo neste navegador (dia / semana / mês)?\nA sessão atual continua contando.')) return;
+  _sbUsageHist = { days: {} };
+  try { localStorage.removeItem(_SB_USAGE_LS_KEY); } catch (e) {}
+  if (typeof renderSbUsagePanel === 'function') renderSbUsagePanel(true);
+}
+
+/** Monta payload completo para análise (Cursor / auditoria de consumo). */
+function _sbUsageBuildExport() {
+  try { _sbUsagePruneAndSave(); } catch (e) {}
+  const periods = _sbUsagePeriodStats();
+  const elapsedMin = Math.max(1 / 60, (Date.now() - _sbUsage.startedAt) / 60000);
+  const rpmAvg = _sbUsage.total / elapsedMin;
+  const rpmNow = _sbUsage.byMinute[_sbUsageBucket()] || 0;
+
+  const sessionTop = Object.keys(_sbUsage.byResource).map(k => {
+    const r = _sbUsage.byResource[k];
+    return {
+      resource: k,
+      kind: r.kind || 'other',
+      total: r.total || 0,
+      get: r.get || 0,
+      post: r.post || 0,
+      patch: r.patch || 0,
+      put: r.put || 0,
+      delete: r.delete || 0,
+      errors: r.errors || 0,
+      avgMs: r.total ? Math.round(r.ms / r.total) : 0,
+      totalMs: Math.round(r.ms || 0),
+    };
+  }).sort((a, b) => b.total - a.total);
+
+  const days = _sbUsageHist.days || {};
+  const daysSorted = Object.keys(days).sort().map(k => {
+    const d = days[k] || {};
+    const top = Object.keys(d.byResource || {}).map(rk => ({
+      resource: rk,
+      total: (d.byResource[rk] && d.byResource[rk].total) || 0,
+      errors: (d.byResource[rk] && d.byResource[rk].errors) || 0,
+      kind: (d.byResource[rk] && d.byResource[rk].kind) || 'other',
+    })).sort((a, b) => b.total - a.total).slice(0, 15);
+    return {
+      date: k,
+      total: d.total || 0,
+      errors: d.errors || 0,
+      byHour: d.byHour || {},
+      topResources: top,
+    };
+  });
+
+  const channels = Object.keys(_sbUsage.channels).map(n => ({
+    name: n,
+    opens: _sbUsage.channels[n] || 0,
+  })).sort((a, b) => b.opens - a.opens);
+
+  const user = (typeof currentUser !== 'undefined' && currentUser) ? {
+    isAdmin: !!currentUser.isAdmin,
+    sector: currentUser.sector || null,
+    id: currentUser.id || null,
+  } : null;
+
+  return {
+    schema: 'labtech-sb-usage-export-v1',
+    purpose: 'Colar no Cursor para analisar consumo Supabase e sugerir otimizações',
+    exportedAt: new Date().toISOString(),
+    timezoneOffsetMin: new Date().getTimezoneOffset(),
+    browser: {
+      userAgent: (typeof navigator !== 'undefined' && navigator.userAgent) || '',
+      language: (typeof navigator !== 'undefined' && navigator.language) || '',
+      hidden: !!(typeof document !== 'undefined' && document.hidden),
+    },
+    app: {
+      maxConcurrentReq: (typeof _MAX_CONCURRENT_REQ !== 'undefined') ? _MAX_CONCURRENT_REQ : null,
+      proxyConfigured: !!(typeof _PROXY_URL !== 'undefined' && _PROXY_URL),
+      queueLen: (typeof _reqQueue !== 'undefined' && _reqQueue) ? _reqQueue.length : 0,
+      activeReq: (typeof _activeReq !== 'undefined') ? _activeReq : 0,
+      user,
+    },
+    session: {
+      startedAt: new Date(_sbUsage.startedAt).toISOString(),
+      elapsedMin: Math.round(elapsedMin * 100) / 100,
+      total: _sbUsage.total,
+      errors: _sbUsage.errors,
+      rpmAvg: Math.round(rpmAvg * 10) / 10,
+      rpmNow,
+      byMinute: { ..._sbUsage.byMinute },
+      topResources: sessionTop.slice(0, 40),
+      recent: (_sbUsage.recent || []).slice(0, 50),
+    },
+    periods: {
+      day: periods.day,
+      dayErrors: periods.dayErr,
+      week7d: periods.week,
+      weekErrors: periods.weekErr,
+      month: periods.month,
+      monthErrors: periods.monthErr,
+      todayKey: periods.todayKey,
+      dayTopResources: periods.dayTop,
+    },
+    historyDays: daysSorted,
+    realtime: {
+      channelTotalOpens: _sbUsage.channelTotal,
+      channels,
+      note: 'Conta aberturas de canal, não mensagens WebSocket individuais',
+    },
+    hintsForAnalyst: [
+      'Contadores são só deste navegador (REST/RPC via fetch). Não inclui outros PCs.',
+      'Realtime não entra no total REST; ver seção realtime.channels.',
+      'Picos em history no boot costumam ser loadModeloAllPeriods / relatórios por dia.',
+      'operadores em admin costuma ser pollRef (polling periódico).',
+      'fluxolab_state costuma ser poll do FluxoLAB + estado (planejamento/pendências).',
+      'Sugira cortes: poll interval, coalescing, query única vs N GETs, defer preload, pause hidden tab.',
+    ],
+  };
+}
+
+function _sbUsageExportSummaryText(payload) {
+  const p = payload || _sbUsageBuildExport();
+  const lines = [];
+  lines.push('# Labtech — export uso Supabase');
+  lines.push('Gerado: ' + p.exportedAt);
+  lines.push('');
+  lines.push('## Resumo');
+  lines.push('- Sessão: ' + p.session.total + ' req · ' + p.session.rpmAvg + '/min média · ' + p.session.rpmNow + ' neste minuto · ' + p.session.errors + ' erros · ' + p.session.elapsedMin + ' min');
+  lines.push('- Dia (' + p.periods.todayKey + '): ' + p.periods.day);
+  lines.push('- Semana (7d): ' + p.periods.week7d);
+  lines.push('- Mês: ' + p.periods.month);
+  lines.push('- Canais RT (aberturas): ' + p.realtime.channelTotalOpens);
+  if (p.app && p.app.user) {
+    lines.push('- User: admin=' + p.app.user.isAdmin + ' sector=' + (p.app.user.sector || '—'));
+  }
+  lines.push('');
+  lines.push('## Top recursos (sessão)');
+  (p.session.topResources || []).slice(0, 15).forEach((r, i) => {
+    lines.push((i + 1) + '. ' + r.resource + ' — ' + r.total + ' (G' + r.get + ' P' + r.post + ' U' + ((r.patch || 0) + (r.put || 0)) + ' D' + r.delete + ') avg ' + r.avgMs + 'ms err ' + r.errors);
+  });
+  lines.push('');
+  lines.push('## Top recursos (hoje)');
+  (p.periods.dayTopResources || []).slice(0, 10).forEach((r, i) => {
+    lines.push((i + 1) + '. ' + r.key + ' — ' + r.total);
+  });
+  lines.push('');
+  lines.push('## Canais Realtime');
+  (p.realtime.channels || []).forEach(c => {
+    lines.push('- ' + c.name + ' ×' + c.opens);
+  });
+  lines.push('');
+  lines.push('## Dias salvos');
+  (p.historyDays || []).forEach(d => {
+    lines.push('- ' + d.date + ': ' + d.total + ' req' + (d.errors ? ' (' + d.errors + ' err)' : ''));
+  });
+  lines.push('');
+  lines.push('## Pedido');
+  lines.push('Analise este consumo e sugira otimizações concretas (poll, queries, preload, realtime, cache) priorizadas por impacto.');
+  lines.push('');
+  lines.push('(JSON completo anexado no arquivo .json exportado.)');
+  return lines.join('\n');
+}
+
+function _sbUsageDownloadBlob(filename, text, mime) {
+  const blob = new Blob([text], { type: mime || 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(url);
+    a.remove();
+  }, 500);
+}
+
+/**
+ * Exporta uso para análise no Cursor.
+ * mode: 'json' | 'txt' | 'both' (padrão both) | 'copy'
+ */
+async function _sbUsageExport(mode) {
+  mode = mode || 'both';
+  const payload = _sbUsageBuildExport();
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const base = 'labtech-sb-usage-' + stamp;
+  const jsonText = JSON.stringify(payload, null, 2);
+  const txt = _sbUsageExportSummaryText(payload);
+
+  if (mode === 'copy') {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(txt);
+        alert('Resumo copiado. Cole no chat do Cursor para eu analisar.\n\nDica: use também “Exportar p/ análise” para baixar o JSON completo.');
+        return;
+      }
+    } catch (e) {
+      console.warn('[sb-usage] clipboard falhou:', e);
+    }
+    // Fallback: baixa o txt se clipboard bloquear
+    _sbUsageDownloadBlob(base + '.txt', txt, 'text/plain;charset=utf-8');
+    alert('Não deu para copiar (permissão do navegador). Baixei o .txt — anexe no chat.');
+    return;
+  }
+
+  if (mode === 'json' || mode === 'both') {
+    _sbUsageDownloadBlob(base + '.json', jsonText, 'application/json;charset=utf-8');
+  }
+  if (mode === 'txt' || mode === 'both') {
+    _sbUsageDownloadBlob(base + '.txt', txt, 'text/plain;charset=utf-8');
+  }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(txt);
+    }
+  } catch (e) {}
+
+  const body = document.getElementById('admin-sb-usage-body');
+  if (body) {
+    const note = document.createElement('div');
+    note.style.cssText = 'margin:8px 0 0;padding:8px 10px;border-radius:8px;background:rgba(61,214,140,.12);border:1px solid rgba(61,214,140,.35);color:var(--accent2);font-size:11px;font-weight:600';
+    note.textContent = 'Export gerado (' + base + '). Envie o .json/.txt no Cursor (o resumo também foi copiado, se o navegador permitir).';
+    body.insertBefore(note, body.firstChild);
+    setTimeout(() => { try { note.remove(); } catch (e) {} }, 7000);
+  }
+}
+
+let _sbUsageTimer = null;
+let _sbUsagePaused = false; // true enquanto o mouse está sobre o painel (evita “clique fantasma”)
+
+function _sbUsageStartAutoRefresh() {
+  _sbUsageStopAutoRefresh();
+  _sbUsageTimer = setInterval(() => {
+    const panel = document.getElementById('view-admin');
+    if (!panel || !panel.classList.contains('active')) {
+      _sbUsageStopAutoRefresh();
+      return;
+    }
+    if (_sbUsagePaused) return;
+    renderSbUsagePanel(false);
+  }, 5000);
+}
+function _sbUsageStopAutoRefresh() {
+  if (_sbUsageTimer) {
+    clearInterval(_sbUsageTimer);
+    _sbUsageTimer = null;
+  }
+}
+window._sbUsageOnUpdate = function() {
+  // NÃO re-monta o HTML a cada request — só atualiza os números dos KPIs.
+  // Re-render completo a cada request destruía o DOM no meio do clique.
+  const panel = document.getElementById('view-admin');
+  if (!panel || !panel.classList.contains('active')) return;
+  if (_sbUsagePaused) return;
+  if (!_sbUsage._dirtyScheduled) {
+    _sbUsage._dirtyScheduled = true;
+    setTimeout(() => {
+      _sbUsage._dirtyScheduled = false;
+      if (_sbUsagePaused) return;
+      if (document.getElementById('view-admin')?.classList.contains('active')) {
+        _sbUsagePatchKpis();
+      }
+    }, 800);
+  }
+};
+
+function _sbUsageBindPanelHover() {
+  const panel = document.getElementById('admin-sb-usage-panel');
+  if (!panel || panel.dataset.hoverBound === '1') return;
+  panel.dataset.hoverBound = '1';
+  panel.addEventListener('mouseenter', () => { _sbUsagePaused = true; });
+  panel.addEventListener('mouseleave', () => { _sbUsagePaused = false; });
+  panel.addEventListener('focusin', () => { _sbUsagePaused = true; });
+  panel.addEventListener('focusout', () => {
+    setTimeout(() => {
+      const p = document.getElementById('admin-sb-usage-panel');
+      if (p && p.contains(document.activeElement)) return;
+      _sbUsagePaused = false;
+    }, 0);
+  });
+}
+
+function _sbUsagePatchKpis() {
+  const periods = _sbUsagePeriodStats();
+  const elapsedMin = Math.max(1 / 60, (Date.now() - _sbUsage.startedAt) / 60000);
+  const rpm = _sbUsage.total / elapsedMin;
+  const rpmNow = _sbUsage.byMinute[_sbUsageBucket()] || 0;
+  const set = (id, html) => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = html;
+  };
+  set('sb-kpi-rpm', String(rpmNow));
+  set('sb-kpi-rpm-sub', 'neste minuto · média sessão ' + rpm.toFixed(1) + '/min');
+  set('sb-kpi-day', _sbUsageFmtN(periods.day));
+  set('sb-kpi-week', _sbUsageFmtN(periods.week));
+  set('sb-kpi-month', _sbUsageFmtN(periods.month));
+  set('sb-kpi-session', _sbUsageFmtN(_sbUsage.total));
+  set('sb-kpi-session-sub', 'há ' + _sbUsageFmtAgo(_sbUsage.startedAt));
+  set('sb-kpi-errors', _sbUsageFmtN(_sbUsage.errors));
+  const queueLen = (typeof _reqQueue !== 'undefined' && _reqQueue) ? _reqQueue.length : 0;
+  const active = (typeof _activeReq !== 'undefined') ? _activeReq : 0;
+  set('sb-kpi-queue', active + '<span style="font-size:12px;color:var(--muted);font-weight:600">/' + _MAX_CONCURRENT_REQ + '</span> <span style="font-size:11px;color:var(--muted);font-weight:600">+' + queueLen + ' wait</span>');
+  set('sb-kpi-channels', _sbUsageFmtN(_sbUsage.channelTotal));
+}
+
+function _sbUsageEsc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function _sbUsageFmtMs(ms) {
+  if (!ms) return '—';
+  if (ms < 1000) return ms + ' ms';
+  return (ms / 1000).toFixed(1) + ' s';
+}
+
+function _sbUsageFmtAgo(ts) {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return s + 's';
+  return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+}
+
+function _sbUsageFmtN(n) {
+  return Number(n || 0).toLocaleString('pt-BR');
+}
+
+function renderSbUsagePanel(forceFull) {
+  const body = document.getElementById('admin-sb-usage-body');
+  if (!body) return;
+  _sbUsageBindPanelHover();
+
+  // Se o HTML dos KPIs já existe e não é refresh forçado, só atualiza números
+  if (!forceFull && document.getElementById('sb-kpi-rpm')) {
+    _sbUsagePatchKpis();
+    return;
+  }
+
+  const elapsedMin = Math.max(1 / 60, (Date.now() - _sbUsage.startedAt) / 60000);
+  const rpm = _sbUsage.total / elapsedMin;
+  const curMinKey = _sbUsageBucket();
+  const rpmNow = _sbUsage.byMinute[curMinKey] || 0;
+  const periods = _sbUsagePeriodStats();
+
+  const rows = Object.keys(_sbUsage.byResource).map(k => {
+    const r = _sbUsage.byResource[k];
+    return { key: k, ...r, avg: r.total ? Math.round(r.ms / r.total) : 0 };
+  }).sort((a, b) => b.total - a.total);
+
+  const top = rows.slice(0, 15);
+  const maxTop = top.length ? top[0].total : 1;
+  const minutes = Object.keys(_sbUsage.byMinute).sort().slice(-12);
+  const maxMin = minutes.reduce((m, k) => Math.max(m, _sbUsage.byMinute[k] || 0), 1);
+  const channels = Object.keys(_sbUsage.channels).sort((a, b) => _sbUsage.channels[b] - _sbUsage.channels[a]);
+
+  const methodTotals = { GET: 0, POST: 0, PATCH: 0, PUT: 0, DELETE: 0 };
+  rows.forEach(r => {
+    methodTotals.GET += r.get || 0;
+    methodTotals.POST += r.post || 0;
+    methodTotals.PATCH += r.patch || 0;
+    methodTotals.PUT += r.put || 0;
+    methodTotals.DELETE += r.delete || 0;
+  });
+
+  const queueLen = (typeof _reqQueue !== 'undefined' && _reqQueue) ? _reqQueue.length : 0;
+  const active = (typeof _activeReq !== 'undefined') ? _activeReq : 0;
+
+  const card = (label, valueId, valueHtml, color, subId, subHtml) => `
+    <div style="flex:1;min-width:110px;background:var(--bg3);border:1px solid var(--border2);border-radius:10px;padding:10px 12px">
+      <div style="font-size:10px;font-weight:800;color:var(--muted);letter-spacing:.04em;text-transform:uppercase">${label}</div>
+      <div id="${valueId}" style="font-family:var(--mono);font-size:22px;font-weight:800;color:${color || 'var(--text)'};margin-top:2px">${valueHtml}</div>
+      ${subId ? `<div id="${subId}" style="font-size:10px;color:var(--muted);margin-top:2px">${subHtml || ''}</div>` : (subHtml ? `<div style="font-size:10px;color:var(--muted);margin-top:2px">${subHtml}</div>` : '')}
+    </div>`;
+
+  let html = `
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px">
+      ${card('Por minuto', 'sb-kpi-rpm', String(rpmNow), 'var(--accent)', 'sb-kpi-rpm-sub', 'neste minuto · média sessão ' + rpm.toFixed(1) + '/min')}
+      ${card('Dia', 'sb-kpi-day', _sbUsageFmtN(periods.day), '#60a5fa', null, periods.todayKey + (periods.dayErr ? ' · ' + periods.dayErr + ' err' : ''))}
+      ${card('Semana', 'sb-kpi-week', _sbUsageFmtN(periods.week), '#22d3ee', null, 'últimos 7 dias' + (periods.weekErr ? ' · ' + periods.weekErr + ' err' : ''))}
+      ${card('Mês', 'sb-kpi-month', _sbUsageFmtN(periods.month), '#a78bfa', null, periods.todayKey.slice(0, 7) + (periods.monthErr ? ' · ' + periods.monthErr + ' err' : ''))}
+      ${card('Sessão', 'sb-kpi-session', _sbUsageFmtN(_sbUsage.total), 'var(--text)', 'sb-kpi-session-sub', 'há ' + _sbUsageFmtAgo(_sbUsage.startedAt))}
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+      ${card('Erros (sessão)', 'sb-kpi-errors', _sbUsageFmtN(_sbUsage.errors), _sbUsage.errors ? 'var(--danger)' : 'var(--text)', null, '')}
+      ${card('Fila agora', 'sb-kpi-queue', active + '<span style="font-size:12px;color:var(--muted);font-weight:600">/' + _MAX_CONCURRENT_REQ + '</span> <span style="font-size:11px;color:var(--muted);font-weight:600">+' + queueLen + ' wait</span>', 'var(--text)', null, '')}
+      ${card('Canais RT', 'sb-kpi-channels', _sbUsageFmtN(_sbUsage.channelTotal), 'var(--purple)', null, '')}
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:12px">
+      Sessão: GET ${_sbUsageEsc(methodTotals.GET)} · POST ${_sbUsageEsc(methodTotals.POST)} · PATCH ${_sbUsageEsc(methodTotals.PATCH)} · DEL ${_sbUsageEsc(methodTotals.DELETE)}
+      · Dia/semana/mês ficam salvos neste navegador (sobrevivem ao F5).
+      · Conta só <b style="color:var(--text)">este PC/navegador</b> — uso do projeto inteiro: Dashboard Supabase.
+      <button type="button" onclick="_sbUsageResetHistory()" style="margin-left:8px;background:none;border:none;color:var(--muted);text-decoration:underline;cursor:pointer;font-size:11px;font-family:var(--font);padding:0;position:relative;z-index:2">Limpar histórico dia/semana/mês</button>
+    </div>
+  `;
+
+  if (minutes.length) {
+    html += `<div style="margin-bottom:14px;position:relative;z-index:0;overflow:hidden;max-height:90px">
+      <div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Últimos minutos (sessão)</div>
+      <div style="display:flex;align-items:flex-end;gap:4px;height:48px;max-height:48px;overflow:hidden">`;
+    minutes.forEach(k => {
+      const n = _sbUsage.byMinute[k] || 0;
+      const h = Math.max(4, Math.min(44, Math.round((n / maxMin) * 44)));
+      html += `<div title="${_sbUsageEsc(k)}: ${n}" style="flex:1;min-width:14px;max-width:48px;height:${h}px;background:rgba(96,165,250,.45);border-radius:4px 4px 2px 2px;pointer-events:none"></div>`;
+    });
+    html += `</div><div style="display:flex;gap:4px;margin-top:4px;max-width:100%;overflow:hidden">`;
+    minutes.forEach(k => {
+      html += `<div style="flex:1;min-width:14px;max-width:48px;font-size:9px;color:var(--muted);text-align:center;font-family:var(--mono);pointer-events:none">${_sbUsageEsc(k.slice(3))}</div>`;
+    });
+    html += `</div></div>`;
+  }
+
+  // Top do dia (persistido)
+  if (periods.dayTop.length) {
+    const maxDay = periods.dayTop[0].total || 1;
+    html += `<div style="margin-bottom:14px"><div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Top recursos — hoje</div>
+      <div style="display:flex;flex-direction:column;gap:6px">`;
+    periods.dayTop.forEach((r, i) => {
+      const pct = Math.round((r.total / maxDay) * 100);
+      html += `<div style="display:grid;grid-template-columns:28px 1fr 64px;gap:8px;align-items:center">
+        <span style="font-family:var(--mono);font-size:11px;color:var(--muted)">#${i + 1}</span>
+        <div>
+          <div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--text);margin-bottom:3px">${_sbUsageEsc(r.key)}</div>
+          <div style="height:6px;background:rgba(255,255,255,.06);border-radius:4px;overflow:hidden">
+            <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,rgba(96,165,250,.75),rgba(167,139,250,.75));border-radius:4px"></div>
+          </div>
+        </div>
+        <div style="font-family:var(--mono);font-size:13px;font-weight:800;color:var(--text);text-align:right">${_sbUsageFmtN(r.total)}</div>
+      </div>`;
+    });
+    html += `</div></div>`;
+  }
+
+  html += `<div style="margin-bottom:14px"><div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px">Top recursos — esta sessão</div>`;
+  if (!top.length) {
+    html += `<div style="padding:12px;color:var(--muted)">Nenhuma request REST ainda nesta sessão.</div>`;
+  } else {
+    html += `<div style="display:flex;flex-direction:column;gap:6px">`;
+    top.forEach((r, i) => {
+      const pct = Math.round((r.total / maxTop) * 100);
+      const kindColor = r.kind === 'rpc' ? '#f5a623' : (r.kind === 'auth' ? '#a78bfa' : (r.kind === 'storage' ? '#22d3ee' : '#60a5fa'));
+      html += `<div style="display:grid;grid-template-columns:28px 1fr 64px 72px 48px;gap:8px;align-items:center">
+        <span style="font-family:var(--mono);font-size:11px;color:var(--muted)">#${i + 1}</span>
+        <div>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+            <span style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--text)">${_sbUsageEsc(r.key)}</span>
+            <span style="font-size:9px;font-weight:800;color:${kindColor};background:${kindColor}22;padding:1px 6px;border-radius:4px;text-transform:uppercase">${_sbUsageEsc(r.kind)}</span>
+            ${r.errors ? `<span style="font-size:9px;font-weight:800;color:var(--danger)">${r.errors} err</span>` : ''}
+          </div>
+          <div style="height:6px;background:rgba(255,255,255,.06);border-radius:4px;overflow:hidden">
+            <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,rgba(96,165,250,.7),rgba(61,214,140,.7));border-radius:4px"></div>
+          </div>
+        </div>
+        <div style="font-family:var(--mono);font-size:13px;font-weight:800;color:var(--text);text-align:right">${r.total}</div>
+        <div style="font-size:10px;color:var(--muted);text-align:right">G${r.get||0} P${r.post||0} U${(r.patch||0)+(r.put||0)} D${r.delete||0}</div>
+        <div style="font-size:10px;color:var(--muted);text-align:right" title="média">${_sbUsageEsc(_sbUsageFmtMs(r.avg))}</div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+  html += `</div>`;
+
+  if (channels.length) {
+    html += `<div style="margin-bottom:14px"><div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Canais Realtime abertos</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">`;
+    channels.forEach(n => {
+      html += `<span style="background:rgba(167,139,250,.12);border:1px solid rgba(167,139,250,.3);color:var(--purple);border-radius:8px;padding:4px 8px;font-family:var(--mono);font-size:11px">${_sbUsageEsc(n)} <b>×${_sbUsage.channels[n]}</b></span>`;
+    });
+    html += `</div><div style="font-size:10px;color:var(--muted);margin-top:6px">Realtime não entra no contador REST — só registra quantas vezes o canal foi inscrito.</div></div>`;
+  }
+
+  const recent = _sbUsage.recent.slice(0, 20);
+  html += `<div><div style="font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px">Últimas requests</div>`;
+  if (!recent.length) {
+    html += `<div style="padding:8px;color:var(--muted)">—</div>`;
+  } else {
+    html += `<div style="max-height:220px;overflow:auto;border:1px solid var(--border2);border-radius:10px;position:relative;z-index:1">
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead><tr style="background:rgba(0,0,0,.25);color:var(--muted);text-align:left">
+          <th style="padding:6px 8px;font-weight:700">Há</th>
+          <th style="padding:6px 8px;font-weight:700">Método</th>
+          <th style="padding:6px 8px;font-weight:700">Recurso</th>
+          <th style="padding:6px 8px;font-weight:700">Status</th>
+          <th style="padding:6px 8px;font-weight:700">Tempo</th>
+        </tr></thead><tbody>`;
+    recent.forEach(ev => {
+      const stColor = ev.error ? 'var(--danger)' : (ev.status >= 300 ? 'var(--warn)' : 'var(--accent2)');
+      html += `<tr style="border-top:1px solid var(--border2)">
+        <td style="padding:5px 8px;font-family:var(--mono);color:var(--muted)">${_sbUsageEsc(_sbUsageFmtAgo(ev.t))}</td>
+        <td style="padding:5px 8px;font-family:var(--mono);font-weight:700">${_sbUsageEsc(ev.method)}</td>
+        <td style="padding:5px 8px;font-family:var(--mono);color:var(--text)">${_sbUsageEsc(ev.resource)}</td>
+        <td style="padding:5px 8px;font-family:var(--mono);color:${stColor};font-weight:700">${ev.status || 'ERR'}</td>
+        <td style="padding:5px 8px;font-family:var(--mono);color:var(--muted)">${_sbUsageEsc(_sbUsageFmtMs(ev.ms))}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div>`;
+  }
+  html += `</div>`;
+
+  body.innerHTML = html;
+}
+
 function _labtechFetch(input, init) {
   return new Promise((resolve, reject) => {
     _reqQueue.push(() => {
       _activeReq++;
-      const rawUrl = typeof input === 'string' ? input : input.url;
+      const rawUrl = typeof input === 'string' ? input : (input && input.url) || '';
       // Se o Worker estiver configurado, troca o host do Supabase pelo do proxy
       // (só afeta REST/RPC via fetch; Realtime continua direto no Supabase).
       const finalUrl = _PROXY_URL ? rawUrl.replace(_SB_URL, _PROXY_URL) : rawUrl;
+      const method = (init && init.method) || (typeof input !== 'string' && input && input.method) || 'GET';
+      const parsed = _sbUsageParse(rawUrl);
+      const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
       fetch(finalUrl, init)
-        .then(resolve, reject)
+        .then(res => {
+          const t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+          _sbUsageTrack({
+            kind: parsed.kind,
+            resource: parsed.resource,
+            method,
+            status: res.status,
+            ms: Math.round(t1 - t0),
+            error: !res.ok,
+          });
+          resolve(res);
+        }, err => {
+          const t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+          _sbUsageTrack({
+            kind: parsed.kind,
+            resource: parsed.resource,
+            method,
+            status: 0,
+            ms: Math.round(t1 - t0),
+            error: true,
+          });
+          reject(err);
+        })
         .finally(() => { _activeReq--; _drainReqQueue(); });
     });
     _drainReqQueue();
@@ -407,6 +1143,17 @@ function _labtechFetch(input, init) {
 const _supa   = window.supabase.createClient(_SB_URL, _SB_KEY, {
   global: { fetch: _labtechFetch },
 });
+
+// Conta abertura de canais Realtime (não cada evento WS)
+(function _wrapSupaChannel(client) {
+  if (!client || typeof client.channel !== 'function' || client._sbUsageWrapped) return;
+  const orig = client.channel.bind(client);
+  client.channel = function(name, opts) {
+    try { _sbUsageTrackChannel(name); } catch (e) {}
+    return orig(name, opts);
+  };
+  client._sbUsageWrapped = true;
+})(_supa);
 
 // ── Client dedicado para autenticação de operadores via PIN ──────────────
 // O token do operador é um JWT ASSINADO MANUALMENTE pela Edge Function
@@ -435,6 +1182,15 @@ const _supaOp = window.supabase.createClient(_SB_URL, _SB_KEY, {
   accessToken: async () => _operatorAccessToken || undefined,
   global: { fetch: _labtechFetch },
 });
+(function _wrapSupaOpChannel(client) {
+  if (!client || typeof client.channel !== 'function' || client._sbUsageWrapped) return;
+  const orig = client.channel.bind(client);
+  client.channel = function(name, opts) {
+    try { _sbUsageTrackChannel(name); } catch (e) {}
+    return orig(name, opts);
+  };
+  client._sbUsageWrapped = true;
+})(_supaOp);
 // Escolhe automaticamente o client certo: se há um operador logado via PIN,
 // usa o client com o token dele; senão usa o client principal (anônimo ou
 // com sessão de admin via GoTrue).
@@ -944,7 +1700,7 @@ function startRealtimeSync(){
   // isso pesa muito na cota. Operador comum continua em Realtime (é 1 única
   // linha, atualização instantânea é barata e importante pro próprio cronômetro).
   const _usersSubscribe = (_usersPath === '/users')
-    ? (path, cb, errCb) => pollRef(_db.ref(path), 4000, cb, errCb)
+    ? (path, cb, errCb) => pollRef(_db.ref(path), 12000, cb, errCb)
     : (path, cb, errCb) => _db.ref(path).on('value', cb, errCb);
   _usersListener = _usersSubscribe(_usersPath, snap => {
     if(!snap.exists()){
@@ -2414,7 +3170,8 @@ function setView(v,btn){
   if(v==='pecas')       { renderPecasView(); }
   if(v==='solicitacoes'){ renderSolicitacoesDoDia(); }
   if(v==='maquinas-a')  { renderMaquinasAView(); }
-  if(v==='admin')       { renderScheduleOverrideBtn(); }
+  if(v==='admin')       { renderScheduleOverrideBtn(); renderSbUsagePanel(true); _sbUsageStartAutoRefresh(); }
+  if(v !== 'admin')     { _sbUsageStopAutoRefresh(); }
   if(v !== 'scanner') {
     if(typeof scannerStopCamera === 'function') scannerStopCamera();
   } else {
@@ -10204,29 +10961,94 @@ function parseDuracao(dur){
 }
 
 async function loadModeloAllPeriods(){
-  document.getElementById('modelo-loading').style.display = 'block';
+  const loadingEl = document.getElementById('modelo-loading');
+  if(loadingEl) loadingEl.style.display = 'block';
   const today = new Date();
-  const todayDk = today.toDateString().replace(/ /g,'_');
-  const dateKeys = [];
-  for(let i = 1; i < 90; i++){
-    const d = new Date(today); d.setDate(today.getDate() - i);
-    dateKeys.push(d.toDateString().replace(/ /g,'_'));
-  }
-  let allRecs = [...history];
-  const BATCH = 5;
-  for(let i = 0; i < dateKeys.length; i += BATCH){
-    const batch = dateKeys.slice(i, i+BATCH);
-    const results = await Promise.all(batch.map(async dk => {
-      try {
-        const data = await dbGet('/history/'+dk);
-        if(!data) return [];
-        return Object.entries(data).map(([k,v])=>({...v,_docId:k,_dateKey:dk}));
-      } catch(e){ return []; }
-    }));
-    results.forEach(recs => allRecs = allRecs.concat(recs));
+  // Antes: 1 GET por dia (~89 requests) via dbGet('/history/'+dk).
+  // Agora: poucas páginas por start_epoch (tipicamente 1–3 requests).
+  let allRecs = [...(history || [])];
+  // Completa com o restante do range (90 dias) em poucas páginas REST
+  const seen = new Set(allRecs.map(h => h._docId).filter(Boolean));
+  try {
+    if(typeof _supa !== 'undefined'){
+      const since = Date.now() - 90 * 86400000;
+      const PAGE = 1000;
+      let from = 0;
+      for(let page = 0; page < 20; page++){ // hard cap ~20k rows
+        const { data, error } = await _supa
+          .from('history')
+          .select('id,date_key,raw,start_epoch')
+          .gte('start_epoch', since)
+          .order('start_epoch', { ascending: false })
+          .range(from, from + PAGE - 1);
+        if(error) throw error;
+        const rows = data || [];
+        rows.forEach(row => {
+          if(!row || !row.id || seen.has(row.id)) return;
+          seen.add(row.id);
+          const raw = (row.raw && typeof row.raw === 'object') ? row.raw : {};
+          allRecs.push({
+            ...raw,
+            _docId: row.id,
+            _dateKey: row.date_key || raw._dateKey || '',
+            startEpoch: raw.startEpoch || row.start_epoch,
+          });
+        });
+        if(rows.length < PAGE) break;
+        from += PAGE;
+      }
+    } else {
+      // Fallback legado (sem _supa): batches por dia, mas em grupos maiores
+      const dateKeys = [];
+      for(let i = 1; i < 90; i++){
+        const d = new Date(today); d.setDate(today.getDate() - i);
+        dateKeys.push(d.toDateString().replace(/ /g,'_'));
+      }
+      const BATCH = 10;
+      for(let i = 0; i < dateKeys.length; i += BATCH){
+        const batch = dateKeys.slice(i, i+BATCH);
+        const results = await Promise.all(batch.map(async dk => {
+          try {
+            const data = await dbGet('/history/'+dk);
+            if(!data) return [];
+            return Object.entries(data).map(([k,v])=>({...v,_docId:k,_dateKey:dk}));
+          } catch(e){ return []; }
+        }));
+        results.forEach(recs => allRecs = allRecs.concat(recs));
+      }
+    }
+  } catch(e){
+    console.warn('[T. Médio Modelo] carga otimizada falhou, tentando fallback por dia:', e);
+    try {
+      const dateKeys = [];
+      for(let i = 1; i < 90; i++){
+        const d = new Date(today); d.setDate(today.getDate() - i);
+        dateKeys.push(d.toDateString().replace(/ /g,'_'));
+      }
+      const BATCH = 10;
+      for(let i = 0; i < dateKeys.length; i += BATCH){
+        const batch = dateKeys.slice(i, i+BATCH);
+        const results = await Promise.all(batch.map(async dk => {
+          try {
+            const data = await dbGet('/history/'+dk);
+            if(!data) return [];
+            return Object.entries(data).map(([k,v])=>({...v,_docId:k,_dateKey:dk}));
+          } catch(e2){ return []; }
+        }));
+        results.forEach(recs => {
+          recs.forEach(r => {
+            if(r._docId && seen.has(r._docId)) return;
+            if(r._docId) seen.add(r._docId);
+            allRecs.push(r);
+          });
+        });
+      }
+    } catch(e2){
+      console.warn('[T. Médio Modelo] fallback também falhou:', e2);
+    }
   }
   _modeloAllRecs = allRecs;
-  document.getElementById('modelo-loading').style.display = 'none';
+  if(loadingEl) loadingEl.style.display = 'none';
 }
 
 async function recarregarModeloRel(){
@@ -18020,6 +18842,8 @@ function pollRef(ref, intervalMs, cb, errCb) {
   let stopped = false, inFlight = false;
   async function tick() {
     if (stopped || inFlight) return;
+    // Economiza requests enquanto a aba está em segundo plano
+    if (typeof document !== 'undefined' && document.hidden) return;
     inFlight = true;
     try { await ref.once('value', cb, errCb); }
     catch (e) { if (errCb) errCb(e); }
@@ -18027,7 +18851,21 @@ function pollRef(ref, intervalMs, cb, errCb) {
   }
   tick();
   const id = setInterval(tick, intervalMs);
-  return { off(){ stopped = true; clearInterval(id); } }; // compatível com off('value', X) chamando X.off()
+  const onVis = () => {
+    if (!document.hidden && !stopped) tick();
+  };
+  if (typeof document !== 'undefined' && document.addEventListener) {
+    document.addEventListener('visibilitychange', onVis);
+  }
+  return {
+    off(){
+      stopped = true;
+      clearInterval(id);
+      if (typeof document !== 'undefined' && document.removeEventListener) {
+        document.removeEventListener('visibilitychange', onVis);
+      }
+    }
+  }; // compatível com off('value', X) chamando X.off()
 }
 
 let _fluxolabListener = null;
@@ -18060,7 +18898,7 @@ function fluxolabStartListener() {
   // TODO cliente conectado, e /fluxolab é reescrito a cada movimentação de
   // SELB no chão de fábrica (alta frequência) → maior consumidor provável
   // de Realtime Messages. Agora: atualiza a cada 4s via poll (delay OK).
-  _fluxolabListener = pollRef(_db.ref('/fluxolab'), 4000, snap => {
+  _fluxolabListener = pollRef(_db.ref('/fluxolab'), 8000, snap => {
     _fluxolabData = snap.val() || {};
     _fluxolabScheduleSyncLiberados();
     const viewEl = document.getElementById('view-fluxolab');
