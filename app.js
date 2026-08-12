@@ -14428,6 +14428,70 @@ async function qualRenderHistoricoSelb(q){
   `;
 }
 
+/**
+ * Quais registros de Qualidade devem exibir o badge 📋 Checklist.
+ * Quota = checklists em aberto do modelo (import) + liberados hoje do modelo.
+ * Prioridade: SELBs que liberaram checklist; depois os MAIS ANTIGOS do dia.
+ */
+function _qualIdsComBadgeChecklist(entries){
+  const allowed = new Set();
+  if (!entries || !entries.length) return allowed;
+
+  const idx = (typeof _fluxolabBuildChecklistIndex === 'function')
+    ? _fluxolabBuildChecklistIndex()
+    : new Map();
+  const liberados = (typeof _fluxolabChecklistLiberados !== 'undefined' && Array.isArray(_fluxolabChecklistLiberados))
+    ? _fluxolabChecklistLiberados
+    : [];
+
+  const byModel = new Map(); // normKey -> regs[]
+  for (const r of entries) {
+    const modelo = r.equipamento || '';
+    const nk = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(modelo) : String(modelo).toLowerCase().trim();
+    if (!nk) continue;
+    if (!byModel.has(nk)) byModel.set(nk, []);
+    byModel.get(nk).push(r);
+  }
+
+  for (const [nk, regs] of byModel.entries()) {
+    const importQ = idx.get(nk) || 0;
+    const dayKeys = new Set(regs.map(r => r.data).filter(Boolean));
+
+    const libs = liberados.filter(e => {
+      if (!e || !e.ts) return false;
+      if ((typeof _fluxolabNormModel === 'function' ? _fluxolabNormModel(e.modelo) : String(e.modelo||'').toLowerCase().trim()) !== nk) return false;
+      const dataStr = new Date(e.ts).toLocaleDateString('pt-BR');
+      return !dayKeys.size || dayKeys.has(dataStr);
+    });
+
+    const quota = importQ + libs.length;
+    if (quota <= 0) continue;
+
+    const used = new Set();
+    // 1) Preferir SELBs que efetivamente liberaram checklist
+    for (const lib of libs) {
+      const selbLib = String(lib.selb || '').toUpperCase().trim();
+      if (!selbLib) continue;
+      const match = regs.find(r => String(r.selb || '').toUpperCase().trim() === selbLib);
+      if (match && match._id && !used.has(match._id)) {
+        allowed.add(match._id);
+        used.add(match._id);
+      }
+    }
+
+    // 2) Completar quota com os MAIS ANTIGOS do dia
+    const oldest = regs.slice().sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    for (const r of oldest) {
+      if (used.size >= quota) break;
+      if (!r._id || used.has(r._id)) continue;
+      allowed.add(r._id);
+      used.add(r._id);
+    }
+  }
+
+  return allowed;
+}
+
 function renderQualRegistros(){
   const tbody = document.getElementById('qual-reg-body');
   if(!tbody) return;
@@ -14633,18 +14697,27 @@ function renderQualRegistros(){
     return;
   }
 
+  // Badge 📋 Checklist: só na quantidade real de checklists do modelo,
+  // priorizando os registros MAIS ANTIGOS do dia (universo = dia, não só o filtro da tabela).
+  const dayKeysForBadge = new Set(entries.map(r => r.data).filter(Boolean));
+  const poolBadge = Object.entries(_qualRegistros || {})
+    .map(([id, r]) => ({ ...r, _id: id }))
+    .filter(r => !dayKeysForBadge.size || dayKeysForBadge.has(r.data));
+  const checklistBadgeIds = _qualIdsComBadgeChecklist(poolBadge);
+
   tbody.innerHTML = entries.map(r => {
     const isAdmin = !!(currentUser && currentUser.isAdmin);
     const canPrintLabel = isAdmin || !!(currentUser && (currentUser.sector === 'DESMEMBRAMENTO' || currentUser.sector === 'PCP' || currentUser.sector === 'QUALIDADE'));
     const canDelete = isAdmin;
     const chamado = !!r.chamado_aberto;
+    const showChkBadge = checklistBadgeIds.has(r._id);
     return `
     <tr data-selb="${r.selb || ''}" style="${chamado ? 'border-left:3px solid #f5a623;background:linear-gradient(90deg,rgba(245,166,35,0.18) 0%,rgba(245,166,35,0.04) 100%);box-shadow:inset 0 0 0 1px rgba(245,166,35,0.25)' : (r.etiqueta_impressa ? 'border-left:3px solid #4ade80;background:linear-gradient(90deg,rgba(74,222,128,0.22) 0%,rgba(74,222,128,0.08) 100%);box-shadow:inset 0 0 0 1px rgba(74,222,128,0.25)' : 'border-left:3px solid rgba(74,222,128,0.55);background:linear-gradient(90deg,rgba(74,222,128,0.04) 0%,transparent 60%)')}">
       <td style="font-family:var(--mono);font-size:12px;white-space:nowrap">${r.data || '—'}<br><span style="color:var(--muted);font-size:10px">${r.hora || ''}</span></td>
       <td style="font-family:var(--mono);font-weight:700;color:var(--accent);white-space:nowrap">${r.selb || '—'}${r.selb ? `<button onclick="(function(btn,val){navigator.clipboard.writeText(val).then(function(){var o=btn.textContent;btn.textContent='✓';btn.style.color='var(--accent2)';setTimeout(function(){btn.textContent=o;btn.style.color='';},1500)}).catch(function(){});})(this,'${r.selb}')" title="Copiar SELB" style="margin-left:6px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:var(--muted);font-size:10px;font-weight:600;padding:1px 5px;cursor:pointer;transition:all .15s">⧉</button>${canPrintLabel ? `<button onclick="equipImprimirSelb('${(r.selb||'').replace(/'/g,"\\'")}')" title="Imprimir etiqueta SELB (padrão selbetti)" style="margin-left:6px;background:rgba(28,107,69,0.15);border:1px solid rgba(28,107,69,0.45);border-radius:6px;color:#2f9e63;font-size:12px;font-weight:700;padding:4px 10px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:5px">🖨️ Imprimir Selb</button>` : ''}` : ''}</td>
       <td style="font-size:12px;color:var(--muted);max-width:240px">
         ${r.equipamento || '—'}
-        ${(r.teve_checklist || (typeof fluxolabModeloTemChecklist === 'function' && r.equipamento && fluxolabModeloTemChecklist(r.equipamento))) ? `<br><span title="Este modelo tinha checklist no FluxoLAB" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:800;color:#22d3ee;background:rgba(34,211,238,.15);border:1px solid rgba(34,211,238,.5);border-radius:7px;padding:4px 10px;margin-top:5px">📋 Checklist</span>` : ''}
+        ${showChkBadge ? `<br><span title="Checklist atribuído a este registro (prioridade: mais antigos do dia)" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:800;color:#22d3ee;background:rgba(34,211,238,.15);border:1px solid rgba(34,211,238,.5);border-radius:7px;padding:4px 10px;margin-top:5px">📋 Checklist</span>` : ''}
         ${(r.serie || getEquipSerie(r.selb)) ? `<br><span style="font-family:var(--mono);font-size:10px;color:var(--accent);opacity:.85;letter-spacing:.03em">S/N: ${r.serie || getEquipSerie(r.selb)}</span>` : ''}
         ${getEquipSku(r.selb) ? `<br><span style="font-family:var(--mono);font-size:10px;color:var(--accent2);opacity:.85;letter-spacing:.03em">SKU: ${getEquipSku(r.selb)}</span>` : ''}
       </td>
@@ -15665,20 +15738,24 @@ function qualGerarEtiquetaUnica(selb, regId){
   overlay.className = 'qual-print-area';
   overlay.style.cssText = 'position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,0.75);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;overflow:auto';
 
-  // ── Decide se a etiqueta leva a faixa vertical "CHECKLIST" ──
-  // Usa o mesmo critério do badge 📋 Checklist da tabela: o registro
-  // (teve_checklist) e, como fallback, o índice do FluxoLAB pelo modelo.
+  // ── Decide se a etiqueta leva a faixa "CHECKLIST" (mesma regra do badge da tabela) ──
   let temChecklist = false;
   try{
     let reg = null;
-    if(regId && typeof _qualRegistros === 'object' && _qualRegistros) reg = _qualRegistros[regId] || null;
+    let regIdLocal = regId || null;
+    if(regIdLocal && typeof _qualRegistros === 'object' && _qualRegistros) reg = _qualRegistros[regIdLocal] || null;
     if(!reg && typeof _qualRegistros === 'object' && _qualRegistros){
-      reg = Object.values(_qualRegistros).find(r => (r.selb||'').toUpperCase().trim() === selb) || null;
+      const hit = Object.entries(_qualRegistros).find(([, r]) => (r.selb||'').toUpperCase().trim() === selb);
+      if (hit) { regIdLocal = hit[0]; reg = hit[1]; }
     }
-    if(reg && reg.teve_checklist) temChecklist = true;
-    if(!temChecklist && typeof fluxolabModeloTemChecklist === 'function'){
-      const alvo = (reg && reg.equipamento) || modelo;
-      if(alvo && fluxolabModeloTemChecklist(alvo)) temChecklist = true;
+    if (reg && typeof _qualIdsComBadgeChecklist === 'function') {
+      const day = reg.data || '';
+      const sameDay = Object.entries(_qualRegistros || {})
+        .map(([id, r]) => ({ ...r, _id: id }))
+        .filter(r => !day || r.data === day);
+      temChecklist = _qualIdsComBadgeChecklist(sameDay).has(regIdLocal || reg._id);
+    } else if (reg && reg.teve_checklist) {
+      temChecklist = true;
     }
   }catch(e){ temChecklist = false; }
 
@@ -23511,11 +23588,6 @@ function _etiquetasMovimentacaoManuais(){
     .sort((a, b) => (b.ts || 0) - (a.ts || 0));
 }
 
-function _etiquetasMovimentacaoManuais(){
-  return (_fluxolabMovLog || []).filter(_isEtiquetaMovimentacaoManual)
-    .sort((a, b) => (b.ts || 0) - (a.ts || 0));
-}
-
 function _movEtiquetasDiasDisponiveis() {
   const dias = new Set();
   _etiquetasMovimentacaoManuais().forEach(item => {
@@ -23552,6 +23624,9 @@ function _renderMovEtiquetasDiaBar(visiveis) {
     if (dias.length) {
       input.min = dias[dias.length - 1];
       input.max = dias[0];
+    } else {
+      input.removeAttribute('min');
+      input.removeAttribute('max');
     }
   }
   if (btnHoje) btnHoje.style.display = isHoje ? 'none' : 'inline-block';
@@ -23923,44 +23998,85 @@ function imprimirEtiquetaMovimentacao(index){
 }
 function imprimirTodasEtiquetasMovimentacao(){ _abrirImpressaoEtiquetas(_movEtiquetasListaAtual.slice(0, 100)); }
 
-/** Teste interno: manda 1 etiqueta RAW ao spool sem fluxo do operador */
+/** Resolve texto/label de bolsão para a chave interna (ex.: Montagem → MONTAGEM) */
+function _movResolveBolsaoKey(txt){
+  const t = String(txt || '').trim();
+  if (!t) return t;
+  const bolsoes = (typeof FLUXOLAB_BOLSOES !== 'undefined' && Array.isArray(FLUXOLAB_BOLSOES)) ? FLUXOLAB_BOLSOES : [];
+  const byKey = bolsoes.find(b => String(b.key) === t || String(b.key).toUpperCase() === t.toUpperCase());
+  if (byKey) return byKey.key;
+  const norm = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(t) : t.toLowerCase();
+  const byLabel = bolsoes.find(b => {
+    const ln = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(b.label) : String(b.label||'').toLowerCase();
+    return ln === norm;
+  });
+  return byLabel ? byLabel.key : t;
+}
+
+/** Teste interno: grava no histórico E manda RAW ao spool (sem fluxo do operador) */
 async function testarSpoolEtiquetaMovimentacao(){
   const selbEl = document.getElementById('mov-spool-test-selb');
   const deEl = document.getElementById('mov-spool-test-de');
   const paraEl = document.getElementById('mov-spool-test-para');
   const selb = String((selbEl && selbEl.value) || 'TEST').trim().toUpperCase() || 'TEST';
-  const de = String((deEl && deEl.value) || 'Montagem').trim() || 'Montagem';
-  const para = String((paraEl && paraEl.value) || 'Eletrônica').trim() || 'Eletrônica';
-  let user = 'TESTE';
-  try {
-    if (typeof CURRENT_USER !== 'undefined' && CURRENT_USER && (CURRENT_USER.nome || CURRENT_USER.name)) {
-      user = CURRENT_USER.nome || CURRENT_USER.name;
-    } else if (typeof currentUser !== 'undefined' && currentUser && (currentUser.nome || currentUser.name)) {
-      user = currentUser.nome || currentUser.name;
-    }
-  } catch (e) {}
+  const deTxt = String((deEl && deEl.value) || 'Montagem').trim() || 'Montagem';
+  const paraTxt = String((paraEl && paraEl.value) || 'Eletrônica').trim() || 'Eletrônica';
+  const de = _movResolveBolsaoKey(deTxt);
+  const para = _movResolveBolsaoKey(paraTxt);
 
-  const item = {
-    selb,
-    equipamento: 'MOVIMENTAÇÃO',
-    de,
-    para,
-    motivo: 'Teste interno do spool RAW (sem operador)',
-    ts: Date.now(),
-    user,
-    automatico: false,
-  };
-
-  _mostrarToastMovPrint('🧪 Teste spool: ' + selb + '…');
-  const online = await _pingSpoolInvisivel();
-  if (!online) {
-    _mostrarToastMovPrint('⚠️ Spool offline — rode print-agent/abrir-com-spool.bat');
+  if (de === para) {
+    _mostrarToastMovPrint('⚠️ Saiu de e Vai para precisam ser diferentes');
     return;
   }
+
+  _mostrarToastMovPrint('🧪 Teste spool: registrando ' + selb + '…');
+
+  // 1) Grava no fluxolab_log → aparece na tabela de Imprimir movimentações
+  if (typeof _fluxolabLogEntry === 'function') {
+    _fluxolabLogEntry(selb, de, para, 'MOVIMENTAÇÃO', {
+      tipo: 'manual',
+      automatico: false,
+      motivo: 'Teste interno do spool RAW (sem operador)',
+      resultado: 'teste',
+    });
+  } else {
+    _mostrarToastMovPrint('⚠️ Log de movimentação indisponível');
+    return;
+  }
+
+  // 2) Se a impressão automática NÃO pegou (desligada / tela operador), imprime na hora
+  const online = await _pingSpoolInvisivel();
+  if (!online) {
+    _mostrarToastMovPrint('🧪 Registrado na lista — spool offline (não imprimiu)');
+    return;
+  }
+
+  // Evita double-print: se auto-print já enfileirou este item, só confirma
+  if (_autoPrintMovimentacaoEnabled() && _movPodeImprimirSpool()) {
+    _mostrarToastMovPrint('🧪 Registrado + enfileirado no spool: ' + selb);
+    return;
+  }
+
+  const item = (_fluxolabMovLog && _fluxolabMovLog[0] && String(_fluxolabMovLog[0].selb||'').toUpperCase() === selb)
+    ? _fluxolabMovLog[0]
+    : {
+        selb,
+        equipamento: 'MOVIMENTAÇÃO',
+        de,
+        para,
+        motivo: 'Teste interno do spool RAW (sem operador)',
+        ts: Date.now(),
+        user: (currentUser && (currentUser.name || currentUser.nome)) || 'TESTE',
+        automatico: false,
+        tipo: 'manual',
+      };
   const ok = await _enviarParaAgenteImpressao([item]);
+  if (ok) {
+    try { _marcarEtiquetaMovImpressa(_etiquetaMovKey(item)); renderEtiquetasMovimentacao(); } catch (e) {}
+  }
   _mostrarToastMovPrint(ok
-    ? ('🧪 Teste enviado à impressora: ' + selb)
-    : '⚠️ Falha ao enviar teste ao spool');
+    ? ('🧪 Registrado e impresso: ' + selb)
+    : ('🧪 Registrado na lista — falha ao enviar à impressora'));
 }
 
 
