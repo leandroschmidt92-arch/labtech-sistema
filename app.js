@@ -1700,7 +1700,7 @@ function startRealtimeSync(){
   // isso pesa muito na cota. Operador comum continua em Realtime (é 1 única
   // linha, atualização instantânea é barata e importante pro próprio cronômetro).
   const _usersSubscribe = (_usersPath === '/users')
-    ? (path, cb, errCb) => pollRef(_db.ref(path), 12000, cb, errCb)
+    ? (path, cb, errCb) => pollRef(_db.ref(path), 60000, cb, errCb)
     : (path, cb, errCb) => _db.ref(path).on('value', cb, errCb);
   _usersListener = _usersSubscribe(_usersPath, snap => {
     if(!snap.exists()){
@@ -5194,13 +5194,35 @@ let _consultaSelbSearchToken = 0;
 
 function _consultaIsSelbQuery(q){
   const s = String(q || '').trim().toUpperCase();
-  // A partir de 3 caracteres alfanuméricos (ex.: 6RC, SDM8) — busca SELB sem filtro de data
-  return s.length >= 3 && /^[A-Z0-9_-]+$/.test(s);
+  // Apenas considera busca global de SELB se for alfanumérico e tiver entre 3 e 6 caracteres
+  // Isso evita que nomes (ex: "GUSTAVO", "EDUARDO") disparem a busca global ignorando a data
+  return s.length >= 3 && s.length <= 6 && /^[A-Z0-9_-]+$/.test(s);
+}
+
+// Retorna true se a query parece ser um nome ou PIN (não é SELB puro)
+function _consultaIsNomeQuery(q){
+  const s = String(q || '').trim();
+  if(s.length < 2) return false;
+  // Se tem espaço, claramente é nome
+  if(s.includes(' ')) return true;
+  // Se tem mais de 6 chars, provavelmente é nome
+  if(s.length > 6) return true;
+  // Se contém letras mas não é puramente alfanumérico-SELB, é nome
+  return /[A-Za-zÀ-ÿ]/.test(s) && !_consultaIsSelbQuery(s.toUpperCase());
 }
 
 function onConsultaSearchInput(){
   const q = (document.getElementById('search-q')?.value || '').trim().toUpperCase();
   clearTimeout(_consultaSelbSearchTimer);
+
+  // Busca por nome — usa só cache local, respeita filtro de data
+  if(_consultaIsNomeQuery(q)){
+    _consultaSelbSearchRecs = null;
+    _consultaSelbSearchQ = '';
+    _consultaSelbSearchToken++;
+    renderConsulta();
+    return;
+  }
 
   if(!_consultaIsSelbQuery(q)){
     _consultaSelbSearchRecs = null;
@@ -7530,6 +7552,7 @@ function setCFilter(f,btn){
 function renderConsulta(){
   const q = (document.getElementById('search-q').value||'').toUpperCase().trim();
   const selbMode = _consultaIsSelbQuery(q);
+  const nomeMode = !selbMode && _consultaIsNomeQuery(q);
   const src = (selbMode && _consultaSelbSearchRecs && _consultaSelbSearchQ === q)
     ? _consultaSelbSearchRecs
     : (selbMode
@@ -7539,9 +7562,9 @@ function renderConsulta(){
   const tbody = document.getElementById('consulta-body');
   if(!tbody) return;
 
-  // Sem período e sem busca de SELB → pede filtro de data
-  if(!selbMode && (!_consultaRecords || !_consultaRecords.length) && !_consultaDateKey){
-    tbody.innerHTML = '<tr><td colspan="15" class="empty" style="text-align:center;padding:24px;color:var(--muted)">Selecione um período nos filtros acima — ou digite um SELB (3+ caracteres) para buscar sem data.</td></tr>';
+  // Sem período e sem busca de SELB e sem busca por nome → pede filtro de data
+  if(!selbMode && !nomeMode && (!_consultaRecords || !_consultaRecords.length) && !_consultaDateKey){
+    tbody.innerHTML = '<tr><td colspan="15" class="empty" style="text-align:center;padding:24px;color:var(--muted)">Selecione um período nos filtros acima — ou digite um SELB (3 a 6 caracteres) para buscar sem data, ou um nome de usuário para buscar no período.</td></tr>';
     return;
   }
 
@@ -7565,10 +7588,12 @@ function renderConsulta(){
     const id = h._docId || (String(h.selb||'') + '|' + String(h.startEpoch||'') + '|' + String(h._dateKey||''));
     if(seenIds.has(id)) return false;
     seenIds.add(id);
-    // Em modo SELB (≥3 chars), filtra só pelo código e ignora o range de data
+    // Em modo SELB (3-6 chars alfanumérico): filtra só pelo código, ignora filtro de data
+    // Em modo nome (texto longo ou com espaço): filtra por nome/PIN no período carregado, respeita data
+    // Modo normal: filtra por qualquer campo
     const mq = selbMode
       ? String(h.selb||'').toUpperCase().includes(q)
-      : (!q||h.selb.includes(q)||h.name.toUpperCase().includes(q)||h.pin.includes(q)||(h.local||'').toUpperCase().includes(q)||(h.code||'').toUpperCase().includes(q));
+      : (!q || h.selb.includes(q) || (h.name||'').toUpperCase().includes(q) || (h.pin||'').includes(q) || (h.local||'').toUpperCase().includes(q) || (h.code||'').toUpperCase().includes(q));
     const ms = !stFilter || h.status === stFilter || (stFilter === 'Máquina A' && h.status === 'Máquina A') || (stFilter === 'Retomada A.G' && h.status === 'Retomada A.G');
     return mq&&ms&&(!cFilter||h.sector===cFilter);
   });
@@ -7578,6 +7603,9 @@ function renderConsulta(){
     if(selbMode){
       hintEl.style.display = 'block';
       hintEl.textContent = '🔍 Busca por SELB "' + q + '" — filtro de data ignorado' + (fl.length ? ' · ' + fl.length + ' registro(s)' : '');
+    } else if(nomeMode){
+      hintEl.style.display = 'block';
+      hintEl.textContent = '👤 Buscando por nome/PIN "' + q + '" — filtro de data respeitado' + (fl.length ? ' · ' + fl.length + ' registro(s)' : '');
     } else {
       hintEl.style.display = 'none';
     }
@@ -13867,9 +13895,17 @@ function renderMaquinasAView(){
   tbody.innerHTML = filtradas.map(m => {
     const dt = new Date(m.registradoEm);
     const dataStr = dt.toLocaleDateString('pt-BR') + ' ' + dt.toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'});
+    const selbEsc = (m.selb || '').replace(/'/g, "\\'");
+
+    const btnImprimir = `<button onclick="qualGerarEtiquetaUnica('${selbEsc}')"
+      title="Gerar etiqueta (nome, SELB, série, SKU)"
+      style="background:rgba(167,139,250,0.12);border:1px solid rgba(167,139,250,0.4);border-radius:7px;color:var(--purple);font-family:var(--font);font-size:11px;font-weight:700;padding:5px 10px;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:5px">
+      🏷️ Etiqueta
+    </button>`;
 
     const acoesHtml = isAdmin
       ? `<div style="display:flex;gap:5px;flex-wrap:wrap">
+           ${btnImprimir}
            <button onclick="admEditarMaquinaA('${m.id}')"
              style="background:rgba(79,142,247,.1);border:1px solid rgba(79,142,247,.3);border-radius:8px;color:var(--accent);font-family:var(--font);font-size:11px;font-weight:600;padding:5px 10px;cursor:pointer;white-space:nowrap">
              ✏️ Editar
@@ -13883,7 +13919,7 @@ function renderMaquinasAView(){
              🗑️ Remover
            </button>
          </div>`
-      : `<span style="font-size:11px;color:var(--muted)">Somente Admin</span>`;
+      : `<div style="display:flex;gap:5px;flex-wrap:wrap">${btnImprimir}</div>`;
 
     return `<tr>
       <td style="font-family:var(--mono);font-weight:700;color:var(--accent)">${m.selb}</td>
@@ -13896,6 +13932,30 @@ function renderMaquinasAView(){
     </tr>`;
   }).join('');
 }
+
+// ── Imprime etiqueta de movimentação (Zebra 10x15cm) para um SELB de Máquinas A ──
+function imprimirEtiquetaMaquinaA(selb) {
+  if (!selb) return;
+  const m = Object.values(_maquinasA || {}).find(r => r.selb === selb && r.status === 'ativa');
+  if (!m) {
+    alert('SELB "' + selb + '" não encontrado em Máquinas A.');
+    return;
+  }
+  const item = {
+    selb: m.selb || selb,
+    equipamento: m.equipamento || 'MOVIMENTAÇÃO',
+    de: m.setor || 'Máquinas A',
+    para: 'Máquinas A',
+    motivo: m.observacao || 'Registro Máquinas A',
+    ts: Date.now(),
+    user: m.registradoPor || (currentUser && currentUser.name) || 'Sistema',
+  };
+  _imprimirEtiquetaSpoolBackground([item], {
+    onAfterPrint: () => _mostrarToastMovPrint('🏷️ Etiqueta Máquina A enviada: ' + selb),
+    onCancel: () => _mostrarToastMovPrint('⚠️ Spool offline — abra o print-agent'),
+  });
+}
+window.imprimirEtiquetaMaquinaA = imprimirEtiquetaMaquinaA;
 
 // ── Admin remove (exclui permanentemente) o SELB da lista Máquinas A ─────
 async function admRemoverMaquinaA(id, selb){
@@ -18898,7 +18958,7 @@ function fluxolabStartListener() {
   // TODO cliente conectado, e /fluxolab é reescrito a cada movimentação de
   // SELB no chão de fábrica (alta frequência) → maior consumidor provável
   // de Realtime Messages. Agora: atualiza a cada 4s via poll (delay OK).
-  _fluxolabListener = pollRef(_db.ref('/fluxolab'), 8000, snap => {
+  _fluxolabListener = pollRef(_db.ref('/fluxolab'), 30000, snap => {
     _fluxolabData = snap.val() || {};
     _fluxolabScheduleSyncLiberados();
     const viewEl = document.getElementById('view-fluxolab');
@@ -24375,10 +24435,8 @@ function _autoPrintMovimentacaoEnabled(){
   return true;
 }
 
-// Não dispara impressão na tela do operador — só no spool (Aguardando Peças / estação de impressão)
+// Dispara impressão automática no spool em qualquer tela (inclusive Operador) se ativada
 function _movPodeImprimirSpool(){
-  const op = document.getElementById('view-operador');
-  if (op && op.classList.contains('active')) return false;
   return true;
 }
 
