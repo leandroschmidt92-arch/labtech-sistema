@@ -324,7 +324,12 @@ function createSupabaseCompatShim(supa) {
   // ══════════════════════════════════════════════════════════════════
   const USE_PG_CHANGES = false;
   const BUS_TOPIC = 'shim_bus';
-  const RECONCILE_MS = 90000;
+  // Reconciliação periódica (rede de segurança caso um evento Realtime se perca).
+  // Era 90s por assinatura; com ~13 assinaturas ativas isso sozinho gerava
+  // centenas de requisições por dia em cada aba aberta. 180s + pausa quando a
+  // aba está em segundo plano cortam esse tráfego pela metade ou mais, sem
+  // perder consistência (o Realtime continua entregando as mudanças na hora).
+  const RECONCILE_MS = 180000;
   const BLOB_BROADCAST_MAX = 120000; // acima disso manda "reload" em vez do JSON
 
   let _bus = null;
@@ -369,7 +374,20 @@ function createSupabaseCompatShim(supa) {
     _busEnsure();
     _busHandlers.add(handler);
     if (resync) _resyncs.add(resync);
-    const timer = setInterval(() => { if (!_paused && resync) resync(); }, RECONCILE_MS);
+    const timer = setInterval(() => {
+      if (_paused || !resync) return;
+      // Aba em segundo plano não precisa reconciliar: ao voltar ao foco o
+      // handler de visibilitychange abaixo faz um resync imediato.
+      if (typeof document !== 'undefined' && document.hidden) return;
+      resync();
+    }, RECONCILE_MS);
+    if (typeof document !== 'undefined' && resync && !_visResyncBound) {
+      _visResyncBound = true;
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden || _paused) return;
+        _resyncs.forEach(fn => { try { fn(); } catch (e) {} });
+      });
+    }
     return {
       release() {
         _busHandlers.delete(handler);
@@ -393,6 +411,7 @@ function createSupabaseCompatShim(supa) {
   // ══════════════════════════════════════════════════════════════════
   const _subs = new Map(); // subKey -> { pgFilter, handlers:Set, channel }
   const _resyncs = new Set(); // fns chamadas ao retomar do modo pausado
+  let _visResyncBound = false;
   let _paused = false;
 
   function _openChannel(entry, subKey) {

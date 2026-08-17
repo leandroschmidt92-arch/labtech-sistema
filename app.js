@@ -19810,7 +19810,34 @@ async function fluxolabRegistrarSelb(selbCode, uid) {
   }
 }
 
-async function fluxolabRemoveSelbGlobal(selbCode) {
+// ── Anti-flood: coalescing + cooldown das remoções globais ──
+// Antes, cada chamada disparava um RPC fluxolab_remove_selb_everywhere.
+// Timers, realtime e múltiplas abas repetiam a MESMA remoção dezenas de
+// vezes por minuto (era o maior consumo do Supabase). Agora:
+//  • chamadas concorrentes pro mesmo SELB compartilham a MESMA promise;
+//  • repetição do mesmo SELB dentro de 60s é ignorada (já foi removido).
+var _fluxolabRemoveInflight = _fluxolabRemoveInflight || new Map(); // selb -> Promise
+var _fluxolabRemoveDone     = _fluxolabRemoveDone     || new Map(); // selb -> ts
+const FLUXOLAB_REMOVE_COOLDOWN_MS = 60 * 1000;
+
+async function fluxolabRemoveSelbGlobal(selbCode, opts) {
+  const _k = String(selbCode || '').trim().toUpperCase();
+  if (!_k) return;
+  const _force = !!(opts && opts.force);
+  const _inflight = _fluxolabRemoveInflight.get(_k);
+  if (_inflight) return _inflight;
+  if (!_force) {
+    const _last = _fluxolabRemoveDone.get(_k);
+    if (_last && (Date.now() - _last) < FLUXOLAB_REMOVE_COOLDOWN_MS) return;
+  }
+  const _p = _fluxolabRemoveSelbGlobalRaw(selbCode)
+    .then(r => { _fluxolabRemoveDone.set(_k, Date.now()); return r; })
+    .finally(() => { _fluxolabRemoveInflight.delete(_k); });
+  _fluxolabRemoveInflight.set(_k, _p);
+  return _p;
+}
+
+async function _fluxolabRemoveSelbGlobalRaw(selbCode) {
   try {
     // ── Caminho ATÔMICO (correto) ──────────────────────────────────
     // Remove o SELB de TODOS os bolsões num único UPDATE travado no
@@ -24052,24 +24079,67 @@ window._renderSolicitacoesPanel = function(panelId, q){
 
 // Tick para reclassificar conforme o tempo avança
 if(!window._bolsoesTick){
-  window._bolsoesTick = setInterval(function(){
-    // Auto-remove Retorno Estoque
-    if (typeof _fluxolabData !== 'undefined' && _fluxolabData['RETORNO_ESTOQUE']) {
-      const now = Date.now();
-      Object.values(_fluxolabData['RETORNO_ESTOQUE']).forEach(v => {
-        if (v && v.selb && v.ts && (now - v.ts > 30 * 60 * 1000)) {
-          if(typeof fluxolabRemoveSelbGlobal === 'function') {
-            fluxolabRemoveSelbGlobal(v.selb);
-            if(typeof _fluxolabLogEntry === 'function') _fluxolabLogEntry(v.selb, 'RETORNO_ESTOQUE', '— (auto-removido 30m)', '');
-          }
+  // Controle da auto-remoção do RETORNO_ESTOQUE. Sem isso, o mesmo SELB era
+  // reenviado ao Supabase a cada 30s (em toda aba aberta) enquanto não sumisse
+  // do cache local — origem de milhares de RPCs por dia.
+  window._retornoEstoqueTentativas = window._retornoEstoqueTentativas || new Map(); // selb -> {n, next}
+  window._bolsoesAutoRemoveBusy = false;
+
+  async function _autoRemoveRetornoEstoque(){
+    if (window._bolsoesAutoRemoveBusy) return;
+    if (typeof _fluxolabData === 'undefined' || !_fluxolabData || !_fluxolabData['RETORNO_ESTOQUE']) return;
+    if (typeof fluxolabRemoveSelbGlobal !== 'function') return;
+    // Só a aba de admin/líder executa a limpeza — evita N abas fazendo o mesmo.
+    if (typeof currentUser !== 'undefined' && currentUser && !currentUser.isAdmin) return;
+
+    const now = Date.now();
+    const pendentes = Object.values(_fluxolabData['RETORNO_ESTOQUE'])
+      .filter(v => v && v.selb && v.ts && (now - v.ts > 30 * 60 * 1000))
+      .filter(v => {
+        const st = window._retornoEstoqueTentativas.get(v.selb);
+        if (!st) return true;
+        if (st.n >= 3) return false;          // desiste após 3 falhas
+        return now >= st.next;                 // back-off exponencial
+      })
+      .slice(0, 5);                            // no máximo 5 por ciclo
+
+    if (!pendentes.length) return;
+    window._bolsoesAutoRemoveBusy = true;
+    try {
+      for (const v of pendentes) {
+        const st = window._retornoEstoqueTentativas.get(v.selb) || { n: 0, next: 0 };
+        try {
+          await fluxolabRemoveSelbGlobal(v.selb);
+          // Remove do cache local na hora: sem isso o item volta no próximo tick.
+          const bucket = _fluxolabData['RETORNO_ESTOQUE'] || {};
+          Object.keys(bucket).forEach(k => {
+            const it = bucket[k];
+            if (it && it.selb && it.selb.trim().toUpperCase() === String(v.selb).trim().toUpperCase()) delete bucket[k];
+          });
+          window._retornoEstoqueTentativas.set(v.selb, { n: 0, next: now + 10 * 60 * 1000 });
+          if (typeof _fluxolabLogEntry === 'function') _fluxolabLogEntry(v.selb, 'RETORNO_ESTOQUE', '— (auto-removido 30m)', '');
+        } catch (e) {
+          st.n += 1;
+          st.next = now + Math.min(30, Math.pow(2, st.n)) * 60 * 1000;
+          window._retornoEstoqueTentativas.set(v.selb, st);
+          console.warn('[FluxoLAB] auto-remoção RETORNO_ESTOQUE falhou:', v.selb, e && e.message);
         }
-      });
+      }
+    } finally {
+      window._bolsoesAutoRemoveBusy = false;
     }
+  }
+
+  window._bolsoesTick = setInterval(function(){
+    // Aba em segundo plano não precisa consultar o banco.
+    if (document.hidden) return;
+
+    _autoRemoveRetornoEstoque();
 
     if(typeof window._renderSolicitacoesPanel !== 'function') return;
     if(document.getElementById('view-pecas')?.classList.contains('active')) window._renderSolicitacoesPanel('pecas-solicitacoes-panel','');
     if(document.getElementById('subview-pecas-a')?.style.display !== 'none') window._renderSolicitacoesPanel('pecas-a-solicitacoes-panel','');
-  }, 30000);
+  }, 60000);
 }
 
 // ── helper: popup modal bonito ────────────────────────────────────────────────
