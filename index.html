@@ -2828,6 +2828,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <div style="display:flex;align-items:center;gap:10px">
         <div id="fluxolab-last-update" style="font-size:11px;color:var(--muted)"></div>
         <button onclick="fluxolabForceRefresh()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--muted);font-family:var(--font);font-size:12px;font-weight:600;padding:7px 14px;cursor:pointer">↺ Atualizar</button>
+        <button id="btn-fluxolab-varrer" onclick="fluxolabVarrerBolsoes()" style="background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.4);border-radius:9px;color:var(--accent);font-family:var(--font);font-size:12px;font-weight:600;padding:7px 14px;cursor:pointer" title="Procura o mesmo SELB em mais de um bolsão e mantém apenas o registro mais recente">🧹 Varrer bolsões</button>
         <button id="btn-fluxolab-log" onclick="fluxolabToggleLog()" style="position:relative;background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--muted);font-family:var(--font);font-size:12px;font-weight:600;padding:7px 14px;cursor:pointer;transition:all .2s" title="Ver log de movimentações">
           📋 Log
           <span id="fluxolab-log-badge" style="display:none;position:absolute;top:-6px;right:-6px;background:#22d3ee;color:#000;font-size:9px;font-weight:900;border-radius:10px;padding:1px 5px;min-width:16px;text-align:center;line-height:16px;pointer-events:none"></span>

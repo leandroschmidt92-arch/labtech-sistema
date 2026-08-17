@@ -789,14 +789,44 @@ function createSupabaseCompatShim(supa) {
   // fluxolab_remove_selb_everywhere — ver fluxolab_fix_duplicacao.sql),
   // que trava a linha do blob (SELECT ... FOR UPDATE) durante a troca.
   // Requer que as duas funções SQL tenham sido criadas no Supabase.
+  // ── Guarda contra RPC inexistente (PGRST202 / 404) ──────────────────
+  // Antes, cada bipagem tentava o RPC e recebia 404 do PostgREST, o que
+  // inundava os logs (milhares de "POST 404 /rpc/...") e ainda pagava a
+  // latência da ida ao servidor. Agora, ao detectar que a função não
+  // existe, marcamos e passamos direto ao fallback local até a página
+  // ser recarregada (depois de rodar fluxolab_fix_duplicacao.sql).
+  const _rpcMissing = new Set();
+  function _isMissingFnError(err) {
+    if (!err) return false;
+    const code = String(err.code || '');
+    const msg  = String(err.message || '') + ' ' + String(err.details || '');
+    return code === 'PGRST202' || code === '404' ||
+           /could not find the function|does not exist|schema cache/i.test(msg);
+  }
+  async function _rpc(fnName, args) {
+    if (_rpcMissing.has(fnName)) {
+      const e = new Error('RPC ' + fnName + ' indisponível no banco (rode fluxolab_fix_duplicacao.sql)');
+      e.code = 'PGRST202';
+      throw e;
+    }
+    const { data, error } = await supa.rpc(fnName, args);
+    if (error) {
+      if (_isMissingFnError(error)) {
+        _rpcMissing.add(fnName);
+        console.warn('[shim] Função SQL ausente: ' + fnName + ' — rode fluxolab_fix_duplicacao.sql no Supabase. Usando fallback local até lá.');
+      }
+      throw error;
+    }
+    return data;
+  }
+
   async function fluxolabMoveSelb(selbKey, destBolsao, record) {
-    const { data, error } = await supa.rpc('fluxolab_move_selb', {
+    const data = await _rpc('fluxolab_move_selb', {
       p_key: 'fluxolab',
       p_selb_key: selbKey,
       p_dest_bolsao: destBolsao,
       p_record: record,
     });
-    if (error) throw error;
     const blob = data || {};
     _blobCacheSet('fluxolab', blob, { hasSub: true });
     pubBlob('fluxolab', blob); // avisa outras abas/usuários em tempo real
@@ -804,21 +834,32 @@ function createSupabaseCompatShim(supa) {
   }
 
   async function fluxolabRemoveSelbEverywhere(selbKey) {
-    const { data, error } = await supa.rpc('fluxolab_remove_selb_everywhere', {
+    const data = await _rpc('fluxolab_remove_selb_everywhere', {
       p_key: 'fluxolab',
       p_selb_key: selbKey,
     });
-    if (error) throw error;
     const blob = data || {};
     _blobCacheSet('fluxolab', blob, { hasSub: true });
     pubBlob('fluxolab', blob);
     return blob;
   }
 
+  // ── VARREDURA: remove SELB duplicado entre bolsões (mantém o mais novo) ──
+  // Uma única transação no Postgres (fluxolab_dedupe_selbs).
+  async function fluxolabDedupeSelbs() {
+    const data = await _rpc('fluxolab_dedupe_selbs', { p_key: 'fluxolab' });
+    const res  = data || {};
+    const blob = res.data || {};
+    _blobCacheSet('fluxolab', blob, { hasSub: true });
+    pubBlob('fluxolab', blob);
+    return { data: blob, removidos: res.removidos || [] };
+  }
+
   return {
     ref,
     fluxolabMoveSelb,
     fluxolabRemoveSelbEverywhere,
+    fluxolabDedupeSelbs,
     // Diagnóstico: quantos canais Realtime estão realmente abertos.
     _debugChannels() {
       return { modo: USE_PG_CHANGES ? 'postgres_changes' : 'broadcast-bus',

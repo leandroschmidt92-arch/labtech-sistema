@@ -19822,9 +19822,16 @@ async function fluxolabRemoveSelbGlobal(selbCode) {
     // que precisava apagá-la — e o SELB ficava "esquecido" no bolsão
     // antigo enquanto era registrado no novo. Ver fluxolab_fix_duplicacao.sql.
     if (_db && typeof _db.fluxolabRemoveSelbEverywhere === 'function') {
-      const fresh = await _db.fluxolabRemoveSelbEverywhere(selbCode);
-      _fluxolabData = fresh || {};
-      return;
+      try {
+        const fresh = await _db.fluxolabRemoveSelbEverywhere(selbCode);
+        _fluxolabData = fresh || {};
+        return;
+      } catch (rpcErr) {
+        // Ex.: PGRST202 (função ainda não criada no Supabase). NÃO pode
+        // parar aqui: se a remoção não acontecer, o SELB fica no bolsão
+        // antigo E entra no novo = duplicidade. Cai para o fallback.
+        console.warn('[FluxoLAB] RPC fluxolab_remove_selb_everywhere falhou — usando fallback local. Rode fluxolab_varrer_duplicados.sql no Supabase.', rpcErr && rpcErr.message);
+      }
     }
 
     // ── Fallback (apenas se o RPC acima não existir no banco ainda) ──
@@ -19862,15 +19869,118 @@ async function fluxolabRemoveSelbGlobal(selbCode) {
 async function fluxolabMoveSelbAtomic(selbCode, destBolsao, record) {
   const selfKey = selbCode.replace(/[^a-zA-Z0-9_-]/g, '_');
   if (_db && typeof _db.fluxolabMoveSelb === 'function') {
-    const fresh = await _db.fluxolabMoveSelb(selfKey, destBolsao, record);
-    _fluxolabData = fresh || {};
-    return;
+    try {
+      const fresh = await _db.fluxolabMoveSelb(selfKey, destBolsao, record);
+      _fluxolabData = fresh || {};
+      return;
+    } catch (rpcErr) {
+      console.warn('[FluxoLAB] RPC fluxolab_move_selb falhou — usando fallback local. Rode fluxolab_varrer_duplicados.sql no Supabase.', rpcErr && rpcErr.message);
+    }
   }
   // Fallback não-atômico (só até rodar fluxolab_fix_duplicacao.sql no Supabase).
   console.warn('[FluxoLAB] fluxolabMoveSelb indisponível — usando fallback não-atômico (rode fluxolab_fix_duplicacao.sql no Supabase).');
   await fluxolabRemoveSelbGlobal(selbCode);
   await dbSet('/fluxolab/' + destBolsao + '/' + selfKey, record);
 }
+
+// ════════════════════════════════════════════════════════════════════════
+// VARRER BOLSÕES — remove SELBs duplicados (mantém o registro mais recente)
+// Regra do fluxo: um SELB só pode existir em UM bolsão por vez.
+// A varredura roda 100% dentro do Postgres (fluxolab_dedupe_selbs), numa
+// transação travada, então é segura mesmo com operadores bipando ao mesmo
+// tempo. Fallback local só existe caso o SQL ainda não tenha sido rodado.
+// ════════════════════════════════════════════════════════════════════════
+function _fluxolabNormSelb(k, v) {
+  const raw = (v && v.selb) ? String(v.selb) : String(k || '');
+  return raw.trim().toUpperCase();
+}
+
+async function _fluxolabDedupeFallback() {
+  const snap = await dbGet('/fluxolab') || {};
+  const best = {};   // selb -> { bolsao, k, ts }
+  const removidos = [];
+  Object.keys(snap).forEach(bolsao => {
+    const items = snap[bolsao];
+    if (!items || typeof items !== 'object') return;
+    Object.entries(items).forEach(([k, v]) => {
+      const norm = _fluxolabNormSelb(k, v);
+      if (!norm || norm[0] === '_') return;
+      const ts = (v && v.ts) || 0;
+      if (!best[norm] || ts > best[norm].ts) best[norm] = { bolsao, k, ts };
+    });
+  });
+  const dels = [];
+  Object.keys(snap).forEach(bolsao => {
+    const items = snap[bolsao];
+    if (!items || typeof items !== 'object') return;
+    Object.entries(items).forEach(([k, v]) => {
+      const norm = _fluxolabNormSelb(k, v);
+      if (!norm || norm[0] === '_') return;
+      const keep = best[norm];
+      if (!keep) return;
+      if (keep.bolsao === bolsao && keep.k === k) return;
+      removidos.push({ selb: norm, bolsao, ts: (v && v.ts) || 0, mantido_em: keep.bolsao });
+      dels.push(dbDelete('/fluxolab/' + bolsao + '/' + k));
+    });
+  });
+  await Promise.all(dels);
+  return { removidos };
+}
+
+async function fluxolabVarrerBolsoes() {
+  const btn = document.getElementById('btn-fluxolab-varrer');
+  const label = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Varrendo...'; }
+  try {
+    let removidos = [];
+    let usouRpc = false;
+    if (_db && typeof _db.fluxolabDedupeSelbs === 'function') {
+      try {
+        const res = await _db.fluxolabDedupeSelbs();
+        removidos = res.removidos || [];
+        _fluxolabData = res.data || {};
+        usouRpc = true;
+      } catch (rpcErr) {
+        console.warn('[FluxoLAB] RPC fluxolab_dedupe_selbs indisponível — varredura local.', rpcErr && rpcErr.message);
+      }
+    }
+    if (usouRpc) {
+      /* já resolvido pelo banco */
+    } else {
+      console.warn('[FluxoLAB] fluxolabDedupeSelbs indisponível — usando varredura local (rode fluxolab_varrer_duplicados.sql no Supabase).');
+      const res = await _fluxolabDedupeFallback();
+      removidos = res.removidos || [];
+      _fluxolabData = await dbGet('/fluxolab') || {};
+    }
+
+    // Registra no log de movimentações cada remoção feita pela varredura
+    removidos.forEach(r => {
+      try {
+        const equipNome = (typeof getEquipName === 'function' ? getEquipName(r.selb) : '') || '';
+        _fluxolabLogEntry(r.selb, r.bolsao, r.mantido_em || '—', equipNome, {
+          tipo: 'varredura', automatico: true,
+          obs: 'Duplicidade removida (registro mais antigo) — mantido em ' + (r.mantido_em || '—'),
+        });
+      } catch (e) { /* log é best-effort */ }
+    });
+
+    _fluxolabRenderGrid();
+    _fluxolabUpdateTimestamp();
+
+    const msg = removidos.length
+      ? '🧹 Varredura concluída: ' + removidos.length + ' duplicidade(s) removida(s) — ' +
+        [...new Set(removidos.map(r => r.selb))].join(', ')
+      : '✅ Varredura concluída: nenhum SELB duplicado encontrado.';
+    if (typeof showToast === 'function') showToast(msg, false); else alert(msg);
+  } catch (e) {
+    console.error('[FluxoLAB] Erro na varredura de bolsões:', e);
+    const msg = 'Erro ao varrer bolsões: ' + (e && e.message ? e.message : e);
+    if (typeof showToast === 'function') showToast(msg, true); else alert(msg);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = label; }
+  }
+}
+window.fluxolabVarrerBolsoes = fluxolabVarrerBolsoes;
 
 async function fluxolabFinalizarSelb(selbCode, sector, res, destinoOverride, detalhesFinalizacao){
   try{
@@ -27963,4 +28073,103 @@ window.fluxolabLimparMaquinasA = async function() {
   } else {
     alert('Limpeza concluída! Foram removidos ' + removidas + ' equipamento(s) dos bolsões.');
   }
+};
+
+// ── VARREDURA DE SELBs DUPLICADOS NOS BOLSÕES ──────────────────────────────
+// Cada SELB só pode existir em UM bolsão do FluxoLAB por vez. Duplicações
+// podem ocorrer por corrida entre gravações concorrentes de dois usuários
+// bipando quase ao mesmo tempo (ver fluxolab_fix_duplicacao.sql para a causa
+// raiz). Esta função varre TODOS os bolsões, agrupa as entradas por SELB e,
+// para cada SELB encontrado em mais de um bolsão, mantém apenas a entrada
+// mais recente (maior "ts") e remove as demais (mais antigas) — usando a
+// mesma operação atômica (fluxolabMoveSelbAtomic) usada nas movimentações
+// normais, para não reintroduzir a própria corrida que causa duplicação.
+window.fluxolabVarrerDuplicados = async function() {
+  if (!confirm('Deseja varrer os bolsões do FluxoLAB em busca de SELBs duplicados?\n\nPara cada SELB encontrado em mais de um bolsão, o registro mais antigo será removido e apenas o mais recente será mantido.')) return;
+
+  let dados;
+  try {
+    dados = await dbGet('/fluxolab');
+  } catch (e) {
+    dados = (typeof _fluxolabData === 'object' && _fluxolabData) ? _fluxolabData : null;
+  }
+  if (!dados || typeof dados !== 'object') {
+    if (typeof window._labPopup === 'function') {
+      window._labPopup('Varrer Bolsões', 'Não foi possível ler os dados do FluxoLAB. Tente novamente.', 'erro');
+    } else {
+      alert('Não foi possível ler os dados do FluxoLAB. Tente novamente.');
+    }
+    return;
+  }
+
+  // Agrupa todas as entradas de todos os bolsões por SELB normalizado
+  const grupos = {}; // code -> [{ bolsao, key, record }]
+  Object.entries(dados).forEach(([bolsao, items]) => {
+    if (!items || typeof items !== 'object') return;
+    Object.entries(items).forEach(([key, record]) => {
+      const code = String(record && record.selb ? record.selb : '').trim().toUpperCase();
+      if (!code) return;
+      if (!grupos[code]) grupos[code] = [];
+      grupos[code].push({ bolsao, key, record });
+    });
+  });
+
+  const duplicados = Object.entries(grupos).filter(([, entradas]) => entradas.length > 1);
+
+  if (duplicados.length === 0) {
+    if (typeof window._labPopup === 'function') {
+      window._labPopup('Varrer Bolsões', 'Nenhum SELB duplicado encontrado. Todos os bolsões estão consistentes.', 'ok');
+    } else {
+      alert('Nenhum SELB duplicado encontrado. Todos os bolsões estão consistentes.');
+    }
+    return;
+  }
+
+  let registrosRemovidos = 0;
+  const detalhes = [];
+
+  for (const [code, entradas] of duplicados) {
+    try {
+      // Mais recente primeiro (maior ts); trata registros sem ts como os mais antigos
+      const ordenadas = entradas.slice().sort((a, b) => ((b.record && b.record.ts) || 0) - ((a.record && a.record.ts) || 0));
+      const manter = ordenadas[0];
+      const antigas = ordenadas.slice(1);
+
+      if (typeof fluxolabMoveSelbAtomic === 'function') {
+        // Remove o SELB de TODOS os bolsões e regrava só a entrada mais
+        // recente no bolsão em que ela já estava — atômico (trava no Postgres),
+        // então não corre risco de "ressuscitar" nada durante a varredura.
+        await fluxolabMoveSelbAtomic(code, manter.bolsao, manter.record);
+      } else {
+        // Fallback (apenas se o RPC não estiver disponível)
+        for (const antiga of antigas) {
+          await dbDelete('/fluxolab/' + antiga.bolsao + '/' + antiga.key);
+        }
+      }
+
+      registrosRemovidos += antigas.length;
+      const bolsoesAntigos = antigas.map(a => a.bolsao).join(', ');
+      const equipNome = (manter.record && manter.record.equipamento) || (typeof getEquipName === 'function' ? getEquipName(code) : '') || '';
+      _fluxolabLogEntry(code, bolsoesAntigos, manter.bolsao, equipNome, {
+        tipo: 'auditoria', automatico: true,
+        obs: 'Varredura de duplicados: mantido em ' + manter.bolsao + ' (mais recente), removido de ' + bolsoesAntigos,
+      });
+      detalhes.push(code + ': mantido em ' + manter.bolsao + ', removido de ' + bolsoesAntigos);
+      console.log('[Varrer Bolsões] SELB duplicado resolvido:', code, '— mantido em', manter.bolsao, '— removido de', bolsoesAntigos);
+    } catch (e) {
+      console.warn('[Varrer Bolsões] Erro ao resolver duplicidade do SELB ' + code, e);
+    }
+  }
+
+  const msg = registrosRemovidos > 0
+    ? duplicados.length + ' SELB(s) duplicado(s) encontrado(s) · ' + registrosRemovidos + ' registro(s) antigo(s) removido(s).<br><br><span style="font-size:11px;opacity:.85">' + detalhes.join('<br>') + '</span>'
+    : 'Duplicidades encontradas, mas nenhum registro pôde ser removido. Veja o console para detalhes.';
+
+  if (typeof window._labPopup === 'function') {
+    window._labPopup('Varrer Bolsões', msg, registrosRemovidos > 0 ? 'aviso' : 'erro');
+  } else {
+    alert(msg.replace(/<br\s*\/?>/g, '\n').replace(/<[^>]+>/g, ''));
+  }
+
+  if (typeof _fluxolabRenderGrid === 'function') _fluxolabRenderGrid();
 };
