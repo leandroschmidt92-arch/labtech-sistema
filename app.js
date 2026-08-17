@@ -5645,18 +5645,28 @@ function _renderSolicitacoesPanel(panelId, q){
     + '</div>';
   }).join('');
 
-  panel.innerHTML = ''
-    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">'
-      + '<div style="display:flex;align-items:center;gap:8px">'
-        + '<span style="font-size:16px">\uD83D\uDD14</span>'
-        + '<span style="font-size:14px;font-weight:700;color:var(--warn)">Solicita\u00E7\u00F5es de Pe\u00E7as Pendentes</span>'
-        + '<span style="background:var(--warn);color:#000;border-radius:20px;font-size:11px;font-weight:800;padding:2px 9px">' + pendentes.length + '</span>'
+  // Se o painel tem um corpo interno separado (novo layout colapsável), usa ele
+  var bodyEl = panel.querySelector('#pecas-sol-body');
+  var badgeEl = panel.querySelector('#pecas-sol-badge');
+  if (bodyEl) {
+    // Atualiza só o conteúdo interno e o badge, preservando o cabeçalho/botão de retrair
+    if (badgeEl) badgeEl.textContent = pendentes.length;
+    bodyEl.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:10px">' + cards + '</div>';
+  } else {
+    // Painel sem corpo separado (ex: pecas-a-solicitacoes-panel) — comportamento original
+    panel.innerHTML = ''
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">'
+        + '<div style="display:flex;align-items:center;gap:8px">'
+          + '<span style="font-size:16px">\uD83D\uDD14</span>'
+          + '<span style="font-size:14px;font-weight:700;color:var(--warn)">Solicita\u00E7\u00F5es de Pe\u00E7as Pendentes</span>'
+          + '<span style="background:var(--warn);color:#000;border-radius:20px;font-size:11px;font-weight:800;padding:2px 9px">' + pendentes.length + '</span>'
+        + '</div>'
+        + marcarTodasBtn
       + '</div>'
-      + marcarTodasBtn
-    + '</div>'
-    + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:10px">'
-      + cards
-    + '</div>';
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:10px">'
+        + cards
+      + '</div>';
+  }
 }
 function _tempoAtras(ts){
   if(!ts) return '—';
@@ -7916,12 +7926,10 @@ async function confirmarReprovacao(){
       if(profUser && profUser.linha && typeof FLUXOLAB_BOLSOES !== 'undefined' && FLUXOLAB_BOLSOES.find(b => b.key === profUser.linha)){
         destBolsao = profUser.linha;
       }
-      if(typeof fluxolabRemoveSelbGlobal === 'function'){
+      if(typeof fluxolabMoveSelbAtomic === 'function'){
         const bolsaoAnterior = (typeof _fmovGetBolsaoAtual === 'function') ? (_fmovGetBolsaoAtual(orig.selb) || '—') : '—';
-        await fluxolabRemoveSelbGlobal(orig.selb);
-        const selfKey = orig.selb.replace(/[^a-zA-Z0-9_-]/g, '_');
         const equipNome = (typeof getEquipName === 'function' ? getEquipName(orig.selb) : '') || orig.equipamento || '';
-        await dbSet('/fluxolab/' + destBolsao + '/' + selfKey, {
+        await fluxolabMoveSelbAtomic(orig.selb, destBolsao, {
           selb:        orig.selb,
           uid:         orig.uid || '',
           userName:    orig.name || '',
@@ -15178,9 +15186,8 @@ async function reverterEtiquetaImpressa(id){
     const reg = _qualRegistros[id] || null;
     const selbToReturn = reg ? (reg.selb || '') : '';
     if(selbToReturn){
-      const selfKey = selbToReturn.replace(/[^a-zA-Z0-9_-]/g, '_');
       const equipNome = reg.equipamento || (typeof getEquipName === 'function' ? getEquipName(selbToReturn) : '') || '';
-      await dbSet('/fluxolab/LIBERADAS/' + selfKey, {
+      await fluxolabMoveSelbAtomic(selbToReturn, 'LIBERADAS', {
         selb:        selbToReturn,
         uid:         currentUser ? currentUser.id : '',
         userName:    currentUser ? currentUser.name : '',
@@ -19365,9 +19372,7 @@ async function fmovExecutar() {
 
   for (const item of _fmovQueue) {
     try {
-      await fluxolabRemoveSelbGlobal(item.code);
-      const selfKey = item.code.replace(/[^a-zA-Z0-9_-]/g, '_');
-      await dbSet('/fluxolab/' + destBolsao + '/' + selfKey, {
+      await fluxolabMoveSelbAtomic(item.code, destBolsao, {
         selb:        item.code,
         uid:         currentUser ? currentUser.id : '',
         userName:    currentUser ? currentUser.name : '',
@@ -19786,10 +19791,8 @@ async function fluxolabRegistrarSelb(selbCode, uid) {
     // Limpeza já deixou na mesma linha), não precisamos remover/recriar —
     // isso preservaria o "ts" de entrada, mas o registro de uid/userName/sector
     // muda para o operador atual, então seguimos com o replace normal.
-    await fluxolabRemoveSelbGlobal(selbCode);
-    const selfKey = selbCode.replace(/[^a-zA-Z0-9_-]/g, '_');
     const equipNome = (typeof getEquipName === 'function' ? getEquipName(selbCode) : '') || '';
-    await dbSet('/fluxolab/' + bolsao + '/' + selfKey, {
+    await fluxolabMoveSelbAtomic(selbCode, bolsao, {
       selb:        selbCode,
       uid:         uid,
       userName:    u.name,
@@ -19809,8 +19812,26 @@ async function fluxolabRegistrarSelb(selbCode, uid) {
 
 async function fluxolabRemoveSelbGlobal(selbCode) {
   try {
-    // OTIMIZAÇÃO: usar _fluxolabData já mantido em memória pelo listener
-    // realtime em vez de refazer GET /fluxolab_state?key=eq.fluxolab.
+    // ── Caminho ATÔMICO (correto) ──────────────────────────────────
+    // Remove o SELB de TODOS os bolsões num único UPDATE travado no
+    // Postgres (fluxolab_remove_selb_everywhere), em vez de decidir o
+    // que apagar com base no cache local _fluxolabData. Usar o cache
+    // local era a causa da duplicação: se este navegador ainda não
+    // tinha recebido (via poll/realtime) uma entrada gravada por OUTRO
+    // usuário/aba há poucos segundos, a remoção simplesmente não sabia
+    // que precisava apagá-la — e o SELB ficava "esquecido" no bolsão
+    // antigo enquanto era registrado no novo. Ver fluxolab_fix_duplicacao.sql.
+    if (_db && typeof _db.fluxolabRemoveSelbEverywhere === 'function') {
+      const fresh = await _db.fluxolabRemoveSelbEverywhere(selbCode);
+      _fluxolabData = fresh || {};
+      return;
+    }
+
+    // ── Fallback (apenas se o RPC acima não existir no banco ainda) ──
+    // Mesmo comportamento de antes: pode perder deleções em corrida com
+    // outra aba/usuário. Mantido só para não quebrar o app antes de
+    // rodar o script fluxolab_fix_duplicacao.sql no Supabase.
+    console.warn('[FluxoLAB] fluxolabRemoveSelbEverywhere indisponível — usando fallback não-atômico (rode fluxolab_fix_duplicacao.sql no Supabase).');
     const snap = (typeof _fluxolabData === 'object' && _fluxolabData) ? _fluxolabData : await dbGet('/fluxolab');
     if (!snap) return;
     const selfKey = selbCode.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -19831,6 +19852,24 @@ async function fluxolabRemoveSelbGlobal(selbCode) {
   } catch (e) {
     console.warn('[FluxoLAB] Erro ao remover SELB global:', e);
   }
+}
+
+// Move um SELB para `destBolsao` de forma ATÔMICA: remove de qualquer
+// bolsão onde ele esteja e insere no destino num único passo dentro do
+// Postgres (fluxolab_move_selb), eliminando a corrida entre "remover" e
+// "gravar no bolsão novo" que causava SELBs aparecendo em dois bolsões
+// ao mesmo tempo. `record` é o mesmo objeto que hoje é passado pro dbSet.
+async function fluxolabMoveSelbAtomic(selbCode, destBolsao, record) {
+  const selfKey = selbCode.replace(/[^a-zA-Z0-9_-]/g, '_');
+  if (_db && typeof _db.fluxolabMoveSelb === 'function') {
+    const fresh = await _db.fluxolabMoveSelb(selfKey, destBolsao, record);
+    _fluxolabData = fresh || {};
+    return;
+  }
+  // Fallback não-atômico (só até rodar fluxolab_fix_duplicacao.sql no Supabase).
+  console.warn('[FluxoLAB] fluxolabMoveSelb indisponível — usando fallback não-atômico (rode fluxolab_fix_duplicacao.sql no Supabase).');
+  await fluxolabRemoveSelbGlobal(selbCode);
+  await dbSet('/fluxolab/' + destBolsao + '/' + selfKey, record);
 }
 
 async function fluxolabFinalizarSelb(selbCode, sector, res, destinoOverride, detalhesFinalizacao){
@@ -19873,9 +19912,7 @@ async function fluxolabFinalizarSelb(selbCode, sector, res, destinoOverride, det
       });
       return;
     }
-    await fluxolabRemoveSelbGlobal(selbCode);
-    const selfKey  = selbCode.replace(/[^a-zA-Z0-9_-]/g, '_');
-    await dbSet('/fluxolab/' + dest + '/' + selfKey, {
+    await fluxolabMoveSelbAtomic(selbCode, dest, {
       selb:        selbCode,
       uid:         currentUser ? currentUser.id : '',
       userName:    currentUser ? currentUser.name : '',

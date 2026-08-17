@@ -781,8 +781,44 @@ function createSupabaseCompatShim(supa) {
     return self;
   }
 
+  // ── Movimentação ATÔMICA de SELB no FluxoLAB ───────────────────────
+  // Corrige a duplicação de SELB entre bolsões: mover/remover deixa de
+  // ser um "ler blob inteiro -> editar no JS -> regravar blob inteiro"
+  // (racy quando duas bipagens acontecem quase juntas) e passa a ser UMA
+  // única operação atômica dentro do Postgres (fluxolab_move_selb /
+  // fluxolab_remove_selb_everywhere — ver fluxolab_fix_duplicacao.sql),
+  // que trava a linha do blob (SELECT ... FOR UPDATE) durante a troca.
+  // Requer que as duas funções SQL tenham sido criadas no Supabase.
+  async function fluxolabMoveSelb(selbKey, destBolsao, record) {
+    const { data, error } = await supa.rpc('fluxolab_move_selb', {
+      p_key: 'fluxolab',
+      p_selb_key: selbKey,
+      p_dest_bolsao: destBolsao,
+      p_record: record,
+    });
+    if (error) throw error;
+    const blob = data || {};
+    _blobCacheSet('fluxolab', blob, { hasSub: true });
+    pubBlob('fluxolab', blob); // avisa outras abas/usuários em tempo real
+    return blob;
+  }
+
+  async function fluxolabRemoveSelbEverywhere(selbKey) {
+    const { data, error } = await supa.rpc('fluxolab_remove_selb_everywhere', {
+      p_key: 'fluxolab',
+      p_selb_key: selbKey,
+    });
+    if (error) throw error;
+    const blob = data || {};
+    _blobCacheSet('fluxolab', blob, { hasSub: true });
+    pubBlob('fluxolab', blob);
+    return blob;
+  }
+
   return {
     ref,
+    fluxolabMoveSelb,
+    fluxolabRemoveSelbEverywhere,
     // Diagnóstico: quantos canais Realtime estão realmente abertos.
     _debugChannels() {
       return { modo: USE_PG_CHANGES ? 'postgres_changes' : 'broadcast-bus',

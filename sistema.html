@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <!-- ── Tema: aplicar antes do render para evitar flash ── -->
@@ -1639,7 +1639,19 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     </div>
     
     <!-- Painel de alertas de solicitações pendentes -->
-    <div id="pecas-solicitacoes-panel" style="display:none;background:rgba(245,166,35,.06);border:1px solid rgba(245,166,35,.35);border-radius:14px;padding:16px 18px;margin-bottom:16px"></div>
+    <div id="pecas-solicitacoes-panel" style="display:none;background:rgba(245,166,35,.06);border:1px solid rgba(245,166,35,.35);border-radius:14px;padding:16px 18px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0;flex-wrap:wrap;gap:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:16px">🔔</span>
+          <span style="font-size:13px;font-weight:700;color:var(--warn)">Solicitações de Peças Pendentes</span>
+          <span id="pecas-sol-badge" style="background:var(--warn);color:#000;border-radius:20px;font-size:10px;font-weight:800;padding:2px 8px">0</span>
+        </div>
+        <button onclick="togglePecasSection('pecas-sol-body')" id="btn-toggle-pecas-sol"
+          style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1;padding:2px 6px"
+          title="Retrair/Expandir">▼</button>
+      </div>
+      <div id="pecas-sol-body" style="margin-top:10px"></div>
+    </div>
 
     <!-- Lista de etiquetas de movimentação -->
     <div id="pecas-etiquetas-movimentacao-panel" style="background:rgba(232,121,249,.06);border:1px solid rgba(232,121,249,.35);border-radius:14px;padding:16px 18px;margin-bottom:16px">
@@ -1654,53 +1666,58 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
             Impressão automática
           </label>
           <button onclick="imprimirTodasEtiquetasMovimentacao()" style="background:rgba(232,121,249,.18);border:1px solid rgba(232,121,249,.5);border-radius:9px;color:#e879f9;font-family:var(--font);font-size:12px;font-weight:700;padding:7px 14px;cursor:pointer">🖨️ Imprimir todas</button>
+          <button onclick="togglePecasSection('pecas-etq-body')" id="btn-toggle-pecas-etq"
+            style="background:none;border:none;color:#e879f9;font-size:18px;cursor:pointer;line-height:1;padding:2px 6px"
+            title="Retrair/Expandir">▼</button>
         </div>
       </div>
-      <p style="font-size:11px;color:var(--muted);margin:-4px 0 8px">Etiquetas 10 × 15 cm para movimentações que <b>não são Aprovada</b>, só de <b>Montagem, Limpeza, Complexa, Desmembramento e Eletrônica</b>. A lista é o <b>spool do dia</b>. Use <b>print-agent/abrir-com-spool.bat</b> (abre em <code>http://127.0.0.1</code> + spool).</p>
-      <div id="mov-spool-status" style="display:inline-block;font-size:11px;font-weight:700;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:4px 10px;margin:-2px 0 10px">Spool invisível:…</div>
-      <div id="mov-spool-test-box" style="margin:0 0 12px;padding:10px 12px;border-radius:10px;border:1px dashed rgba(232,121,249,.45);background:rgba(232,121,249,.08)">
-        <div style="font-size:11px;font-weight:800;color:#e879f9;margin-bottom:8px">🧪 Teste interno do spool (sem operador)</div>
-        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:end">
-          <label style="font-size:10px;color:var(--muted);font-weight:700;display:flex;flex-direction:column;gap:4px">SELB
-            <input id="mov-spool-test-selb" value="TEST" maxlength="20" style="width:110px;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:var(--font);font-size:12px;font-weight:700;padding:6px 8px">
-          </label>
-          <label style="font-size:10px;color:var(--muted);font-weight:700;display:flex;flex-direction:column;gap:4px">Saiu de
-            <input id="mov-spool-test-de" value="Montagem" style="width:130px;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px">
-          </label>
-          <label style="font-size:10px;color:var(--muted);font-weight:700;display:flex;flex-direction:column;gap:4px">Vai para
-            <input id="mov-spool-test-para" value="Eletrônica" style="width:130px;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px">
-          </label>
-          <button type="button" onclick="testarSpoolEtiquetaMovimentacao()" style="background:#7e215d;border:1px solid rgba(232,121,249,.6);border-radius:9px;color:#fff;font-family:var(--font);font-size:12px;font-weight:800;padding:8px 14px;cursor:pointer">Enviar teste → impressora</button>
+      <div id="pecas-etq-body">
+        <p style="font-size:11px;color:var(--muted);margin:-4px 0 8px">Etiquetas 10 × 15 cm para movimentações que <b>não são Aprovada</b>, só de <b>Montagem, Limpeza, Complexa, Desmembramento e Eletrônica</b>. A lista é o <b>spool do dia</b>. Use <b>print-agent/abrir-com-spool.bat</b> (abre em <code>http://127.0.0.1</code> + spool).</p>
+        <div id="mov-spool-status" style="display:inline-block;font-size:11px;font-weight:700;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:4px 10px;margin:-2px 0 10px">Spool invisível:…</div>
+        <div id="mov-spool-test-box" style="margin:0 0 12px;padding:10px 12px;border-radius:10px;border:1px dashed rgba(232,121,249,.45);background:rgba(232,121,249,.08)">
+          <div style="font-size:11px;font-weight:800;color:#e879f9;margin-bottom:8px">🧪 Teste interno do spool (sem operador)</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:end">
+            <label style="font-size:10px;color:var(--muted);font-weight:700;display:flex;flex-direction:column;gap:4px">SELB
+              <input id="mov-spool-test-selb" value="TEST" maxlength="20" style="width:110px;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:var(--font);font-size:12px;font-weight:700;padding:6px 8px">
+            </label>
+            <label style="font-size:10px;color:var(--muted);font-weight:700;display:flex;flex-direction:column;gap:4px">Saiu de
+              <input id="mov-spool-test-de" value="Montagem" style="width:130px;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px">
+            </label>
+            <label style="font-size:10px;color:var(--muted);font-weight:700;display:flex;flex-direction:column;gap:4px">Vai para
+              <input id="mov-spool-test-para" value="Eletrônica" style="width:130px;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:var(--font);font-size:12px;padding:6px 8px">
+            </label>
+            <button type="button" onclick="testarSpoolEtiquetaMovimentacao()" style="background:#7e215d;border:1px solid rgba(232,121,249,.6);border-radius:9px;color:#fff;font-family:var(--font);font-size:12px;font-weight:800;padding:8px 14px;cursor:pointer">Enviar teste → impressora</button>
+          </div>
+          <div style="font-size:10px;color:var(--muted);margin-top:6px">Registra na lista abaixo <b>e</b> envia ZPL/RAW pelo spool (sem tela do Chrome). O spool precisa estar online.</div>
         </div>
-        <div style="font-size:10px;color:var(--muted);margin-top:6px">Registra na lista abaixo <b>e</b> envia ZPL/RAW pelo spool (sem tela do Chrome). O spool precisa estar online.</div>
-      </div>
-      <div id="mov-etiq-dia-bar" style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
-        <span id="mov-etiq-dia-label" style="font-size:11px;font-weight:800;color:#e879f9;background:rgba(232,121,249,.12);border:1px solid rgba(232,121,249,.35);border-radius:8px;padding:4px 10px">Hoje</span>
-        <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;font-weight:600">
-          Histórico:
-          <input type="date" id="mov-etiq-dia-historico" onchange="movSetEtiquetasDia(this.value)" style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:var(--font);font-size:11px;padding:4px 8px">
-        </label>
-        <button type="button" id="mov-etiq-voltar-hoje" onclick="movSetEtiquetasDia('')" style="display:none;background:rgba(232,121,249,.12);border:1px solid rgba(232,121,249,.4);border-radius:8px;color:#e879f9;font-family:var(--font);font-size:10px;font-weight:800;padding:4px 10px;cursor:pointer">↩ Voltar para hoje</button>
-      </div>
-      <div style="overflow-x:auto">
-        <table class="rtbl">
-          <thead>
-            <tr>
-              <th style="width:120px">Data/Hora</th>
-              <th style="width:100px">SELB</th>
-              <th>Equipamento</th>
-              <th style="width:130px">Saiu de</th>
-              <th style="width:130px">Vai para</th>
-              <th>Motivo / Peça</th>
-              <th style="width:90px">Usuário</th>
-              <th style="width:80px;text-align:center">Status</th>
-              <th style="width:90px;text-align:center">Ação</th>
-            </tr>
-          </thead>
-          <tbody id="pecas-etiquetas-movimentacao-lista">
-            <tr><td colspan="9" class="empty">Nenhuma movimentação manual pendente.</td></tr>
-          </tbody>
-        </table>
+        <div id="mov-etiq-dia-bar" style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+          <span id="mov-etiq-dia-label" style="font-size:11px;font-weight:800;color:#e879f9;background:rgba(232,121,249,.12);border:1px solid rgba(232,121,249,.35);border-radius:8px;padding:4px 10px">Hoje</span>
+          <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:6px;font-weight:600">
+            Histórico:
+            <input type="date" id="mov-etiq-dia-historico" onchange="movSetEtiquetasDia(this.value)" style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:var(--font);font-size:11px;padding:4px 8px">
+          </label>
+          <button type="button" id="mov-etiq-voltar-hoje" onclick="movSetEtiquetasDia('')" style="display:none;background:rgba(232,121,249,.12);border:1px solid rgba(232,121,249,.4);border-radius:8px;color:#e879f9;font-family:var(--font);font-size:10px;font-weight:800;padding:4px 10px;cursor:pointer">↩ Voltar para hoje</button>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="rtbl">
+            <thead>
+              <tr>
+                <th style="width:120px">Data/Hora</th>
+                <th style="width:100px">SELB</th>
+                <th>Equipamento</th>
+                <th style="width:130px">Saiu de</th>
+                <th style="width:130px">Vai para</th>
+                <th>Motivo / Peça</th>
+                <th style="width:90px">Usuário</th>
+                <th style="width:80px;text-align:center">Status</th>
+                <th style="width:90px;text-align:center">Ação</th>
+              </tr>
+            </thead>
+            <tbody id="pecas-etiquetas-movimentacao-lista">
+              <tr><td colspan="9" class="empty">Nenhuma movimentação manual pendente.</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -1708,50 +1725,106 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     <div id="pecas-pendentes-pedido" style="display:none;background:rgba(245,166,35,.08);border:2px solid rgba(245,166,35,.5);border-radius:14px;padding:16px 18px;margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
         <h3 style="font-size:14px;font-weight:700;color:var(--warn);margin:0">⚠️ SELBs sem confirmação de pedido <span id="pecas-pendentes-count" style="background:var(--warn);color:#000;border-radius:100px;font-size:11px;padding:2px 10px;margin-left:6px"></span></h3>
-        <span style="font-size:11px;color:var(--muted)">Marque o checkbox PEDIDO? ao solicitar a peça — o item some daqui</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span style="font-size:11px;color:var(--muted)">Marque o checkbox PEDIDO? ao solicitar a peça — o item some daqui</span>
+          <button onclick="togglePecasSection('pecas-pend-body')" id="btn-toggle-pecas-pend"
+            style="background:none;border:none;color:var(--warn);font-size:18px;cursor:pointer;line-height:1;padding:2px 6px"
+            title="Retrair/Expandir">▼</button>
+        </div>
       </div>
-      <div style="overflow-x:auto">
-        <table class="rtbl">
-          <thead>
-            <tr>
-              <th style="width:44px;text-align:center">✓</th>
-              <th>SELB</th>
-              <th>Equipamento</th>
-              <th>Profissional</th>
-              <th>Setor</th>
-              <th>Data / Início</th>
-              <th>Duração</th>
-              <th>Comentário</th>
-              <th>Peças Solicitadas</th>
-            </tr>
-          </thead>
-          <tbody id="pecas-pendentes-body"></tbody>
-        </table>
+      <div id="pecas-pend-body">
+        <div style="overflow-x:auto">
+          <table class="rtbl">
+            <thead>
+              <tr>
+                <th style="width:44px;text-align:center">✓</th>
+                <th>SELB</th>
+                <th>Equipamento</th>
+                <th>Profissional</th>
+                <th>Setor</th>
+                <th>Data / Início</th>
+                <th>Duração</th>
+                <th>Comentário</th>
+                <th>Peças Solicitadas</th>
+              </tr>
+            </thead>
+            <tbody id="pecas-pendentes-body"></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
 
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
-      <div style="overflow-x:auto">
-        <table class="rtbl">
-          <thead>
-            <tr>
-              <th style="width:44px;text-align:center">✓</th>
-              <th>SELB</th>
-              <th>Equipamento</th>
-              <th>Profissional</th>
-              <th>Setor</th>
-              <th>Data / Início</th>
-              <th>Duração</th>
-              <th>Comentário</th>
-              <th>Peças Solicitadas</th>
-              <th style="width:120px">Ação</th>
-            </tr>
-          </thead>
-          <tbody id="pecas-body"></tbody>
-        </table>
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <span style="font-size:13px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px">
+          📋 SELBs Aguardando Peças
+          <span id="pecas-lista-count" style="background:var(--bg3);border:1px solid var(--border2);color:var(--muted);border-radius:20px;font-size:10px;font-weight:700;padding:2px 8px"></span>
+        </span>
+        <button onclick="togglePecasSection('pecas-lista-body')" id="btn-toggle-pecas-lista"
+          style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1;padding:2px 6px"
+          title="Retrair/Expandir">▼</button>
+      </div>
+      <div id="pecas-lista-body">
+        <div style="overflow-x:auto">
+          <table class="rtbl">
+            <thead>
+              <tr>
+                <th style="width:44px;text-align:center">✓</th>
+                <th>SELB</th>
+                <th>Equipamento</th>
+                <th>Profissional</th>
+                <th>Setor</th>
+                <th>Data / Início</th>
+                <th>Duração</th>
+                <th>Comentário</th>
+                <th>Peças Solicitadas</th>
+                <th style="width:120px">Ação</th>
+              </tr>
+            </thead>
+            <tbody id="pecas-body"></tbody>
+          </table>
+        </div>
       </div>
     </div>
+
+    <script>
+    // ── Retrair/Expandir seções da aba Aguardando Peças ──
+    function togglePecasSection(bodyId) {
+      const body = document.getElementById(bodyId);
+      const btnMap = {
+        'pecas-sol-body':   'btn-toggle-pecas-sol',
+        'pecas-etq-body':   'btn-toggle-pecas-etq',
+        'pecas-pend-body':  'btn-toggle-pecas-pend',
+        'pecas-lista-body': 'btn-toggle-pecas-lista',
+      };
+      const btn = document.getElementById(btnMap[bodyId]);
+      if (!body) return;
+      const collapsed = body.style.display === 'none';
+      body.style.display = collapsed ? '' : 'none';
+      if (btn) btn.textContent = collapsed ? '▼' : '▶';
+      try { localStorage.setItem('pecas-section-' + bodyId, collapsed ? '1' : '0'); } catch(e){}
+    }
+    // Restaura estado salvo ao carregar
+    (function restorePecasSections(){
+      ['pecas-sol-body','pecas-etq-body','pecas-pend-body','pecas-lista-body'].forEach(function(id){
+        const btnMap = {
+          'pecas-sol-body':   'btn-toggle-pecas-sol',
+          'pecas-etq-body':   'btn-toggle-pecas-etq',
+          'pecas-pend-body':  'btn-toggle-pecas-pend',
+          'pecas-lista-body': 'btn-toggle-pecas-lista',
+        };
+        const saved = localStorage.getItem('pecas-section-' + id);
+        if (saved === '0') {
+          const body = document.getElementById(id);
+          const btn  = document.getElementById(btnMap[id]);
+          if (body) body.style.display = 'none';
+          if (btn)  btn.textContent = '▶';
+        }
+      });
+    })();
+    window.togglePecasSection = togglePecasSection;
+    </script>
   </div>
 
   <!-- ── MÁQUINAS A ── -->
