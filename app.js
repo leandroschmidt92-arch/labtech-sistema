@@ -19916,6 +19916,25 @@ async function fluxolabRemoveSelbGlobal(selbCode, opts) {
   if (!_force) {
     const _last = _fluxolabRemoveDone.get(_k);
     if (_last && (Date.now() - _last) < FLUXOLAB_REMOVE_COOLDOWN_MS) return;
+    
+    // OTIMIZAÇÃO MASSIVA (Anti-Storm de RPCs): Verifica se o SELB ainda existe no cache antes de chamar o banco.
+    // Como loops de sincronia (ex: _fluxolabSyncLiberados) rodam periodicamente em TODAS as abas,
+    // se houver 200 itens liberados no dia, isso gerava (200 requests * N abas) = picos de 4.000+ requests!
+    // Se o SELB não estiver em nenhum bolsão localmente, nós abortamos e salvamos o request.
+    let _exists = false;
+    if (typeof _fluxolabData === 'object' && _fluxolabData) {
+      const selfKey = _k.replace(/[^a-zA-Z0-9_-]/g, '_');
+      for (const b of Object.values(_fluxolabData)) {
+        if (b && (b[selfKey] || Object.values(b).some(v => v && String(v.selb).toUpperCase().trim() === _k))) {
+          _exists = true;
+          break;
+        }
+      }
+    }
+    if (!_exists) {
+      _fluxolabRemoveDone.set(_k, Date.now());
+      return;
+    }
   }
   const _p = _fluxolabRemoveSelbGlobalRaw(selbCode)
     .then(r => { _fluxolabRemoveDone.set(_k, Date.now()); return r; })
