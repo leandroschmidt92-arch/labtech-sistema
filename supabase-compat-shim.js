@@ -370,7 +370,19 @@ function createSupabaseCompatShim(supa) {
     else busPublish({ k: 'blob-reload', key: blobKey });
   }
 
+  // OTIMIZAÇÃO: derrubar o shim_bus assim que o último handler solta (release)
+  // e reabrir no próximo busSubscribe soava bem em teoria, mas na prática a
+  // navegação entre telas costuma soltar todos os handlers de uma view e
+  // registrar os da próxima poucos milissegundos depois — isso derrubava e
+  // reconectava o canal várias vezes por sessão (visto em produção: 7
+  // reaberturas numa sessão de 50min). Agora damos um respiro de alguns
+  // segundos antes de fechar de verdade; se alguém se inscrever nesse meio
+  // tempo, cancelamos o fechamento e reaproveitamos o canal já conectado.
+  const BUS_TEARDOWN_GRACE_MS = 8000;
+  let _busTeardownTimer = null;
+
   function busSubscribe(handler, resync) {
+    if (_busTeardownTimer) { clearTimeout(_busTeardownTimer); _busTeardownTimer = null; }
     _busEnsure();
     _busHandlers.add(handler);
     if (resync) _resyncs.add(resync);
@@ -393,7 +405,13 @@ function createSupabaseCompatShim(supa) {
         _busHandlers.delete(handler);
         if (resync) _resyncs.delete(resync);
         clearInterval(timer);
-        if (_busHandlers.size === 0 && _bus) { supa.removeChannel(_bus); _bus = null; }
+        if (_busHandlers.size === 0 && _bus) {
+          if (_busTeardownTimer) clearTimeout(_busTeardownTimer);
+          _busTeardownTimer = setTimeout(() => {
+            _busTeardownTimer = null;
+            if (_busHandlers.size === 0 && _bus) { supa.removeChannel(_bus); _bus = null; }
+          }, BUS_TEARDOWN_GRACE_MS);
+        }
       },
     };
   }
@@ -455,6 +473,7 @@ function createSupabaseCompatShim(supa) {
   function _pauseAll() {
     if (_paused) return;
     _paused = true;
+    if (_busTeardownTimer) { clearTimeout(_busTeardownTimer); _busTeardownTimer = null; }
     _subs.forEach((entry) => {
       if (entry.channel) { supa.removeChannel(entry.channel); entry.channel = null; }
     });

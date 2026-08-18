@@ -14840,10 +14840,13 @@ async function _initQualListener(){
   // consulta anônima (pré-login) e só se atualiza por evento realtime.
   window._reloadQualReg = _reloadQualReg;
   window._reloadQualLib = _reloadQualLib;
-  _supa.channel('qualidade_registros')
+  // OTIMIZAÇÃO: os dois eram canais Realtime separados. Como o Supabase
+  // permite múltiplos .on('postgres_changes', ...) no MESMO objeto de canal
+  // (cada um com seu próprio filtro de tabela) e ambos são criados aqui, na
+  // mesma função, sem await entre eles, é seguro uni-los num canal só —
+  // reduz 2 canais físicos por sessão para 1, sem mudar o comportamento.
+  _supa.channel('qualidade_bus')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'qualidade_registros' }, _reloadQualReg)
-    .subscribe();
-  _supa.channel('qualidade_liberadas')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'qualidade_liberadas' }, _reloadQualLib)
     .subscribe();
 }
@@ -23750,23 +23753,25 @@ window._loadBolsaoLocksSupabase = function(){
     })
     .catch(function(e){ console.warn('[Bolsões] Erro ao carregar locks do Supabase:', e); });
 
-  // Canal Realtime: sincroniza quando outro usuário arrastar um card
-  if(!_bolsaoRealtimeChannel){
-    _bolsaoRealtimeChannel = _supa.channel('bolsao_locks_sync')
-      .on('postgres_changes', {
-        event: '*', schema: 'public', table: 'fluxolab_state',
-        filter: 'key=eq.bolsao_locks_v2'
-      }, function(payload){
-        if(payload.new && payload.new.data && typeof payload.new.data === 'object'){
-          window._bolsaoLocks = payload.new.data;
-          try { localStorage.setItem('_bolsaoLocks_v1', JSON.stringify(window._bolsaoLocks)); } catch(e){}
-          if(document.getElementById('view-pecas')?.classList.contains('active'))
-            window._renderSolicitacoesPanel('pecas-solicitacoes-panel','');
-          if(document.getElementById('subview-pecas-a')?.style.display !== 'none')
-            window._renderSolicitacoesPanel('pecas-a-solicitacoes-panel','');
-        }
-      })
-      .subscribe();
+  // Canal Realtime: sincroniza quando outro usuário arrastar um card.
+  // OTIMIZAÇÃO: 'bolsao_locks_sync' escutava a MESMA tabela (fluxolab_state,
+  // linha key=eq.bolsao_locks_v2) que o canal 'fluxolab_state_bus' (mais
+  // acima neste arquivo) já cobre por inteiro, despachando por chave via
+  // window._fluxolabStateOn. Dois canais físicos Realtime para os mesmos
+  // dados — agora reaproveitamos o canal único existente em vez de abrir
+  // outro. Reduz 1 canal por sessão sem mudar nenhum comportamento.
+  if(!_bolsaoRealtimeChannel && typeof window._fluxolabStateOn === 'function'){
+    _bolsaoRealtimeChannel = true; // apenas marca "já registrado" (guarda de idempotência)
+    window._fluxolabStateOn('bolsao_locks_v2', function(payload){
+      if(payload.new && payload.new.data && typeof payload.new.data === 'object'){
+        window._bolsaoLocks = payload.new.data;
+        try { localStorage.setItem('_bolsaoLocks_v1', JSON.stringify(window._bolsaoLocks)); } catch(e){}
+        if(document.getElementById('view-pecas')?.classList.contains('active'))
+          window._renderSolicitacoesPanel('pecas-solicitacoes-panel','');
+        if(document.getElementById('subview-pecas-a')?.style.display !== 'none')
+          window._renderSolicitacoesPanel('pecas-a-solicitacoes-panel','');
+      }
+    });
   }
 };
 
