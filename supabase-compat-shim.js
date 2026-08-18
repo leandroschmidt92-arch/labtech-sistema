@@ -17,7 +17,7 @@ function createSupabaseCompatShim(supa) {
   //    de loads concorrentes pela mesma key (dedupe in-flight).
   const _blobCache = new Map();     // blobKey -> { data, ts, hasSub, loaded }
   const _blobInflight = new Map();  // blobKey -> Promise
-  const BLOB_TTL_MS = 8000;
+  const BLOB_TTL_MS = 15000; // ↑ TTL maior reduz re-fetches redundantes (era 8s)
 
   function _blobCacheGet(blobKey) {
     const c = _blobCache.get(blobKey);
@@ -381,23 +381,45 @@ function createSupabaseCompatShim(supa) {
   const BUS_TEARDOWN_GRACE_MS = 8000;
   let _busTeardownTimer = null;
 
+  // ── Helper: dispara resyncs escalonados para evitar request storm ──────
+  // Cada fn recebe um delay incremental de STAGGER_MS ± jitter, garantindo
+  // que N listeners não disparem todos ao mesmo tempo (N × GET = spike).
+  const STAGGER_BASE_MS = 200;  // intervalo base entre cada resync
+  const STAGGER_JITTER  = 150;  // jitter aleatório extra por listener
+  function _staggeredResyncs(resyncsSet) {
+    let delay = 0;
+    resyncsSet.forEach((fn) => {
+      const d = delay;
+      setTimeout(() => { try { fn(); } catch (e) {} }, d);
+      delay += STAGGER_BASE_MS + Math.floor(Math.random() * STAGGER_JITTER);
+    });
+  }
+
   function busSubscribe(handler, resync) {
     if (_busTeardownTimer) { clearTimeout(_busTeardownTimer); _busTeardownTimer = null; }
     _busEnsure();
     _busHandlers.add(handler);
     if (resync) _resyncs.add(resync);
+    // OTIMIZAÇÃO F: jitter individual por listener — evita que todos os
+    // listeners criados no mesmo instante (init do app) disparem juntos
+    // a cada RECONCILE_MS (sincronização de phase = rajada periódica).
+    // O jitter de ±RECONCILE_MS/2 distribui os timers uniformemente.
+    const jitter = Math.floor(Math.random() * RECONCILE_MS) - Math.floor(RECONCILE_MS / 2);
+    const effectiveInterval = Math.max(30000, RECONCILE_MS + jitter);
     const timer = setInterval(() => {
       if (_paused || !resync) return;
       // Aba em segundo plano não precisa reconciliar: ao voltar ao foco o
       // handler de visibilitychange abaixo faz um resync imediato.
       if (typeof document !== 'undefined' && document.hidden) return;
       resync();
-    }, RECONCILE_MS);
+    }, effectiveInterval);
     if (typeof document !== 'undefined' && resync && !_visResyncBound) {
       _visResyncBound = true;
+      // OTIMIZAÇÃO G: escalonar resyncs ao voltar de background em vez de
+      // disparar todos simultaneamente (era: _resyncs.forEach(fn => fn())).
       document.addEventListener('visibilitychange', () => {
         if (document.hidden || _paused) return;
-        _resyncs.forEach(fn => { try { fn(); } catch (e) {} });
+        _staggeredResyncs(_resyncs);
       });
     }
     return {
@@ -467,7 +489,9 @@ function createSupabaseCompatShim(supa) {
   }
 
   // ── Pausa quando a aba fica oculta (economiza mensagens por cliente) ──
-  const PAUSE_AFTER_MS = 60000;
+  // OTIMIZAÇÃO H: reduzido de 60s → 30s para pausar mais rápido e economizar
+  // mensagens Realtime de abas que ficaram em background por muito tempo.
+  const PAUSE_AFTER_MS = 30000;
   let _pauseTimer = null;
 
   function _pauseAll() {
@@ -482,10 +506,19 @@ function createSupabaseCompatShim(supa) {
   function _resumeAll() {
     if (!_paused) return;
     _paused = false;
-    _blobCache.clear();
+    // OTIMIZAÇÃO I: NÃO limpar o blobCache inteiro — preserva dados válidos
+    // e evita re-fetch de blobs que não mudaram enquanto a aba estava pausada.
+    // O Realtime bus entrega qualquer mudança real assim que reconectar.
+    // Apenas invalida entradas sem subscrição ativa (podem ter expirado).
+    _blobCache.forEach((entry, key) => {
+      if (!entry.hasSub) _blobCache.delete(key);
+    });
     _subs.forEach((entry, subKey) => _openChannel(entry, subKey));
     if (_busHandlers.size) _busEnsure();
-    _resyncs.forEach((fn) => { try { fn(); } catch (e) {} });
+    // OTIMIZAÇÃO J: escalonar resyncs em vez de disparar todos ao mesmo tempo.
+    // Com N clientes voltando de background juntos, isso evita N×M requests
+    // simultâneos (o "request storm" que gera os picos de 4k).
+    _staggeredResyncs(_resyncs);
   }
 
   if (typeof document !== 'undefined' && document.addEventListener) {

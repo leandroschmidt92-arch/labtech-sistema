@@ -5802,28 +5802,60 @@ async function startSolicitacoesPecasListener(){
     if(document.getElementById('view-solicitacoes')?.classList.contains('active')) renderSolicitacoesDoDia();
   }
   await _reloadSolicitacoes();
-  
-  let filterConfig = {};
-  if (currentUser && !currentUser.isAdmin) {
-    filterConfig = { event: '*', schema: 'public', table: 'solicitacoes_pecas', filter: 'uid=eq.' + currentUser.id };
-  } else {
-    filterConfig = { event: '*', schema: 'public', table: 'solicitacoes_pecas' };
-  }
-  
-  _supa.channel('solicitacoes_pecas')
-    .on('postgres_changes', filterConfig, _reloadSolicitacoes)
-    .subscribe();
 
+  let solFilterConfig = {};
+  if (currentUser && !currentUser.isAdmin) {
+    solFilterConfig = { event: '*', schema: 'public', table: 'solicitacoes_pecas', filter: 'uid=eq.' + currentUser.id };
+  } else {
+    solFilterConfig = { event: '*', schema: 'public', table: 'solicitacoes_pecas' };
+  }
+
+  // OTIMIZAÇÃO K: handler de delta sem SELECT* completo.
+  // Antes: _reloadSolicitacoes() era chamado a cada evento Realtime →
+  // 1 SELECT * (todas as solicitações) por cliente conectado, por evento.
+  // Agora: aplica o delta direto do payload (INSERT/UPDATE/DELETE) no cache
+  // local e só faz refresh completo em caso de rows-reload (situação rara).
+  function _applyPecasDelta(payload) {
+    try {
+      if (payload.eventType === 'DELETE') {
+        const id = payload.old && payload.old.id;
+        if (id) delete _solicitacoesPecas[id];
+      } else {
+        const row = payload.new || {};
+        const id  = row.id;
+        if (!id) return _reloadSolicitacoes();
+        // Detecta nova solicitação (não estava no cache) para tocar alerta
+        if (currentUser && currentUser.isAdmin && _pecasIdsConhecidos !== null && !_pecasIdsConhecidos.has(id)) {
+          _tocarAlertaPeca();
+          _pecasIdsConhecidos.add(id);
+        }
+        _solicitacoesPecas[id] = row.raw || row;
+      }
+    } catch (e) { return _reloadSolicitacoes(); } // fallback seguro
+    atualizarNotifPecasAdmin();
+    atualizarBadgeTopbarPecas();
+    if (currentUser && !currentUser.isAdmin) atualizarOpPecaPendente(currentUser.id);
+    if (document.getElementById('view-pecas')?.classList.contains('active')) _renderSolicitacoesPanel('pecas-solicitacoes-panel','');
+    if (document.getElementById('subview-pecas-a')?.style.display !== 'none') _renderSolicitacoesPanel('pecas-a-solicitacoes-panel','');
+    if (document.getElementById('view-solicitacoes')?.classList.contains('active')) renderSolicitacoesDoDia();
+  }
+
+  // OTIMIZAÇÃO L: consolidar solicitacoes_pecas + config_pecas num único canal
+  // físico 'pecas_bus'. Cada canal Realtime tem custo de handshake/keep-alive
+  // multiplicado por sessão. 2 canais → 1 canal, sem perder nenhum evento.
   // Listener Supabase Realtime para config_pecas - somente admin/PCP
   await _reloadConfigPecas();
   const isAdminOrPcp = currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP' || currentUser.sector === 'DESMEMBRAMENTO' || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'));
+
+  const _pecasBusBuilder = _supa.channel('pecas_bus')
+    .on('postgres_changes', solFilterConfig, _applyPecasDelta);
+
   if (isAdminOrPcp) {
-    _supa.channel('config_pecas')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'config_pecas' }, async () => {
-        await _reloadConfigPecas();
-      })
-      .subscribe();
+    _pecasBusBuilder.on('postgres_changes', { event: '*', schema: 'public', table: 'config_pecas' }, async () => {
+      await _reloadConfigPecas();
+    });
   }
+  _pecasBusBuilder.subscribe();
 }
 
 async function _reloadConfigPecas() {
@@ -14834,20 +14866,72 @@ async function _initQualListener(){
   }
   window._qualLiberadas = window._qualLiberadas || {};
   await Promise.all([_reloadQualReg(), _reloadQualLib()]);
-  // Expostas globalmente para serem re-executadas após o login (PIN ou admin),
-  // já que a carga inicial acima roda 500ms após o DOMContentLoaded — ou seja,
-  // ANTES do operador logar. Sem isso, o cache fica preso ao resultado da
-  // consulta anônima (pré-login) e só se atualiza por evento realtime.
   window._reloadQualReg = _reloadQualReg;
   window._reloadQualLib = _reloadQualLib;
-  // OTIMIZAÇÃO: os dois eram canais Realtime separados. Como o Supabase
-  // permite múltiplos .on('postgres_changes', ...) no MESMO objeto de canal
-  // (cada um com seu próprio filtro de tabela) e ambos são criados aqui, na
-  // mesma função, sem await entre eles, é seguro uni-los num canal só —
-  // reduz 2 canais físicos por sessão para 1, sem mudar o comportamento.
+
+  // OTIMIZAÇÃO M: handlers de delta sem SELECT* completo.
+  // Antes: _reloadQualReg/_reloadQualLib eram chamados a cada evento Realtime
+  // → SELECT de até 2000 linhas por cliente conectado, por evento.
+  // Agora: aplica o delta direto do payload. Fallback para reload completo
+  // só em casos edge (payload sem 'raw', eventType inesperado).
+  function _applyQualRegDelta(payload) {
+    try {
+      if (payload.eventType === 'DELETE') {
+        const id = payload.old && payload.old.id;
+        if (id) delete _qualRegistros[id];
+      } else {
+        const r = payload.new || {};
+        if (!r.id) return _reloadQualReg();
+        let rec = r.raw;
+        if (typeof rec === 'string') { try { rec = JSON.parse(rec); } catch(e) { rec = null; } }
+        if (!rec || typeof rec !== 'object') rec = { ...r };
+        rec.id = r.id;
+        if (!rec.data) {
+          const d = rec.ts ? new Date(rec.ts) : (r.created_at ? new Date(r.created_at) : new Date());
+          rec.data = d.toLocaleDateString('pt-BR');
+          if (!rec.hora) rec.hora = d.toLocaleTimeString('pt-BR');
+        }
+        if (r.etiqueta_impressa !== undefined) rec.etiqueta_impressa = r.etiqueta_impressa;
+        if (r.chamado_aberto !== undefined) rec.chamado_aberto = r.chamado_aberto;
+        _qualRegistros[r.id] = rec;
+      }
+    } catch (e) { return _reloadQualReg(); }
+    _fluxolabScheduleSyncLiberados();
+    const view = document.getElementById('view-qualidade') || document.getElementById('view-gaiola-lab');
+    if (view && view.classList.contains('active')) renderQualRegistros();
+  }
+
+  function _applyQualLibDelta(payload) {
+    try {
+      if (payload.eventType === 'DELETE') {
+        const id = payload.old && payload.old.id;
+        if (id && window._qualLiberadas) delete window._qualLiberadas[id];
+      } else {
+        const r = payload.new || {};
+        if (!r.id) return _reloadQualLib();
+        let rec = r.raw;
+        if (typeof rec === 'string') { try { rec = JSON.parse(rec); } catch(e) { rec = null; } }
+        if (!rec || typeof rec !== 'object') rec = { ...r };
+        rec.id = r.id;
+        if (!rec.data) {
+          const d = rec.ts ? new Date(rec.ts) : (r.created_at ? new Date(r.created_at) : new Date());
+          rec.data = d.toLocaleDateString('pt-BR');
+          if (!rec.hora) rec.hora = d.toLocaleTimeString('pt-BR');
+        }
+        if (!window._qualLiberadas) window._qualLiberadas = {};
+        window._qualLiberadas[r.id] = rec;
+      }
+    } catch (e) { return _reloadQualLib(); }
+    _fluxolabScheduleSyncLiberados();
+    const view = document.getElementById('view-qualidade') || document.getElementById('view-gaiola-lab');
+    if (view && view.classList.contains('active')) renderQualRegistros();
+    const libPanel = document.getElementById('qual-lib-panel-overlay');
+    if (libPanel && libPanel.style.display !== 'none' && typeof _qualRenderLiberadasList === 'function') _qualRenderLiberadasList();
+  }
+
   _supa.channel('qualidade_bus')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'qualidade_registros' }, _reloadQualReg)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'qualidade_liberadas' }, _reloadQualLib)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'qualidade_registros' }, _applyQualRegDelta)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'qualidade_liberadas' }, _applyQualLibDelta)
     .subscribe();
 }
 
