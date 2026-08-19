@@ -19904,8 +19904,45 @@ async function fluxolabRegistrarSelb(selbCode, uid) {
 //  • chamadas concorrentes pro mesmo SELB compartilham a MESMA promise;
 //  • repetição do mesmo SELB dentro de 60s é ignorada (já foi removido).
 var _fluxolabRemoveInflight = _fluxolabRemoveInflight || new Map(); // selb -> Promise
-var _fluxolabRemoveDone     = _fluxolabRemoveDone     || new Map(); // selb -> ts
+var _fluxolabRemoveDone     = _fluxolabRemoveDone     || new Map(); // selb -> ts (fast-path desta aba)
 const FLUXOLAB_REMOVE_COOLDOWN_MS = 60 * 1000;
+
+// ── OTIMIZAÇÃO: cooldown COMPARTILHADO entre abas (localStorage) ──
+// O _fluxolabRemoveDone acima é um Map em memória: só protege chamadas
+// repetidas DENTRO da mesma aba. Num chão de fábrica é normal ter 10-20
+// terminais/tablets com o app aberto ao mesmo tempo — cada aba tinha seu
+// próprio cooldown de 60s "zerado", então a MESMA remoção real (ex.: um
+// SELB liberado que precisa sair da QUALIDADE) era disparada uma vez por
+// aba antes que o poll (30s) ou o realtime propagasse o resultado pras
+// outras. Isso sozinho respondia por ~62% do consumo diário do Supabase
+// (29.640 de 47.842 requests em 2026-08-18, ver rpc:fluxolab_remove_selb_everywhere
+// no export de uso). Guardando o "já removido" em localStorage, todas as
+// abas do mesmo dispositivo/navegador enxergam o mesmo cooldown.
+const FLUXOLAB_REMOVE_LS_KEY = 'flab_remove_done_v1';
+const FLUXOLAB_REMOVE_LS_PURGE_AFTER_MS = FLUXOLAB_REMOVE_COOLDOWN_MS * 3; // limpa entradas velhas
+
+function _fluxolabRemoveLsRead() {
+  try {
+    const raw = localStorage.getItem(FLUXOLAB_REMOVE_LS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) { return {}; }
+}
+
+function _fluxolabRemoveLsGetTs(key) {
+  const map = _fluxolabRemoveLsRead();
+  return map[key] || 0;
+}
+
+function _fluxolabRemoveLsSetTs(key, ts) {
+  try {
+    const map = _fluxolabRemoveLsRead();
+    map[key] = ts;
+    // purga entradas antigas pra não deixar o objeto crescer pra sempre
+    const cutoff = ts - FLUXOLAB_REMOVE_LS_PURGE_AFTER_MS;
+    Object.keys(map).forEach(k => { if (map[k] < cutoff) delete map[k]; });
+    localStorage.setItem(FLUXOLAB_REMOVE_LS_KEY, JSON.stringify(map));
+  } catch (e) { /* localStorage indisponível (modo privado, quota etc.) — degrada pro cooldown por aba */ }
+}
 
 async function fluxolabRemoveSelbGlobal(selbCode, opts) {
   const _k = String(selbCode || '').trim().toUpperCase();
@@ -19914,9 +19951,17 @@ async function fluxolabRemoveSelbGlobal(selbCode, opts) {
   const _inflight = _fluxolabRemoveInflight.get(_k);
   if (_inflight) return _inflight;
   if (!_force) {
+    const _now = Date.now();
+    // Cooldown: primeiro checa esta aba (rápido, sem I/O), depois checa
+    // localStorage (outras abas podem já ter feito a remoção).
     const _last = _fluxolabRemoveDone.get(_k);
-    if (_last && (Date.now() - _last) < FLUXOLAB_REMOVE_COOLDOWN_MS) return;
-    
+    if (_last && (_now - _last) < FLUXOLAB_REMOVE_COOLDOWN_MS) return;
+    const _lastLs = _fluxolabRemoveLsGetTs(_k);
+    if (_lastLs && (_now - _lastLs) < FLUXOLAB_REMOVE_COOLDOWN_MS) {
+      _fluxolabRemoveDone.set(_k, _lastLs); // sincroniza o fast-path local
+      return;
+    }
+
     // OTIMIZAÇÃO MASSIVA (Anti-Storm de RPCs): Verifica se o SELB ainda existe no cache antes de chamar o banco.
     // Como loops de sincronia (ex: _fluxolabSyncLiberados) rodam periodicamente em TODAS as abas,
     // se houver 200 itens liberados no dia, isso gerava (200 requests * N abas) = picos de 4.000+ requests!
@@ -19932,12 +19977,18 @@ async function fluxolabRemoveSelbGlobal(selbCode, opts) {
       }
     }
     if (!_exists) {
-      _fluxolabRemoveDone.set(_k, Date.now());
+      _fluxolabRemoveDone.set(_k, _now);
+      _fluxolabRemoveLsSetTs(_k, _now);
       return;
     }
   }
   const _p = _fluxolabRemoveSelbGlobalRaw(selbCode)
-    .then(r => { _fluxolabRemoveDone.set(_k, Date.now()); return r; })
+    .then(r => {
+      const _doneTs = Date.now();
+      _fluxolabRemoveDone.set(_k, _doneTs);
+      _fluxolabRemoveLsSetTs(_k, _doneTs); // avisa as outras abas
+      return r;
+    })
     .finally(() => { _fluxolabRemoveInflight.delete(_k); });
   _fluxolabRemoveInflight.set(_k, _p);
   return _p;
