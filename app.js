@@ -5776,6 +5776,112 @@ function _tocarAlertaPeca(){
   } catch(e) { console.warn('AudioContext indisponível:', e); }
 }
 
+// ── Auto-impressão de etiqueta de solicitação de peças ───────────────────────
+// Segue o mesmo padrão do spool de movimentações (porta 17325).
+
+let _pecasImpressasIds = new Set(); // IDs já enviados ao spool nesta sessão
+
+function _autoPrintPecasEnabled(){
+  try {
+    const stored = localStorage.getItem('pecas_auto_print');
+    if(stored === '0') return false;
+  } catch(e){}
+  return true;
+}
+
+function toggleAutoPrintPecas(checked){
+  try { localStorage.setItem('pecas_auto_print', checked ? '1' : '0'); } catch(e){}
+}
+
+function _htmlDocumentoImpressaoPeca(itens){
+  const css = `
+    @page { size: 10cm 15cm; margin: 0; }
+    * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    html, body { margin: 0; padding: 0; background: #fff; }
+    .peca-etiq-label {
+      width: 10cm; height: 15cm; padding: 6mm; display: flex; flex-direction: column; gap: 3.5mm;
+      font-family: Arial, sans-serif; color: #111; border: 1px solid #111; page-break-after: always;
+    }
+    .peca-etiq-label:last-child { page-break-after: auto; }
+    .peca-etiq-label .title { font-size: 11pt; font-weight: 800; letter-spacing: 1px; border-bottom: 1px solid #111; padding-bottom: 2mm; }
+    .peca-etiq-label .selb { font: bold 30pt monospace; letter-spacing: 2px; }
+    .peca-etiq-label .pessoa { font-size: 13pt; font-weight: 700; }
+    .peca-etiq-label .equip { font-size: 11pt; color: #333; min-height: 14pt; }
+    .peca-etiq-label .peca-box {
+      border: 2px solid #111; border-radius: 4px; padding: 3mm; display: flex;
+      flex-direction: column; gap: 2mm; flex: 1;
+    }
+    .peca-etiq-label .peca-nome { font-size: 18pt; font-weight: 800; }
+    .peca-etiq-label .peca-obs  { font-size: 13pt; }
+    .peca-etiq-label small { font-size: 8pt; font-weight: 800; letter-spacing: .5px; display: block; margin-bottom: 1mm; }
+    .peca-etiq-label footer { font-size: 8pt; border-top: 1px solid #111; padding-top: 2mm; margin-top: auto; }
+  `;
+  const body = itens.map(function(p){
+    const esc = function(v){ return String(v||'—').replace(/[&<>"']/g, function(c){ return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]); }); };
+    const qtdTxt = (p.quantidade && p.quantidade > 1) ? ' &times; ' + p.quantidade : '';
+    const obsTxt = p.obs ? '<div class="peca-obs"><small>OBS</small>' + esc(p.obs) + '</div>' : '';
+    const ts = p.ts ? new Date(p.ts).toLocaleString('pt-BR') : '';
+    return '<div class="peca-etiq-label">'
+      + '<div class="title">🔩 SOLICITAÇÃO DE PEÇA</div>'
+      + '<div class="selb">' + esc(p.selb) + '</div>'
+      + '<div class="pessoa">' + esc(p.nome) + ' <span style="font-weight:400;font-size:11pt">· ' + esc(p.setor) + '</span></div>'
+      + '<div class="equip">' + esc(p.equipamento) + '</div>'
+      + '<div class="peca-box">'
+        + '<div class="peca-nome">' + esc(p.peca) + qtdTxt + '</div>'
+        + obsTxt
+      + '</div>'
+      + '<footer>' + esc(ts) + '</footer>'
+    + '</div>';
+  }).join('');
+  return '<!doctype html><html><head><meta charset="utf-8"><title>Etiqueta Peça</title><style>' + css + '</style></head><body>' + body + '</body></html>';
+}
+
+function _enviarPecaParaAgenteImpressao(itens){
+  const selb = (itens[0] && itens[0].selb) || '';
+  const labels = itens.map(function(p){
+    return {
+      tipo: 'peca',
+      selb: p.selb || '',
+      equipamento: p.equipamento || 'SOLICITAÇÃO DE PEÇA',
+      de: 'Estoque',
+      para: (p.nome || '') + ' · ' + (p.setor || ''),
+      motivo: (p.peca || '') + (p.quantidade > 1 ? ' x' + p.quantidade : '') + (p.obs ? ' — ' + p.obs : ''),
+      ts: new Date(p.ts || Date.now()).toLocaleString('pt-BR'),
+      user: p.nome || 'Operador',
+    };
+  });
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(function(){ ctrl.abort(); }, 4000) : null;
+  return fetch('http://127.0.0.1:17325/print', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ selb: selb, labels: labels, ts: Date.now() }),
+    signal: ctrl ? ctrl.signal : undefined,
+  }).then(function(res){
+    if(timer) clearTimeout(timer);
+    if(!res.ok) throw new Error('agent status ' + res.status);
+    return true;
+  }).catch(function(){
+    if(timer) clearTimeout(timer);
+    return false;
+  });
+}
+
+function _enqueueAutoPrintPeca(p){
+  if(!_autoPrintPecasEnabled()) return;
+  const id = p.id || (p.selb + '_' + p.ts);
+  if(_pecasImpressasIds.has(id)) return;
+  _pecasImpressasIds.add(id);
+  _enviarPecaParaAgenteImpressao([p]).then(function(ok){
+    if(ok){
+      _mostrarToastMovPrint('🔩 Spool: etiqueta de peça ' + (p.selb || '') + ' enviada à impressora');
+    } else {
+      _mostrarToastMovPrint('⚠️ Spool offline — etiqueta de peça não impressa. Verifique o print-agent.');
+    }
+  });
+}
+// ── Fim auto-impressão de peças ──────────────────────────────────────────────
+
 let _pecasIdsConhecidos = null; // null = primeira carga, não toca
 
 async function startSolicitacoesPecasListener(){
@@ -5790,7 +5896,14 @@ async function startSolicitacoesPecasListener(){
     (data || []).forEach(r => { novo[r.id] = r.raw || r; });
     if(currentUser && currentUser.isAdmin && _pecasIdsConhecidos !== null){
       const idsNovos = Object.keys(novo).filter(id => !_pecasIdsConhecidos.has(id));
-      if(idsNovos.length > 0) _tocarAlertaPeca();
+      if(idsNovos.length > 0){
+        _tocarAlertaPeca();
+        // ── Auto-impressão: enfileira etiqueta de cada nova solicitação ──
+        idsNovos.forEach(id => {
+          const p = novo[id];
+          if(p && p.selb && !p.lida) _enqueueAutoPrintPeca({ id, ...p });
+        });
+      }
     }
     _pecasIdsConhecidos = new Set(Object.keys(novo));
     _solicitacoesPecas = novo;
@@ -5828,6 +5941,9 @@ async function startSolicitacoesPecasListener(){
         if (currentUser && currentUser.isAdmin && _pecasIdsConhecidos !== null && !_pecasIdsConhecidos.has(id)) {
           _tocarAlertaPeca();
           _pecasIdsConhecidos.add(id);
+          // ── Auto-impressão: enfileira etiqueta da nova solicitação no spool ──
+          const _novaPeca = row.raw || row;
+          if (_novaPeca && _novaPeca.selb && !_novaPeca.lida) _enqueueAutoPrintPeca(_novaPeca);
         }
         _solicitacoesPecas[id] = row.raw || row;
       }
@@ -24045,7 +24161,13 @@ window._renderSolicitacoesPanel = function(panelId, q){
           + '<span style="background:var(--warn);color:#000;border-radius:20px;font-size:11px;font-weight:800;padding:2px 9px">0</span>'
           + '<span style="font-size:10px;color:var(--muted);margin-left:4px">arraste para travar em outro bolsão</span>'
         + '</div>'
-        + emptyMarcarBtn
+        + '<div style="display:flex;align-items:center;gap:10px">'
+          + emptyMarcarBtn
+          + '<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:11px;font-weight:600;color:var(--muted);user-select:none" title="Imprimir automaticamente via spool ao receber nova solicitação">'
+            + '<input type="checkbox" id="chk-auto-print-pecas" ' + (typeof _autoPrintPecasEnabled === 'function' && _autoPrintPecasEnabled() ? 'checked' : '') + ' onchange="toggleAutoPrintPecas(this.checked)" style="width:13px;height:13px;cursor:pointer;accent-color:#f5a623">'
+            + '🖨️ Auto-imprimir etiqueta de peças'
+          + '</label>'
+        + '</div>'
       + '</div>'
       + '<div class="bolsao-grid" style="display:flex!important;flex-flow:row nowrap!important;align-items:stretch!important;gap:12px;width:100%!important;overflow-x:auto!important">' + emptyColsHtml + '</div>';
     return;
@@ -24212,7 +24334,13 @@ window._renderSolicitacoesPanel = function(panelId, q){
         + '<span style="background:var(--warn);color:#000;border-radius:20px;font-size:11px;font-weight:800;padding:2px 9px">' + pendentes.length + '</span>'
         + '<span style="font-size:10px;color:var(--muted);margin-left:4px">arraste para travar em outro bolsão</span>'
       + '</div>'
-      + marcarTodasBtn
+      + '<div style="display:flex;align-items:center;gap:10px">'
+        + marcarTodasBtn
+        + '<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:11px;font-weight:600;color:var(--muted);user-select:none" title="Imprimir automaticamente via spool ao receber nova solicitação">'
+          + '<input type="checkbox" id="chk-auto-print-pecas" ' + (typeof _autoPrintPecasEnabled === 'function' && _autoPrintPecasEnabled() ? 'checked' : '') + ' onchange="toggleAutoPrintPecas(this.checked)" style="width:13px;height:13px;cursor:pointer;accent-color:#f5a623">'
+          + '🖨️ Auto-imprimir etiqueta de peças'
+        + '</label>'
+      + '</div>'
     + '</div>';
 
   // Cada bolsão é anexado ao DOM separadamente. Assim, mesmo se algum texto

@@ -1,12 +1,15 @@
 const fs = require('fs');
 let appJs = fs.readFileSync('app.js', 'utf8');
 
-const targetStr = `  _fluxolabRenderModelFilterBar(Array.from(allModelsSet), matchCountsByBolsao, totalMatches);
+const targetStr = `  // Renderiza/atualiza a barra de filtro acima do grid
+  _fluxolabRenderModelFilterBar(Array.from(allModelsSet), matchCountsByBolsao, totalMatches);
 
   if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'modelos') {`;
 
-const newStr = `  _fluxolabRenderModelFilterBar(Array.from(allModelsSet), matchCountsByBolsao, totalMatches);
+const newStr = `  // Renderiza/atualiza a barra de filtro acima do grid
+  _fluxolabRenderModelFilterBar(Array.from(allModelsSet), matchCountsByBolsao, totalMatches);
 
+  // Atualiza badge total
   const totalSelbsBadge = document.getElementById('fluxolab-bolsoes-total-badge');
   if (totalSelbsBadge) {
     let totalAll = 0;
@@ -21,6 +24,10 @@ const newStr = `  _fluxolabRenderModelFilterBar(Array.from(allModelsSet), matchC
 
   if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'modelos') {`;
 
-appJs = appJs.replace(targetStr, newStr);
-fs.writeFileSync('app.js', appJs);
-console.log('Badge logic added successfully');
+if (appJs.includes(targetStr)) {
+  appJs = appJs.replace(targetStr, newStr);
+  fs.writeFileSync('app.js', appJs);
+  console.log('App.js badge injected successfully.');
+} else {
+  console.log('Target string NOT FOUND in app.js.');
+}

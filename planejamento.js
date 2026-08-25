@@ -473,6 +473,7 @@ function fluxolabPlanGetChecklistStats(modeloName) {
   
   // Coluna "Dias Aberto" da planilha de checklists importada (coluna F)
   const kAberto = (typeof _fluxolabFindKey === 'function') ? (_fluxolabFindKey(sample, 'Dias Aberto') || _fluxolabFindKey(sample, 'Dias em Aberto') || _fluxolabFindKey(sample, 'Dias Abertos')) : null;
+  const kPedido = (typeof _fluxolabFindKey === 'function') ? _fluxolabFindKey(sample, 'Pedido') : null;
 
   if (!kModelo) return { count: 0, media: 0, mediaAberto: 0, maxAberto: 0 };
   
@@ -518,7 +519,7 @@ function fluxolabPlanGetChecklistStats(modeloName) {
     maxDiasUteis,
     minDiasUteis: minDiasUteis === Infinity ? 0 : minDiasUteis,
     rows,
-    keys: { kModelo, kDias, kAberto },
+    keys: { kModelo, kDias, kAberto, kPedido },
   };
 }
 
@@ -534,7 +535,16 @@ function fluxolabPlanGetBolsaoStats(modeloName) {
     if (!items) return;
     Object.values(items).forEach(v => {
       const code = String(v.selb || '').trim();
-      let m = (typeof getEquipName === 'function' ? getEquipName(code) : '') || '';
+      // Usa primeiro o "equipamento" já salvo no próprio item — a MESMA
+      // fonte e a MESMA regra que a aba 🗂️ Bolsões usa pra exibir o card
+      // (inclusive ignorando o placeholder 'DESCONHECIDO') — e só recorre
+      // ao getEquipName(selb) — busca no cadastro ATUAL — como último
+      // recurso. Sem esse fallback, itens com SELB que não existe mais no
+      // cadastro (comum em coisas paradas há mais tempo na Doca 1) ficavam
+      // com modelo vazio e nunca eram contados, mesmo aparecendo
+      // normalmente na aba Bolsões.
+      const _eqStored = v.equipamento && v.equipamento !== 'DESCONHECIDO' ? v.equipamento : '';
+      let m = _eqStored || (typeof getEquipName === 'function' ? getEquipName(code) : '') || '';
       let normM = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(m) : m.toUpperCase().replace(/\s+/g,'');
       
       if (normM === normAlvo) {
@@ -566,7 +576,11 @@ function fluxolabPlanGetBolsaoLocais(modeloName) {
     if (!items) return;
     Object.values(items).forEach(v => {
       const code = String(v.selb || '').trim();
-      let m = (typeof getEquipName === 'function' ? getEquipName(code) : '') || '';
+      // Mesmo ajuste de fluxolabPlanGetBolsaoStats: prioriza o equipamento
+      // já salvo no item (ignorando 'DESCONHECIDO'), com getEquipName(selb)
+      // só como fallback — igual à aba 🗂️ Bolsões.
+      const _eqStored = v.equipamento && v.equipamento !== 'DESCONHECIDO' ? v.equipamento : '';
+      let m = _eqStored || (typeof getEquipName === 'function' ? getEquipName(code) : '') || '';
       let normM = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(m) : m.toUpperCase().replace(/\s+/g,'');
       if (normM === normAlvo) {
         porBolsao[bolsao] = (porBolsao[bolsao] || 0) + 1;

@@ -111,6 +111,157 @@ function pendGetChecklistItemStats(stats, chkIdx) {
   return { diasUteis, diasAberto, row: r };
 }
 
+function pendGetChecklistPedido(stats, chkIdx) {
+  if (!stats || !stats.rows || !stats.rows.length) return '';
+  const sample = stats.rows[0];
+  const kPedido = (stats.keys && stats.keys.kPedido) ||
+    (typeof _fluxolabFindKey === 'function' ? _fluxolabFindKey(sample, 'Pedido') : null);
+  if (!kPedido) return '';
+  const idx = chkIdx != null ? chkIdx : 0;
+  const r = stats.rows[idx];
+  if (!r) return '';
+  return String(r[kPedido] || '').trim();
+}
+
+function pendNormPedido(p) {
+  const s = String(p || '').trim();
+  if (!s) return '';
+  const n = parseInt(s.replace(/\D/g, ''), 10);
+  return !isNaN(n) ? String(n) : s.toUpperCase();
+}
+
+function pendGetRowPedido(row) {
+  if (!row || !row.modelo) return '';
+  const stats = fluxolabPlanGetChecklistStats(row.modelo);
+  if (!stats.rows || !stats.rows.length) return '';
+  if (stats.count === 1) return pendGetChecklistPedido(stats, 0);
+  let bestIdx = 0;
+  let bestDias = -1;
+  stats.rows.forEach((_, i) => {
+    const st = pendGetChecklistItemStats(stats, i);
+    if (st.diasUteis > bestDias) { bestDias = st.diasUteis; bestIdx = i; }
+  });
+  return pendGetChecklistPedido(stats, bestIdx);
+}
+
+function pendGetDispPedido(disp) {
+  if (!disp || !disp.stats) return '';
+  return pendGetChecklistPedido(disp.stats, disp.chkIdx);
+}
+
+function pendComparePedido(a, b) {
+  const sa = pendNormPedido(a);
+  const sb = pendNormPedido(b);
+  if (!sa && !sb) return 0;
+  if (!sa) return 1;
+  if (!sb) return -1;
+  const na = parseInt(sa, 10);
+  const nb = parseInt(sb, 10);
+  if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+  return sa.localeCompare(sb, 'pt-BR', { numeric: true });
+}
+
+function pendClearSortState(tableName) {
+  _pendMediaSortDir[tableName] = null;
+  _pendAbertoSortDir[tableName] = null;
+  _pendActiveSortCol[tableName] = null;
+}
+
+function pendGroupStateByPedido(tableName) {
+  const list = _fluxolabPendenciasState[tableName];
+  if (!list || !list.length) return;
+  const filled = [];
+  const empty = [];
+  list.forEach((row, idx) => {
+    if (row.modelo) filled.push({ row, idx, pedido: pendGetRowPedido(row) });
+    else empty.push(row);
+  });
+  filled.sort((a, b) => {
+    const pedCmp = pendComparePedido(a.pedido, b.pedido);
+    if (pedCmp !== 0) return pedCmp;
+    return a.idx - b.idx;
+  });
+  _fluxolabPendenciasState[tableName] = filled.map(x => x.row).concat(empty);
+}
+
+function pendApplyStateSort(tableName, metricCompare) {
+  const list = _fluxolabPendenciasState[tableName];
+  if (!list || !list.length) return;
+  const filled = [];
+  const empty = [];
+  list.forEach((row, idx) => {
+    if (row.modelo) filled.push({ row, idx, pedido: pendGetRowPedido(row) });
+    else empty.push(row);
+  });
+  filled.sort((a, b) => {
+    // A métrica escolhida pelo usuário (Dias Úteis Andamento / Dias em Aberto)
+    // manda primeiro. O Pedido só desempata quando a métrica é igual —
+    // antes era o contrário (Pedido mandava e a métrica só desempatava),
+    // o que fazia os cliques de ordenar crescente/decrescente parecerem
+    // não fazer nada sempre que os modelos tinham Pedidos diferentes.
+    const cmp = metricCompare(a, b);
+    if (cmp !== 0) return cmp;
+    return pendComparePedido(a.pedido, b.pedido);
+  });
+  _fluxolabPendenciasState[tableName] = filled.map(x => x.row).concat(empty);
+}
+
+const PEND_EQUIP_TERMS = ['impressora', 'multifuncional', 'scanner', 'fragmentadora'];
+
+function pendIsAcessorio(modelo) {
+  const m = String(modelo || '').toLowerCase();
+  if (!m.trim()) return false;
+  return !PEND_EQUIP_TERMS.some(t => m.includes(t));
+}
+
+function pendAcessorioBadgeHtml() {
+  return `<span style="background:rgba(251,191,36,.15);color:#fbbf24;font-size:9px;font-weight:800;padding:3px 7px;border-radius:10px;white-space:nowrap;flex-shrink:0;letter-spacing:0.03em">ACESSÓRIO</span>`;
+}
+
+function pendSortFilledByPedido(filled, tableName) {
+  const activeCol = _pendActiveSortCol[tableName] || 'media';
+  const hasMetricSort = activeCol === 'diasab'
+    ? !!_pendAbertoSortDir[tableName]
+    : !!_pendMediaSortDir[tableName];
+  const sortDir = activeCol === 'diasab'
+    ? ((_pendAbertoSortDir[tableName] === 'asc') ? 'asc' : 'desc')
+    : ((_pendMediaSortDir[tableName] === 'asc') ? 'asc' : 'desc');
+
+  filled.sort((a, b) => {
+    // Mesmo ajuste feito em pendApplyStateSort: a métrica escolhida
+    // (Dias Úteis Andamento / Dias em Aberto) manda primeiro; o Pedido
+    // só desempata quando a métrica é igual. Antes o Pedido mandava
+    // sempre, então na "Ver lista detalhada" a seta ↑/↓ no cabeçalho
+    // mudava de estado mas a ordem visível praticamente não mudava.
+    if (hasMetricSort) {
+      if (activeCol === 'diasab') {
+        const da = a.itemStats ? a.itemStats.diasAberto : (a.stats ? a.stats.maxAberto : 0);
+        const db = b.itemStats ? b.itemStats.diasAberto : (b.stats ? b.stats.maxAberto : 0);
+        const diff = sortDir === 'asc' ? da - db : db - da;
+        if (diff !== 0) return diff;
+        const ua = a.itemStats ? a.itemStats.diasUteis : (a.stats ? (a.stats.maxDiasUteis || a.stats.media) : 0);
+        const ub = b.itemStats ? b.itemStats.diasUteis : (b.stats ? (b.stats.maxDiasUteis || b.stats.media) : 0);
+        const uDiff = sortDir === 'asc' ? ua - ub : ub - ua;
+        if (uDiff !== 0) return uDiff;
+      } else {
+        const da = a.itemStats ? a.itemStats.diasUteis : (a.stats ? (a.stats.maxDiasUteis || a.stats.media) : 0);
+        const db = b.itemStats ? b.itemStats.diasUteis : (b.stats ? (b.stats.maxDiasUteis || b.stats.media) : 0);
+        const diff = sortDir === 'asc' ? da - db : db - da;
+        if (diff !== 0) return diff;
+        const aa = a.itemStats ? a.itemStats.diasAberto : (a.stats ? a.stats.maxAberto : 0);
+        const ab = b.itemStats ? b.itemStats.diasAberto : (b.stats ? b.stats.maxAberto : 0);
+        const abDiff = sortDir === 'asc' ? aa - ab : ab - aa;
+        if (abDiff !== 0) return abDiff;
+      }
+    }
+
+    const pedCmp = pendComparePedido(pendGetDispPedido(a), pendGetDispPedido(b));
+    if (pedCmp !== 0) return pedCmp;
+
+    return (a.stateIdx - b.stateIdx) || ((a.chkSeq || 0) - (b.chkSeq || 0));
+  });
+}
+
 // Índices dos checklists ordenados por Dias Úteis Andamento
 function pendGetSortedChecklistIndices(stats, dir) {
   if (!stats || !stats.rows || !stats.rows.length) return [];
@@ -127,9 +278,29 @@ function pendGetSortedChecklistIndices(stats, dir) {
   return indices;
 }
 
+function pendGetSortedChecklistIndicesByAberto(stats, dir) {
+  if (!stats || !stats.rows || !stats.rows.length) return [];
+  const indices = stats.rows.map((_, i) => i);
+  const desc = dir !== 'asc';
+  indices.sort((a, b) => {
+    const sa = pendGetChecklistItemStats(stats, a);
+    const sb = pendGetChecklistItemStats(stats, b);
+    const diff = desc ? (sb.diasAberto - sa.diasAberto) : (sa.diasAberto - sb.diasAberto);
+    if (diff !== 0) return diff;
+    const du = desc ? (sb.diasUteis - sa.diasUteis) : (sa.diasUteis - sb.diasUteis);
+    return du !== 0 ? du : a - b;
+  });
+  return indices;
+}
+
 function pendPushDetailedChecklists(display, row, idx, stats, tableName) {
-  const sortDir = (_pendMediaSortDir[tableName] === 'asc') ? 'asc' : 'desc';
-  const sortedIdx = pendGetSortedChecklistIndices(stats, sortDir);
+  const activeCol = _pendActiveSortCol[tableName] || 'media';
+  const sortDir = activeCol === 'diasab'
+    ? ((_pendAbertoSortDir[tableName] === 'asc') ? 'asc' : 'desc')
+    : ((_pendMediaSortDir[tableName] === 'asc') ? 'asc' : 'desc');
+  const sortedIdx = activeCol === 'diasab'
+    ? pendGetSortedChecklistIndicesByAberto(stats, sortDir)
+    : pendGetSortedChecklistIndices(stats, sortDir);
   sortedIdx.forEach((chkIdx, seq) => {
     display.push({
       row, stateIdx: idx, chkIdx, chkSeq: seq + 1, virtual: seq > 0,
@@ -170,32 +341,7 @@ function pendBuildDisplayRows(tableName, rows) {
   if (detailed) {
     const empty = display.filter(d => !d.row.modelo);
     const filled = display.filter(d => d.row.modelo);
-    const activeCol = _pendActiveSortCol[tableName] || 'media';
-    const sortDir = activeCol === 'diasab'
-      ? ((_pendAbertoSortDir[tableName] === 'asc') ? 'asc' : 'desc')
-      : ((_pendMediaSortDir[tableName] === 'asc') ? 'asc' : 'desc');
-    filled.sort((a, b) => {
-      if (activeCol === 'diasab') {
-        const da = a.itemStats ? a.itemStats.diasAberto : 0;
-        const db = b.itemStats ? b.itemStats.diasAberto : 0;
-        const diff = sortDir === 'asc' ? da - db : db - da;
-        if (diff !== 0) return diff;
-        const ua = a.itemStats ? a.itemStats.diasUteis : 0;
-        const ub = b.itemStats ? b.itemStats.diasUteis : 0;
-        const uDiff = sortDir === 'asc' ? ua - ub : ub - ua;
-        if (uDiff !== 0) return uDiff;
-      } else {
-        const da = a.itemStats ? a.itemStats.diasUteis : 0;
-        const db = b.itemStats ? b.itemStats.diasUteis : 0;
-        const diff = sortDir === 'asc' ? da - db : db - da;
-        if (diff !== 0) return diff;
-        const aa = a.itemStats ? a.itemStats.diasAberto : 0;
-        const ab = b.itemStats ? b.itemStats.diasAberto : 0;
-        const abDiff = sortDir === 'asc' ? aa - ab : ab - aa;
-        if (abDiff !== 0) return abDiff;
-      }
-      return (a.stateIdx - b.stateIdx) || ((a.chkSeq || 0) - (b.chkSeq || 0));
-    });
+    pendSortFilledByPedido(filled, tableName);
     return filled.concat(empty);
   }
 
@@ -279,6 +425,8 @@ async function fluxolabLoadPendencias() {
 
   _fluxolabPendLoaded = true;
   try { _fluxolabPendLastSavedJSON = JSON.stringify(_fluxolabPendenciasState); } catch (e) { _fluxolabPendLastSavedJSON = null; }
+
+  Object.keys(PEND_ROW_MIN).forEach(t => pendGroupStateByPedido(t));
 
   if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'pendencias') {
     fluxolabRenderPendencias();
@@ -491,6 +639,7 @@ function fluxolabUpdateRowElemPend(elem, tableName, field) {
 
 
   if (field === 'modelo') {
+    pendGroupStateByPedido(tableName);
     pendUpdateHeaderTotals(tableName);
     if (typeof updateActiveUsersInTables === 'function') updateActiveUsersInTables();
     const activeId = `pnd-${tableName}-r${index}-modelo`;
@@ -643,19 +792,11 @@ function fluxolabSortPendByDiasAberto(tableName) {
     return;
   }
 
-  const filled = [];
-  const empty = [];
-  list.forEach(row => {
-    if (row.modelo) {
-      filled.push({ row, dias: fluxolabPlanGetChecklistStats(row.modelo).maxAberto || 0 });
-    } else {
-      empty.push(row);
-    }
+  pendApplyStateSort(tableName, (a, b) => {
+    const da = fluxolabPlanGetChecklistStats(a.row.modelo).maxAberto || 0;
+    const db = fluxolabPlanGetChecklistStats(b.row.modelo).maxAberto || 0;
+    return nextDir === 'desc' ? (db - da) : (da - db);
   });
-
-  filled.sort((a, b) => nextDir === 'desc' ? (b.dias - a.dias) : (a.dias - b.dias));
-
-  _fluxolabPendenciasState[tableName] = filled.map(x => x.row).concat(empty);
 
   fluxolabSavePendenciasDebounced();
   fluxolabRenderPendencias();
@@ -676,20 +817,13 @@ function fluxolabSortPendByMedia(tableName) {
     return;
   }
 
-  // Separa linhas preenchidas das vazias — vazias permanecem sempre no final
-  const filled = [];
-  const empty = [];
-  list.forEach(row => {
-    if (row.modelo) {
-      filled.push({ row, media: (fluxolabPlanGetChecklistStats(row.modelo).maxDiasUteis || fluxolabPlanGetChecklistStats(row.modelo).media || 0) });
-    } else {
-      empty.push(row);
-    }
+  pendApplyStateSort(tableName, (a, b) => {
+    const sa = fluxolabPlanGetChecklistStats(a.row.modelo);
+    const sb = fluxolabPlanGetChecklistStats(b.row.modelo);
+    const ma = sa.maxDiasUteis || sa.media || 0;
+    const mb = sb.maxDiasUteis || sb.media || 0;
+    return nextDir === 'desc' ? (mb - ma) : (ma - mb);
   });
-
-  filled.sort((a, b) => nextDir === 'desc' ? (b.media - a.media) : (a.media - b.media));
-
-  _fluxolabPendenciasState[tableName] = filled.map(x => x.row).concat(empty);
 
   fluxolabSavePendenciasDebounced();
   fluxolabRenderPendencias();
@@ -720,14 +854,24 @@ function pendDropTr(e, tableName) {
 
   if (_pendDraggedTableName !== tableName || !_pendDraggedTr || _pendDraggedTr === dropTr) return;
   if (_pendDraggedTr.dataset.pndVirtual === '1' || dropTr.dataset.pndVirtual === '1') return;
+  if (pendIsListaDetalhada(tableName)) return;
 
-  const oldIdx = parseInt(_pendDraggedTr.dataset.pndIdx, 10);
-  const newIdx = parseInt(dropTr.dataset.pndIdx, 10);
+  let oldIdx = parseInt(_pendDraggedTr.dataset.pndIdx, 10);
+  let newIdx = parseInt(dropTr.dataset.pndIdx, 10);
   if (isNaN(oldIdx) || isNaN(newIdx) || oldIdx === newIdx) return;
 
   const list = _fluxolabPendenciasState[tableName];
   const item = list.splice(oldIdx, 1)[0];
+  // NÃO decrementar newIdx aqui: o índice de destino já é a posição
+  // correta no array após a remoção (testado contra o comportamento
+  // equivalente por manipulação de DOM usado no Planejamento do Dia).
+  // O decremento antigo fazia um arraste para a linha logo abaixo
+  // (o caso mais comum) resultar em splice(oldIdx,1) + splice(oldIdx,0,item)
+  // — ou seja, a linha voltava exatamente para o mesmo lugar, parecendo
+  // que "arrastar não funciona".
   list.splice(newIdx, 0, item);
+
+  pendClearSortState(tableName);
   fluxolabSavePendenciasDebounced();
   fluxolabRenderPendencias();
 }
@@ -891,12 +1035,17 @@ function pendResetColWidths() {
 }
 
 // Badge visual ao lado do modelo: indica se existe checklist importado para ele
-function pendBadgeHtml(count, filled) {
-  if (!filled) return '';
-  if (count > 0) {
-    return `<span style="background:rgba(74,222,128,0.15);color:#4ade80;font-size:9px;font-weight:800;padding:3px 7px;border-radius:10px;white-space:nowrap;flex-shrink:0;letter-spacing:0.03em">✓ CHECKLIST</span>`;
+function pendBadgeHtml(count, filled, modelo) {
+  let html = '';
+  if (filled) {
+    if (count > 0) {
+      html += `<span style="background:rgba(74,222,128,0.15);color:#4ade80;font-size:9px;font-weight:800;padding:3px 7px;border-radius:10px;white-space:nowrap;flex-shrink:0;letter-spacing:0.03em">✓ CHECKLIST</span>`;
+    } else {
+      html += `<span style="background:rgba(248,113,113,0.15);color:#f87171;font-size:9px;font-weight:800;padding:3px 7px;border-radius:10px;white-space:nowrap;flex-shrink:0;letter-spacing:0.03em">✗ SEM CHECKLIST</span>`;
+    }
+    if (pendIsAcessorio(modelo)) html += pendAcessorioBadgeHtml();
   }
-  return `<span style="background:rgba(248,113,113,0.15);color:#f87171;font-size:9px;font-weight:800;padding:3px 7px;border-radius:10px;white-space:nowrap;flex-shrink:0;letter-spacing:0.03em">✗ SEM CHECKLIST</span>`;
+  return html;
 }
 
 // Monta os "pills" da coluna Bolsão: em qual(is) bolsão(ões) específico(s)
@@ -1074,8 +1223,19 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
 
     const isVirtual = !!disp.virtual;
     const isDetailed = listaDetalhada && disp.chkIdx != null;
-    const rowBg = dispIdx % 2 === 0 ? (urgQtd ? 'rgba(239,68,68,0.07)' : 'rgba(255,255,255,0.015)') : (urgQtd ? 'rgba(239,68,68,0.04)' : 'transparent');
     const isFilled = !!row.modelo;
+    const pedAtual = isFilled ? (pendGetDispPedido(disp) || pendGetRowPedido(row)) : '';
+    const pedAnterior = (() => {
+      for (let j = dispIdx - 1; j >= 0; j--) {
+        const prev = displayList[j];
+        if (!prev || !prev.row.modelo) continue;
+        return pendGetDispPedido(prev) || pendGetRowPedido(prev.row);
+      }
+      return '';
+    })();
+    const pedGroupBorder = (pedAtual && pedAnterior && pendNormPedido(pedAtual) !== pendNormPedido(pedAnterior))
+      ? 'border-top:2px solid rgba(79,142,247,.45);' : '';
+    const rowBg = dispIdx % 2 === 0 ? (urgQtd ? 'rgba(239,68,68,0.07)' : 'rgba(255,255,255,0.015)') : (urgQtd ? 'rgba(239,68,68,0.04)' : 'transparent');
     const canExpand = !listaDetalhada && isFilled && statsChk.count > 1;
     const isExpanded = canExpand && (_pendExpandedRows[tableName] || new Set()).has(idx);
     const visibleColCount = PEND_COL_DEFS.filter(c => !pendIsColHidden(tableName, c.k)).length;
@@ -1104,16 +1264,17 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
     );
 
     const modeloCell = isVirtual
-      ? `<div style="padding:0 8px 0 12px;text-align:left;font-weight:800;font-size:14px;color:${themeColor};opacity:.88">
-           ${esc(row.modelo)}
-           <span style="font-size:10px;color:var(--muted);margin-left:6px;font-weight:700">· checklist ${disp.chkSeq}/${statsChk.count}</span>
+      ? `<div style="padding:0 8px 0 12px;text-align:left;font-weight:800;font-size:14px;color:${themeColor};opacity:.88;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+           <span>${esc(row.modelo)}</span>
+           <span style="font-size:10px;color:var(--muted);font-weight:700">· checklist ${disp.chkSeq}/${statsChk.count}</span>
+           ${pendIsAcessorio(row.modelo) ? pendAcessorioBadgeHtml() : ''}
          </div>`
       : `<div style="display:flex;align-items:center;gap:6px;height:100%;padding:0 8px 0 12px">
            <input id="pnd-${tableName}-r${idx}-modelo" type="text" list="modelos-lista" placeholder="Digite..." value="${row.modelo || ''}"
                   onfocus="${inpFocus}" onblur="${inpBlur}"
                   onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'modelo')"
                   style="flex:1;min-width:0;height:100%;min-height:36px;border:none;background:transparent;text-align:left;font-weight:800;outline:none;font-family:var(--font);font-size:15px;color:${themeColor};transition:all .2s;padding:0" />
-           <span id="pnd-${tableName}-r${idx}-badge" style="display:flex;align-items:center;gap:4px">${pendBadgeHtml(statsChk.count, isFilled)}${urgBadgeHtml}</span>
+           <span id="pnd-${tableName}-r${idx}-badge" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">${pendBadgeHtml(statsChk.count, isFilled, row.modelo)}${urgBadgeHtml}</span>
            <span class="active-users-badge" id="pnd-${tableName}-r${idx}-active-users" data-modelo="${row.modelo || ''}" style="display:flex;align-items:center"></span>
          </div>`;
 
@@ -1162,14 +1323,14 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
             onmouseleave="this.parentNode.setAttribute('draggable','false')"`;
 
     html += `
-      <tr data-pnd-idx="${idx}" data-pnd-virtual="${isVirtual ? '1' : '0'}"
-          style="background:${rowBg};transition:background .2s;${rowBorderLeft}${virtualBg}"
+      <tr data-pnd-idx="${idx}" data-pnd-virtual="${isVirtual ? '1' : '0'}" data-pnd-pedido="${esc(pedAtual)}"
+          style="background:${rowBg};transition:background .2s;${rowBorderLeft}${virtualBg}${pedGroupBorder}"
           ${dragAttrs}
           onmouseover="this.style.background='rgba(255,255,255,0.04)'"
           onmouseout="this.style.background='${rowBg}'">
 
         <td style="${tdStyle};color:var(--muted);font-weight:800;font-size:15px;${dragHandle}${hid('ord')}"
-            title="${isVirtual ? '' : 'Arraste para reordenar'}"${dragTd}>
+            title="${isVirtual ? '' : (pedAtual ? 'Pedido ' + esc(pedAtual) + ' — arraste para reordenar' : 'Arraste para reordenar')}"${dragTd}>
           ${isVirtual ? '' : '<span style="opacity:0.4;margin-right:4px">≡</span>'}${dispIdx + 1}º
         </td>
         <td style="${tdStyle};color:var(--muted);font-weight:800;font-size:15px${hid('lote')}">${dispIdx + 1}</td>
