@@ -5413,6 +5413,9 @@ async function renderPecasView(){
   });
   const filtered = allAguardando.filter(h => !q || h.selb.includes(q) || h.name.toUpperCase().includes(q));
 
+  const listaCountEl = document.getElementById('pecas-lista-count');
+  if(listaCountEl) listaCountEl.textContent = filtered.length;
+
   if(!filtered.length){
     tbody.innerHTML = `<tr><td colspan="10" class="empty">Nenhum SELB aguardando peça.</td></tr>`;
     return;
@@ -5651,6 +5654,8 @@ function _renderSolicitacoesPanel(panelId, q){
   if (bodyEl) {
     // Atualiza só o conteúdo interno e o badge, preservando o cabeçalho/botão de retrair
     if (badgeEl) badgeEl.textContent = pendentes.length;
+    var marcarBtn = panel.querySelector('#btn-marcar-todas-pecas-lidas');
+    if (marcarBtn) marcarBtn.style.display = isAdmin ? '' : 'none';
     bodyEl.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(270px,1fr));gap:10px">' + cards + '</div>';
   } else {
     // Painel sem corpo separado (ex: pecas-a-solicitacoes-panel) — comportamento original
@@ -19912,6 +19917,7 @@ function _fluxolabRenderGrid() {
           '</div>' +
         '</div>' +
         '<div style="display:flex;align-items:center;gap:4px;flex-shrink:0">' +
+          (b.key === 'VALIDACAO_MOVIMENTACAO' ? '<button onclick="fluxolabAbrirModalCodigosValMov()" title="Visualizar Códigos de Barras" style="background:transparent;border:1px solid '+b.border+';border-radius:6px;width:28px;height:28px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:14px;color:'+b.color+'; transition: background 0.15s" onmouseover="this.style.background=\'rgba(129,140,248,.2)\'" onmouseout="this.style.background=\'transparent\'">🖨️</button>' : '') +
           '<div style="background:' + b.bg + ';border:1px solid ' + b.border + ';border-radius:20px;min-width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:14px;font-weight:800;color:' + b.color + ';padding:0 8px;">' + count + '</div>' +
         '</div>' +
       '</div>' +
@@ -22951,7 +22957,12 @@ async function fluxolabVerificarPedidosRegistrados(btn) {
     const selbs = parseSelbs(ta.value);
     const liberadas = window._qualLiberadas || {};
     const jaLib = new Set();
-    Object.values(liberadas).forEach(r => { if(r && r.selb) jaLib.add(String(r.selb).toUpperCase()); });
+    const cutoff7Dias = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    Object.values(liberadas).forEach(r => { 
+      if(r && r.selb && (r.ts || 0) >= cutoff7Dias) {
+        jaLib.add(String(r.selb).toUpperCase()); 
+      }
+    });
     const seen = new Set();
     let okCount = 0, badCount = 0, dupCount = 0, semRegCount = 0;
     const rows = selbs.map(selb => {
@@ -23192,7 +23203,12 @@ async function fluxolabVerificarPedidosRegistrados(btn) {
     const selbs = parseSelbs(ta.value);
     const liberadas = window._qualLiberadas || {};
     const jaLib = new Set();
-    Object.values(liberadas).forEach(r => { if(r && r.selb) jaLib.add(String(r.selb).toUpperCase()); });
+    const cutoff7Dias = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    Object.values(liberadas).forEach(r => { 
+      if(r && r.selb && (r.ts || 0) >= cutoff7Dias) {
+        jaLib.add(String(r.selb).toUpperCase()); 
+      }
+    });
     const seen = new Set();
     const novos = [];
     const bloqueados = [];
@@ -28529,4 +28545,145 @@ window.fluxolabVarrerDuplicados = async function() {
   }
 
   if (typeof _fluxolabRenderGrid === 'function') _fluxolabRenderGrid();
+};
+
+// ════════════════════════════════════════════════════════════════════
+// VALIDAÇÃO DE MOVIMENTAÇÃO — Modal de Códigos de Barras
+// ════════════════════════════════════════════════════════════════════
+window.fluxolabAbrirModalCodigosValMov = function() {
+  var items = (_fluxolabData && _fluxolabData['VALIDACAO_MOVIMENTACAO']) ? _fluxolabData['VALIDACAO_MOVIMENTACAO'] : {};
+  var selbs = Object.keys(items).map(function(k) { return items[k].selb || k; }).filter(Boolean);
+  selbs.sort();
+
+  if (selbs.length === 0) {
+    alert('Nenhum SELB neste bolsão.');
+    return;
+  }
+
+  var existingOv = document.getElementById('valMov-barcode-overlay');
+  if (existingOv) document.body.removeChild(existingOv);
+
+  var overlay = document.createElement('div');
+  overlay.id = 'valMov-barcode-overlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.75);z-index:999999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);';
+
+  var modal = document.createElement('div');
+  modal.style.cssText = 'background:var(--bg2);border:1px solid rgba(129,140,248,.4);border-radius:16px;width:92%;max-width:860px;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.6);overflow:hidden;';
+
+  // Header
+  var header = document.createElement('div');
+  header.style.cssText = 'padding:14px 20px;border-bottom:1px solid var(--border2);display:flex;align-items:center;justify-content:space-between;background:rgba(129,140,248,.06);flex-shrink:0;';
+
+  var titleEl = document.createElement('div');
+  titleEl.style.cssText = 'display:flex;align-items:center;gap:10px;';
+  titleEl.innerHTML = '<span style="font-size:18px;">🖨️</span>'
+    + '<span style="font-size:15px;font-weight:800;color:var(--text);">Códigos de Barras — Validação de Movimentação</span>'
+    + '<span style="background:rgba(129,140,248,.18);color:#818cf8;border:1px solid rgba(129,140,248,.35);padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;">' + selbs.length + ' SELB' + (selbs.length !== 1 ? 's' : '') + '</span>';
+
+  var actionsEl = document.createElement('div');
+  actionsEl.style.cssText = 'display:flex;gap:8px;align-items:center;';
+
+  var copyBtn = document.createElement('button');
+  copyBtn.textContent = '📋 Copiar SELBs';
+  copyBtn.style.cssText = 'background:var(--accent);color:#fff;border:none;border-radius:8px;padding:7px 14px;font-weight:700;cursor:pointer;font-size:12px;transition:opacity .15s;';
+  copyBtn.onmouseover = function() { this.style.opacity = '.85'; };
+  copyBtn.onmouseout = function() { this.style.opacity = '1'; };
+  copyBtn.onclick = function() {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(selbs.join('\n')).then(function() {
+        copyBtn.textContent = '✅ Copiado!';
+        copyBtn.style.background = '#10b981';
+        setTimeout(function() {
+          copyBtn.textContent = '📋 Copiar SELBs';
+          copyBtn.style.background = 'var(--accent)';
+        }, 2200);
+      });
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = selbs.join('\n');
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      copyBtn.textContent = '✅ Copiado!';
+      setTimeout(function() { copyBtn.textContent = '📋 Copiar SELBs'; }, 2200);
+    }
+  };
+
+  var closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.style.cssText = 'background:transparent;border:1px solid var(--border2);color:var(--muted);cursor:pointer;font-size:15px;border-radius:6px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;transition:background .15s;';
+  closeBtn.onmouseover = function() { this.style.background = 'rgba(239,68,68,.15)'; this.style.color = '#ef4444'; };
+  closeBtn.onmouseout = function() { this.style.background = 'transparent'; this.style.color = 'var(--muted)'; };
+  closeBtn.onclick = function() { document.body.removeChild(overlay); };
+
+  actionsEl.appendChild(copyBtn);
+  actionsEl.appendChild(closeBtn);
+  header.appendChild(titleEl);
+  header.appendChild(actionsEl);
+
+  // Body (branco para imprimir)
+  var body = document.createElement('div');
+  body.style.cssText = 'padding:20px;overflow-y:auto;display:flex;flex-wrap:wrap;gap:16px;justify-content:center;background:#fff;flex:1;';
+
+  selbs.forEach(function(selb) {
+    var wrap = document.createElement('div');
+    wrap.style.cssText = 'padding:12px 16px;border:1px solid #ddd;border-radius:8px;display:flex;flex-direction:column;align-items:center;gap:4px;background:#fff;min-width:140px;';
+
+    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('data-val-selb', selb);
+
+    wrap.appendChild(svg);
+    body.appendChild(wrap);
+  });
+
+  modal.appendChild(header);
+  modal.appendChild(body);
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  overlay.addEventListener('click', function(e) {
+    if (e.target === overlay) document.body.removeChild(overlay);
+  });
+
+  // Carrega JsBarcode e renderiza
+  if (typeof selbLoadBarcodeLib === 'function') {
+    selbLoadBarcodeLib(function() {
+      selbs.forEach(function(selb) {
+        var svgEl = body.querySelector('svg[data-val-selb="' + selb + '"]');
+        if (svgEl && window.JsBarcode) {
+          try {
+            window.JsBarcode(svgEl, selb, {
+              format: 'CODE128',
+              width: 1.8,
+              height: 55,
+              displayValue: true,
+              fontSize: 13,
+              margin: 6,
+            });
+          } catch(e) {
+            svgEl.parentElement.innerHTML += '<div style="color:#ef4444;font-size:10px;">' + selb + '</div>';
+          }
+        }
+      });
+    });
+  } else {
+    // Fallback: carrega a lib manualmente
+    var s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.5/JsBarcode.all.min.js';
+    s.onload = function() {
+      selbs.forEach(function(selb) {
+        var svgEl = body.querySelector('svg[data-val-selb="' + selb + '"]');
+        if (svgEl && window.JsBarcode) {
+          try {
+            window.JsBarcode(svgEl, selb, {
+              format: 'CODE128', width: 1.8, height: 55,
+              displayValue: true, fontSize: 13, margin: 6,
+            });
+          } catch(e) {}
+        }
+      });
+    };
+    document.head.appendChild(s);
+  }
 };
