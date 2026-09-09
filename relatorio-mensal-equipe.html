@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Relatório Mensal — Gestão de Equipe</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --bg2: #1a1d27;
+      --bg3: #22263a;
+      --border: #2a2f45;
+      --text: #e2e8f0;
+      --muted: #64748b;
+      --accent: #7c3aed;
+      --green: #4ade80;
+      --yellow: #f5a623;
+      --red: #f25757;
+      --blue: #38bdf8;
+      --purple: #a78bfa;
+      --cyan: #22d3ee;
+      --pink: #ec4899;
+      --font: 'Inter', system-ui, sans-serif;
+      --mono: 'JetBrains Mono', 'Fira Code', monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px;
+    }
+    h1, h2, h3 { font-weight: 800; }
+    /* ── Header ── */
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      flex-wrap: wrap; gap: 16px;
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 16px; padding: 20px 24px; margin-bottom: 24px;
+    }
+    .header-left { display: flex; align-items: center; gap: 14px; }
+    .header-icon {
+      width: 48px; height: 48px; border-radius: 12px;
+      background: rgba(124,58,237,0.15); border: 1px solid rgba(124,58,237,0.4);
+      display: flex; align-items: center; justify-content: center; font-size: 24px;
+    }
+    .header h1 { font-size: 18px; color: var(--text); }
+    .header-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+    .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    select, button {
+      font-family: var(--font); font-size: 13px; font-weight: 600;
+      background: var(--bg3); border: 1px solid var(--border);
+      color: var(--text); border-radius: 9px; padding: 8px 14px; cursor: pointer;
+      outline: none; transition: border-color .2s;
+    }
+    select:focus, button:hover { border-color: var(--accent); }
+    button.primary {
+      background: rgba(124,58,237,0.18); border-color: rgba(124,58,237,0.5);
+      color: #c4b5fd;
+    }
+    button.primary:hover { background: rgba(124,58,237,0.28); }
+    button.export-btn {
+      background: rgba(34,211,238,0.1); border-color: rgba(34,211,238,0.35);
+      color: var(--cyan); font-size: 12px;
+    }
+    /* ── Status bar ── */
+    #status-bar {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 10px; padding: 10px 16px;
+      font-size: 12px; color: var(--muted);
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 20px; min-height: 40px;
+    }
+    .spinner {
+      width: 14px; height: 14px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      flex-shrink: 0;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    /* ── KPI Cards ── */
+    .kpi-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 14px; margin-bottom: 24px;
+    }
+    .kpi-card {
+      background: var(--bg2); border: 1px solid var(--border);
+      border-radius: 14px; padding: 16px; position: relative; overflow: hidden;
+    }
+    .kpi-card::before {
+      content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+      background: var(--card-color, var(--accent));
+    }
+    .kpi-label { font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+    .kpi-value { font-size: 28px; font-weight: 900; font-family: var(--mono); color: var(--card-color, var(--text)); margin-top: 6px; line-height: 1; }
+    .kpi-sub { font-size: 10px; color: var(--muted); margin-top: 4px; }
+    /* ── Section ── */
+    .section { margin-bottom: 28px; }
+    .section-title {
+      font-size: 13px; font-weight: 800; color: var(--purple);
+      text-transform: uppercase; letter-spacing: .08em;
+      margin-bottom: 14px; display: flex; align-items: center; gap: 8px;
+    }
+    .section-title::after {
+      content: ''; flex: 1; height: 1px; background: var(--border);
+    }
+    /* ── Setor Cards ── */
+    .setor-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+    }
+    .setor-card {
+      background: var(--bg2); border-radius: 14px; padding: 16px;
+      border: 1px solid var(--border);
+    }
+    .setor-head {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .setor-name { font-size: 13px; font-weight: 800; display: flex; align-items: center; gap: 6px; }
+    .setor-pct {
+      font-size: 13px; font-weight: 900; font-family: var(--mono);
+      padding: 2px 10px; border-radius: 20px;
+      background: rgba(0,0,0,.3); border-width: 1px; border-style: solid;
+    }
+    .bar-track {
+      width: 100%; height: 6px; background: rgba(255,255,255,.07);
+      border-radius: 10px; overflow: hidden; margin: 8px 0 12px;
+    }
+    .bar-fill { height: 100%; border-radius: 10px; transition: width .6s ease; }
+    .stats-row {
+      display: grid; grid-template-columns: 1fr 1fr 1fr;
+      gap: 6px; margin-bottom: 10px;
+    }
+    .stat-box { border-radius: 8px; padding: 6px; text-align: center; }
+    .stat-box .lbl { font-size: 8px; font-weight: 700; text-transform: uppercase; }
+    .stat-box .val { font-size: 14px; font-weight: 900; font-family: var(--mono); margin-top: 2px; }
+    .member-list { display: flex; flex-wrap: wrap; gap: 4px; }
+    .chip {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 9px; font-weight: 700; padding: 2px 7px;
+      border-radius: 5px; border-width: 1px; border-style: solid;
+    }
+    .chip-dot { width: 5px; height: 5px; border-radius: 50%; display: inline-block; }
+    /* ── Tabela diária ── */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+    th {
+      background: var(--bg3); padding: 4px 12px; text-align: left;
+      font-size: 10px; font-weight: 700; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .05em;
+      border-bottom: 1px solid var(--border);
+      resize: horizontal; overflow: hidden; /* Permite redimensionar as colunas e corta excesso */
+      white-space: nowrap; text-overflow: ellipsis;
+    }
+    td {
+      padding: 4px 12px; border-bottom: 1px solid var(--border);
+      vertical-align: middle; overflow: hidden; text-overflow: ellipsis;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,.025); }
+    .tag-pct {
+      display: inline-block; font-weight: 800; font-size: 11px;
+      font-family: var(--mono); padding: 2px 7px; border-radius: 6px;
+    }
+    tfoot td { background: var(--bg3); font-weight: 800; }
+    /* ── Print ── */
+    @media print {
+      body { background: #fff; color: #111; padding: 12px; }
+      .controls, button, #status-bar { display: none !important; }
+      .header { border: 1px solid #ddd; background: #f8f8f8; }
+      .setor-card, .kpi-card { border: 1px solid #ddd; background: #fff; }
+      th { background: #f0f0f0; color: #333; }
+      td { border-color: #ddd; }
+      tfoot td { background: #f0f0f0; }
+    }
+    /* ── Helpers ── */
+    .text-green { color: var(--green); }
+    .text-yellow { color: var(--yellow); }
+    .text-red { color: var(--red); }
+    .text-muted { color: var(--muted); }
+    .text-center { text-align: center; }
+    .hidden { display: none !important; }
+    .note { font-size: 11px; color: var(--muted); font-style: italic; }
+    /* ── Chart mini bar ── */
+    .mini-bar-wrap {
+      display: flex; align-items: center; gap: 6px;
+    }
+    .mini-bar-track {
+      flex: 1; height: 7px; background: rgba(255,255,255,.07);
+      border-radius: 10px; overflow: hidden;
+    }
+    .mini-bar-fill { height: 100%; border-radius: 10px; }
+    .evolution-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  </style>
+</head>
+<body>
+
+<!-- ── HEADER ── -->
+<div class="header">
+  <div class="header-left">
+    <div class="header-icon">🩺</div>
+    <div>
+      <h1>Relatório Mensal — Gestão de Equipe</h1>
+      <div class="header-sub">Saúde da equipe por setor · Presença via check-in PIN · Produção do período</div>
+    </div>
+  </div>
+  <div class="controls">
+    <div style="display:flex;align-items:center;gap:6px;margin-right:10px;background:var(--bg3);border:1px solid var(--border);border-radius:9px;padding:4px 8px;">
+      <span style="font-size:11px;color:var(--muted)">Zoom:</span>
+      <button onclick="mudarZoom(-10)" style="padding:0 6px;font-size:16px;background:transparent;border:none;color:var(--text);margin:0">-</button>
+      <span id="zoom-atual" style="font-size:11px;font-family:var(--mono);min-width:35px;text-align:center">100%</span>
+      <button onclick="mudarZoom(10)" style="padding:0 6px;font-size:16px;background:transparent;border:none;color:var(--text);margin:0">+</button>
+    </div>
+    <select id="sel-mes" title="Mês do relatório"></select>
+    <button class="primary" onclick="gerarRelatorio()">🔄 Gerar Relatório</button>
+    <button class="export-btn" onclick="exportarExcel()">📊 Excel</button>
+    <button class="export-btn" onclick="window.print()">🖨 Imprimir</button>
+  </div>
+</div>
+
+<!-- ── STATUS ── -->
+<div id="status-bar">
+  <div class="spinner" id="spinner"></div>
+  <span id="status-text">Selecione o mês e clique em Gerar Relatório.</span>
+</div>
+
+<!-- ── CONTEÚDO ── -->
+<div id="conteudo" class="hidden">
+
+  <!-- KPIs -->
+  <div class="kpi-grid" id="kpis"></div>
+
+  <!-- Setores -->
+  <div class="section">
+    <div class="section-title">🏭 Saúde por Setor</div>
+    <div class="setor-grid" id="setores-grid"></div>
+  </div>
+
+  <!-- Evolução diária -->
+  <div class="section">
+    <div class="evolution-header">
+      <div class="section-title" style="margin-bottom:0">📅 Evolução Diária</div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <div id="dias-filtro-info" style="font-size:11px;color:var(--muted)"></div>
+        <button id="btn-toggle-baixos" onclick="toggleDiasBaixos()" style="font-size:11px;padding:5px 12px;background:rgba(242,87,87,.1);border-color:rgba(242,87,87,.3);color:#f25757">
+          👁 Mostrar dias &lt;50%
+        </button>
+      </div>
+    </div>
+    <div style="margin-top:14px;background:var(--bg2);border:1px solid var(--border);border-radius:14px;overflow:hidden">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Data</th>
+              <th>Dia</th>
+              <th class="text-center">Presentes</th>
+              <th class="text-center">Ausentes</th>
+              <th class="text-center">Total Equipe</th>
+              <th class="text-center">Saúde %</th>
+              <th class="text-center">Liberações</th>
+            </tr>
+          </thead>
+          <tbody id="tabela-dias-body"></tbody>
+          <tfoot id="tabela-dias-foot"></tfoot>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Observações -->
+  <div class="note" style="margin-top:8px">
+    ⚠️ Saúde da equipe: setor <strong>Eletrônica</strong> aparece nos cards mas <strong>não entra</strong> no cálculo da saúde geral. Dias sem nenhum check-in são marcados como "Feriado/sem dados". Dias com menos de 50% de presença são ocultados por padrão.
+  </div>
+</div>
+
+
+<script>
+// ── Configuração Supabase ──────────────────────────────────────────────────
+const SB_URL = 'https://wpawjyqjrzzleojzejuw.supabase.co';
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwYXdqeXFqcnp6bGVvanplanV3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE4OTI1ODMsImV4cCI6MjA5NzQ2ODU4M30.7HRgwO-KiV5ZTCzOA2DPkFgARrcMUYoQrSGrZirIoss';
+const supa = window.supabase.createClient(SB_URL, SB_KEY);
+
+// ── Setores ───────────────────────────────────────────────────────────────
+const SETORES = [
+  { key: 'DESMEMBRAMENTO', name: 'Desmembramento', icon: '📦', color: '#38bdf8' },
+  { key: 'MONTAGEM',       name: 'Montagem',       icon: '🛠️', color: '#4ade80' },
+  { key: 'LIMPEZA',        name: 'Limpeza',        icon: '🧹', color: '#a78bfa' },
+  { key: 'COMPLEXA',       name: 'Complexas',      icon: '🧩', color: '#f5a623', alias: ['COMPLEXAS'] },
+  { key: 'QUALIDADE',      name: 'Qualidade',      icon: '✅', color: '#22d3ee' },
+  { key: 'ELETRÔNICA',     name: 'Eletrônica',     icon: '🔌', color: '#fb923c', foraDaSaude: true },
+];
+const SETORES_FORA_SAUDE = new Set(['ELETRÔNICA','ELETRONICA']);
+
+// ── Dias da semana PT-BR ───────────────────────────────────────────────────
+const DIAS_SEMANA = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+const MESES_PT = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
+                  'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+function dateKey(d) { return new Date(d).toDateString().replace(/ /g,'_'); }
+function isoDate(d) { return d.toISOString().slice(0,10); }
+function healthColor(pct) {
+  if (pct === null || pct === undefined) return '#64748b';
+  if (pct < 50) return '#f25757';
+  if (pct < 80) return '#f5a623';
+  return '#4ade80';
+}
+function fmtDate(isoStr) {
+  const [y,m,d] = isoStr.split('-');
+  return `${d}/${m}/${y}`;
+}
+function setStatus(msg, loading = false) {
+  document.getElementById('status-text').textContent = msg;
+  document.getElementById('spinner').style.display = loading ? 'block' : 'none';
+}
+function showContent(show) {
+  document.getElementById('conteudo').classList.toggle('hidden', !show);
+}
+
+// ── Zoom da tela ───────────────────────────────────────────────────────────
+let _zoomLevel = 100;
+function mudarZoom(delta) {
+  _zoomLevel += delta;
+  if (_zoomLevel < 50) _zoomLevel = 50;
+  if (_zoomLevel > 150) _zoomLevel = 150;
+  document.getElementById('zoom-atual').textContent = _zoomLevel + '%';
+  // Aplica o zoom no body
+  document.body.style.zoom = (_zoomLevel / 100);
+}
+
+// ── Dados globais do relatório ─────────────────────────────────────────────
+let _dadosRelatorio = null;
+
+// ── Popular seletor de mês (últimos 12 meses + mês atual) ─────────────────
+(function popularMeses() {
+  const sel = document.getElementById('sel-mes');
+  const hoje = new Date();
+  for (let i = 0; i <= 11; i++) {
+    const d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
+    const val = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    const lbl = `${MESES_PT[d.getMonth()]} ${d.getFullYear()}`;
+    const opt = document.createElement('option');
+    opt.value = val; opt.textContent = lbl;
+    if (i === 0) opt.selected = true;
+    sel.appendChild(opt);
+  }
+})();
+
+// ── GERAR RELATÓRIO ────────────────────────────────────────────────────────
+async function gerarRelatorio() {
+  showContent(false);
+  setStatus('Carregando usuários…', true);
+
+  const [ano, mes] = document.getElementById('sel-mes').value.split('-').map(Number);
+  const mesLabel = `${MESES_PT[mes-1]} ${ano}`;
+
+  // Dias úteis do mês (segunda a sábado — adapte se quiser só seg-sex)
+  const diasDoMes = [];
+  const primeiroDia = new Date(ano, mes-1, 1);
+  const ultimoDia = new Date(ano, mes, 0);
+  for (let d = new Date(primeiroDia); d <= ultimoDia; d.setDate(d.getDate()+1)) {
+    // Inclui todos os dias (0=Dom a 6=Sáb) — domingo excluído do cálculo automático
+    if (d.getDay() !== 0) { // exclui domingos
+      diasDoMes.push(new Date(d));
+    }
+  }
+  const dateKeys = diasDoMes.map(d => dateKey(d));
+
+  try {
+    // 1. Usuários (tabela 'operadores' no Supabase — mapeada do path /users pelo shim)
+    setStatus('Buscando usuários…', true);
+    const { data: usersRaw, error: uErr } = await supa.from('operadores').select('id, name, sector, active, hidden, raw');
+    if (uErr) throw uErr;
+    const users = (usersRaw || []).map(r => {
+      const raw = (r.raw && typeof r.raw === 'object') ? r.raw : {};
+      const name   = r.name   || raw.name   || raw.nome   || String(r.id);
+      const sector = r.sector || raw.sector  || raw.setor  || '';
+      const active = r.active !== undefined ? r.active : (raw.active !== false);
+      const hidden = r.hidden !== undefined ? !!r.hidden  : !!raw.hidden;
+      return { id: String(r.id), name, sector: String(sector).toUpperCase().trim(), active, hidden };
+    }).filter(u => u.sector);
+
+    // 2. Check-ins do mês
+    setStatus(`Buscando check-ins de ${mesLabel}…`, true);
+    const BATCH = 40;
+    const checkinMap = {}; // dateKey -> Set<uid>
+    dateKeys.forEach(k => { checkinMap[k] = new Set(); });
+
+    for (let i = 0; i < dateKeys.length; i += BATCH) {
+      const chunk = dateKeys.slice(i, i + BATCH);
+      const { data: ciData, error: ciErr } = await supa
+        .from('operator_checkins').select('uid, date_key')
+        .in('date_key', chunk);
+      if (ciErr) throw ciErr;
+      (ciData || []).forEach(r => {
+        if (checkinMap[r.date_key]) checkinMap[r.date_key].add(String(r.uid));
+      });
+    }
+
+    // 3. Liberações do mês
+    setStatus('Buscando liberações de qualidade…', true);
+    const { data: prodData, error: prodErr } = await supa
+      .from('qualidade_registros').select('id, date_key, responsavel, uid')
+      .in('date_key', dateKeys);
+    const prodMap = {}; // dateKey -> count
+    dateKeys.forEach(k => { prodMap[k] = 0; });
+    (prodData || []).forEach(r => {
+      if (prodMap[r.date_key] !== undefined) prodMap[r.date_key]++;
+    });
+
+    setStatus('Montando relatório…', true);
+
+    // ── Equipe elegível (sem Eletrônica, mesma lógica do painel) ──
+    const elegiveisGeral = users.filter(u => !SETORES_FORA_SAUDE.has(u.sector) && getSetorPorKey(u.sector));
+    const totalEq = elegiveisGeral.length;
+    const idsElegiveis = new Set(elegiveisGeral.map(u => u.id));
+
+    // ── Por setor: membros + stats do mês ──
+    const setoresComStats = SETORES.map(sec => {
+      const membros = users.filter(u => {
+        if (sec.alias) return sec.alias.concat([sec.key]).includes(u.sector);
+        return u.sector === sec.key;
+      });
+      // Dias presentes (set de dias em que PELO MENOS alguém do setor fez check-in)
+      let somaPresentes = 0, diasComDados = 0;
+      const membrosPresencaTotal = {}; // uid -> dias presentes
+      membros.forEach(u => { membrosPresencaTotal[u.id] = 0; });
+
+      dateKeys.forEach(k => {
+        const ci = checkinMap[k];
+        const presentes = membros.filter(u => ci.has(u.id));
+        if (ci.size > 0 || diasComDados > 0) { // dia com algum dado
+          diasComDados++;
+          somaPresentes += presentes.length;
+          presentes.forEach(u => membrosPresencaTotal[u.id]++);
+        }
+      });
+
+      const pctMedio = membros.length > 0 && diasComDados > 0
+        ? Math.round((somaPresentes / diasComDados / membros.length) * 100)
+        : (membros.length === 0 ? 0 : null);
+
+      return { ...sec, membros, pctMedio, somaPresentes, diasComDados, membrosPresencaTotal };
+    });
+
+    // ── Por dia: presença geral ──
+    const diasStats = diasDoMes.map(d => {
+      const k = dateKey(d);
+      const ci = checkinMap[k];
+      const semDados = ci.size === 0;
+      const presentes = semDados ? 0 : [...idsElegiveis].filter(id => ci.has(id)).length;
+      const ausentes = semDados ? 0 : totalEq - presentes;
+      const pct = semDados ? null : (totalEq > 0 ? Math.round((presentes/totalEq)*100) : 0);
+      return { iso: isoDate(d), dayOfWeek: DIAS_SEMANA[d.getDay()], k, presentes, ausentes, pct, prod: prodMap[k] || 0, semDados };
+    });
+
+    // ── KPIs gerais ──
+    const diasComCheckin = diasStats.filter(d => !d.semDados);
+    const totalProd = Object.values(prodMap).reduce((a,b) => a+b, 0);
+    const mediaSaude = diasComCheckin.length
+      ? Math.round(diasComCheckin.reduce((a,d) => a + (d.pct||0), 0) / diasComCheckin.length)
+      : null;
+    const melhorDia = diasComCheckin.reduce((best, d) => (!best || d.pct > best.pct) ? d : best, null);
+    const piorDia = diasComCheckin.reduce((worst, d) => (!worst || d.pct < worst.pct) ? d : worst, null);
+
+    _dadosRelatorio = { mesLabel, ano, mes, diasStats, setoresComStats, totalEq, mediaSaude, totalProd, diasComCheckin };
+
+    renderRelatorio(_dadosRelatorio);
+    setStatus(`✅ Relatório de ${mesLabel} gerado com sucesso — ${diasComCheckin.length} dias úteis com dados, ${totalProd} liberações.`, false);
+    showContent(true);
+
+  } catch(e) {
+    setStatus('❌ Erro ao buscar dados: ' + e.message, false);
+    console.error(e);
+  }
+}
+
+function getSetorPorKey(key) {
+  return SETORES.find(s => s.key === key || (s.alias && s.alias.includes(key)));
+}
+
+// ── RENDER ──────────────────────────────────────────────────────────────────
+function renderRelatorio({ mesLabel, diasStats, setoresComStats, totalEq, mediaSaude, totalProd, diasComCheckin }) {
+  renderKPIs({ mesLabel, diasStats, setoresComStats, totalEq, mediaSaude, totalProd, diasComCheckin });
+  renderSetores(setoresComStats, diasStats, diasComCheckin);
+  renderTabelaDias(diasStats, totalEq);
+}
+
+function renderKPIs({ mesLabel, diasStats, totalEq, mediaSaude, totalProd, diasComCheckin }) {
+  const cor = healthColor(mediaSaude);
+  const kpis = [
+    { label: 'Saúde Média do Mês', value: mediaSaude !== null ? mediaSaude + '%' : '—', color: cor, sub: 'Presença média diária (sem Eletrônica)' },
+    { label: 'Total da Equipe', value: totalEq, color: '#38bdf8', sub: 'Membros elegíveis (sem Eletrônica)' },
+    { label: 'Liberações no Mês', value: totalProd, color: '#4ade80', sub: 'Registros de qualidade' },
+    { label: 'Dias com Dados', value: diasComCheckin.length, color: '#a78bfa', sub: `de ${diasStats.length} dias úteis` },
+    { label: 'Melhor Dia', value: diasComCheckin.length ? (diasComCheckin.reduce((b,d)=>d.pct>b.pct?d:b).pct + '%') : '—', color: '#4ade80', sub: diasComCheckin.length ? fmtDate(diasComCheckin.reduce((b,d)=>d.pct>b.pct?d:b).iso) : '' },
+    { label: 'Pior Dia', value: diasComCheckin.length ? (diasComCheckin.reduce((b,d)=>d.pct<b.pct?d:b).pct + '%') : '—', color: '#f25757', sub: diasComCheckin.length ? fmtDate(diasComCheckin.reduce((b,d)=>d.pct<b.pct?d:b).iso) : '' },
+  ];
+  document.getElementById('kpis').innerHTML = kpis.map(k => `
+    <div class="kpi-card" style="--card-color:${k.color}">
+      <div class="kpi-label">${k.label}</div>
+      <div class="kpi-value">${k.value}</div>
+      <div class="kpi-sub">${k.sub}</div>
+    </div>
+  `).join('');
+}
+
+function renderSetores(setoresComStats, diasStats, diasComCheckin) {
+  document.getElementById('setores-grid').innerHTML = setoresComStats.map(sec => {
+    const pct = sec.pctMedio;
+    const cor = healthColor(pct);
+    const total = sec.membros.length;
+    const mediaPresentes = sec.diasComDados > 0 ? (sec.somaPresentes / sec.diasComDados).toFixed(1) : '0';
+    const ausMediaMes = total > 0 ? (total - parseFloat(mediaPresentes)).toFixed(1) : '0';
+
+    // Chips dos membros com % de presença no mês
+    const chips = sec.membros.map(u => {
+      const diasPresente = sec.membrosPresencaTotal[u.id] || 0;
+      const pctPessoa = sec.diasComDados > 0 ? Math.round((diasPresente/sec.diasComDados)*100) : 0;
+      const chipCor = healthColor(pctPessoa);
+      const tag = (!u.active ? ' <span style="opacity:.7;font-size:8px">(Inativo)</span>' : '') + (u.hidden ? ' <span style="opacity:.7;font-size:8px">(Oculto)</span>' : '');
+      return `<span class="chip" style="background:${chipCor}18;border-color:${chipCor}55;color:${chipCor}">
+        <span class="chip-dot" style="background:${chipCor}"></span>${u.name}${tag} <span style="opacity:.7">${pctPessoa}%</span>
+      </span>`;
+    }).join('');
+
+    return `
+    <div class="setor-card" style="border-color:${sec.color}44">
+      <div class="setor-head">
+        <div class="setor-name" style="color:${sec.color}">${sec.icon} ${sec.name}${sec.foraDaSaude ? ' <span style="font-size:9px;color:var(--muted);font-weight:600">(fora do cálculo)</span>' : ''}</div>
+        <span class="setor-pct" style="color:${cor};border-color:${cor}55">${pct !== null ? pct + '%' : '—'}</span>
+      </div>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct||0}%;background:${cor}"></div></div>
+      <div class="stats-row">
+        <div class="stat-box" style="background:rgba(74,222,128,.08);border:1px solid rgba(74,222,128,.2)">
+          <div class="lbl" style="color:#4ade80">Méd. Presentes</div>
+          <div class="val" style="color:#4ade80">${mediaPresentes}</div>
+        </div>
+        <div class="stat-box" style="background:rgba(242,87,87,.08);border:1px solid rgba(242,87,87,.2)">
+          <div class="lbl" style="color:#f25757">Méd. Ausentes</div>
+          <div class="val" style="color:#f25757">${ausMediaMes}</div>
+        </div>
+        <div class="stat-box" style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1)">
+          <div class="lbl" style="color:var(--muted)">Total</div>
+          <div class="val" style="color:var(--text)">${total}</div>
+        </div>
+      </div>
+      <div style="font-size:9px;font-weight:700;color:var(--muted);margin-bottom:6px">Membros (presença média no mês):</div>
+      <div class="member-list">${chips || '<span style="font-size:9px;color:var(--muted);font-style:italic">Nenhum membro</span>'}</div>
+    </div>`;
+  }).join('');
+}
+
+let _mostrarDiasBaixos = false;
+let _diasStatsGlobal = null;
+let _totalEqGlobal = 0;
+
+function toggleDiasBaixos() {
+  _mostrarDiasBaixos = !_mostrarDiasBaixos;
+  const btn = document.getElementById('btn-toggle-baixos');
+  if (_mostrarDiasBaixos) {
+    btn.innerHTML = '🙈 Ocultar dias &lt;50%';
+    btn.style.background = 'rgba(74,222,128,.1)';
+    btn.style.borderColor = 'rgba(74,222,128,.3)';
+    btn.style.color = '#4ade80';
+  } else {
+    btn.innerHTML = '👁 Mostrar dias &lt;50%';
+    btn.style.background = 'rgba(242,87,87,.1)';
+    btn.style.borderColor = 'rgba(242,87,87,.3)';
+    btn.style.color = '#f25757';
+  }
+  if (_diasStatsGlobal) renderTabelaDias(_diasStatsGlobal, _totalEqGlobal);
+}
+
+function renderTabelaDias(diasStats, totalEq) {
+  _diasStatsGlobal = diasStats;
+  _totalEqGlobal = totalEq;
+
+  const maxProd = Math.max(...diasStats.map(d => d.prod), 1);
+
+  // Contabiliza sobre TODOS os dias com dados (para o rodapé)
+  let somaPresentes = 0, somaProd = 0, diasContados = 0;
+  const diasAbaixo50 = [];
+  diasStats.forEach(d => {
+    if (!d.semDados) {
+      somaPresentes += d.presentes;
+      somaProd += d.prod;
+      diasContados++;
+      if (d.pct !== null && d.pct < 50) diasAbaixo50.push(d);
+    }
+  });
+
+  const ocultados = _mostrarDiasBaixos ? 0 : diasAbaixo50.length;
+
+  // Atualiza info de filtro
+  const infoEl = document.getElementById('dias-filtro-info');
+  if (infoEl) {
+    if (ocultados > 0) {
+      infoEl.innerHTML = `<span style="background:rgba(242,87,87,.1);border:1px solid rgba(242,87,87,.25);color:#f25757;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:700">${ocultados} dia${ocultados > 1 ? 's' : ''} &lt;50% ocultado${ocultados > 1 ? 's' : ''}</span>`;
+    } else if (_mostrarDiasBaixos && diasAbaixo50.length > 0) {
+      infoEl.innerHTML = `<span style="background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.25);color:#4ade80;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:700">${diasAbaixo50.length} dia${diasAbaixo50.length>1?'s':''} &lt;50% visível${diasAbaixo50.length>1?'is':''}</span>`;
+    } else {
+      infoEl.innerHTML = '';
+    }
+  }
+
+  // Gerar linhas
+  let semanaAtual = null;
+  const rows = diasStats.map(d => {
+    // Ocultar dias < 50% quando toggle está off
+    if (!_mostrarDiasBaixos && !d.semDados && d.pct !== null && d.pct < 50) return '';
+
+    const cor = healthColor(d.pct);
+    const isHoje = d.iso === new Date().toISOString().slice(0, 10);
+    const isSab = d.dayOfWeek === 'Sáb';
+    const barW = d.prod > 0 ? Math.round((d.prod / maxProd) * 100) : 0;
+
+    // Badge de saúde
+    let saude_badge;
+    if (d.semDados) {
+      saude_badge = `<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(100,116,139,.1);border:1px solid rgba(100,116,139,.2);color:#64748b;font-size:10px;font-weight:700;padding:3px 9px;border-radius:20px;font-family:var(--mono)">— sem dados</span>`;
+    } else {
+      const icon = d.pct >= 80 ? '✅' : d.pct >= 50 ? '⚠️' : '🔴';
+      saude_badge = `<span style="display:inline-flex;align-items:center;gap:4px;background:${cor}14;border:1px solid ${cor}45;color:${cor};font-size:11px;font-weight:800;padding:3px 10px;border-radius:20px;font-family:var(--mono)">${icon} ${d.pct}%</span>`;
+    }
+
+    // Mini barra de saúde
+    const saude_bar = d.semDados ? '' : `<div style="width:64px;height:4px;background:rgba(255,255,255,.07);border-radius:10px;overflow:hidden;margin-top:4px"><div style="width:${d.pct}%;height:100%;background:${cor};border-radius:10px"></div></div>`;
+
+    // Badge de produção
+    const prod_badge = d.prod > 0
+      ? `<span style="display:inline-flex;align-items:center;gap:3px;background:rgba(167,139,250,.12);border:1px solid rgba(167,139,250,.3);color:#a78bfa;font-size:11px;font-weight:800;padding:3px 9px;border-radius:20px;font-family:var(--mono)">📦 ${d.prod}</span>`
+      : `<span style="color:var(--muted);font-size:11px">—</span>`;
+
+    const rowBg  = isHoje ? 'rgba(124,58,237,.08)' : isSab ? 'rgba(148,163,184,.03)' : 'transparent';
+    const leftBorder = isHoje ? '3px solid #7c3aed' : isSab ? '3px solid rgba(148,163,184,.2)' : '3px solid transparent';
+
+    return `<tr style="border-bottom:1px solid var(--border);background:${rowBg};border-left:${leftBorder}">
+      <td style="padding:4px 14px;white-space:nowrap">
+        <span style="font-family:var(--mono);font-size:11px;color:var(--muted)">${fmtDate(d.iso)}</span>
+        ${isHoje ? '<br><span style="color:#a78bfa;font-size:9px;font-weight:800;letter-spacing:.05em">● HOJE</span>' : ''}
+      </td>
+      <td style="padding:4px 12px">
+        <span style="font-size:12px;font-weight:700;color:${isSab ? '#94a3b8' : 'var(--text)'}">${d.dayOfWeek}</span>
+      </td>
+      <td class="text-center" style="padding:4px 12px">
+        ${d.semDados
+          ? '<span style="color:var(--muted)">—</span>'
+          : `<span style="color:#4ade80;font-weight:800;font-family:var(--mono);font-size:14px">${d.presentes}</span><div style="font-size:9px;color:var(--muted)">de ${totalEq}</div>`}
+      </td>
+      <td class="text-center" style="padding:4px 12px">
+        ${d.semDados ? '<span style="color:var(--muted)">—</span>' : `<span style="color:#f25757;font-weight:700;font-family:var(--mono);font-size:13px">${d.ausentes}</span>`}
+      </td>
+      <td class="text-center" style="padding:4px 12px;color:var(--muted);font-family:var(--mono);font-size:12px">
+        ${d.semDados ? '—' : totalEq}
+      </td>
+      <td class="text-center" style="padding:4px 12px">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+          ${saude_badge}${saude_bar}
+        </div>
+      </td>
+      <td class="text-center" style="padding:4px 12px">${prod_badge}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('tabela-dias-body').innerHTML =
+    rows.trim() ||
+    `<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--muted);font-size:12px">Nenhum dia com ≥50% de presença no período.</td></tr>`;
+
+  // Rodapé — sempre sobre TODOS os dias com dados
+  const mediaSaude = diasContados ? Math.round((somaPresentes / diasContados / totalEq) * 100) : 0;
+  const corRod = healthColor(mediaSaude);
+  document.getElementById('tabela-dias-foot').innerHTML = `
+    <tr>
+      <td colspan="2" style="padding:4px 14px;color:var(--purple);font-weight:800;font-size:11px">
+        MÉDIA GERAL
+        <span style="font-weight:600;color:var(--muted)">(${diasContados} dias com dados${ocultados > 0 ? ` · ${ocultados} ocultados` : ''})</span>
+      </td>
+      <td class="text-center" style="padding:4px 12px;color:#4ade80;font-weight:800;font-family:var(--mono)">
+        ${diasContados ? (somaPresentes/diasContados).toFixed(1) : '—'}
+      </td>
+      <td class="text-center" style="padding:4px 12px;color:#f25757;font-family:var(--mono)">
+        ${diasContados ? (totalEq - somaPresentes/diasContados).toFixed(1) : '—'}
+      </td>
+      <td class="text-center" style="padding:4px 12px;color:var(--muted);font-family:var(--mono)">${totalEq}</td>
+      <td class="text-center" style="padding:4px 12px">
+        <span style="display:inline-flex;align-items:center;gap:4px;background:${corRod}14;border:1px solid ${corRod}45;color:${corRod};font-size:11px;font-weight:800;padding:3px 10px;border-radius:20px;font-family:var(--mono)">${mediaSaude}%</span>
+      </td>
+      <td class="text-center" style="padding:4px 12px;font-weight:800;color:#a78bfa;font-family:var(--mono)">📦 ${somaProd}</td>
+    </tr>`;
+}
+
+// ── EXPORTAR EXCEL ──────────────────────────────────────────────────────────
+function exportarExcel() {
+  if (!_dadosRelatorio) { alert('Gere o relatório primeiro.'); return; }
+  const { mesLabel, diasStats, setoresComStats, totalEq } = _dadosRelatorio;
+
+  // Planilha 1: Evolução Diária
+  const diasDados = [
+    ['Data', 'Dia', 'Presentes', 'Ausentes', 'Total Equipe', 'Saúde (%)', 'Liberações'],
+    ...diasStats.map(d => [
+      fmtDate(d.iso), d.dayOfWeek,
+      d.semDados ? null : d.presentes,
+      d.semDados ? null : d.ausentes,
+      d.semDados ? null : totalEq,
+      d.semDados ? null : (d.pct / 100), // /100 for Excel percentage format
+      d.prod || null
+    ])
+  ];
+
+  // Planilha 2: Por Setor
+  const setoresDados = [
+    ['Setor', 'Total Membros', 'Méd. Presentes/dia', 'Saúde Média (%)'],
+    ...setoresComStats.map(s => [
+      s.name, 
+      s.membros.length,
+      s.diasComDados > 0 ? Number((s.somaPresentes/s.diasComDados).toFixed(1)) : 0,
+      s.pctMedio !== null ? (s.pctMedio / 100) : null
+    ])
+  ];
+
+  const wb = XLSX.utils.book_new();
+  
+  const wsDias = XLSX.utils.aoa_to_sheet(diasDados);
+  // Format percentage column (F)
+  for (let R = 1; R <= diasStats.length; R++) {
+    const cell = wsDias[XLSX.utils.encode_cell({r:R, c:5})];
+    if (cell && typeof cell.v === 'number') cell.z = '0%';
+  }
+  XLSX.utils.book_append_sheet(wb, wsDias, 'Evolução Diária');
+
+  const wsSetores = XLSX.utils.aoa_to_sheet(setoresDados);
+  // Format percentage column (D)
+  for (let R = 1; R <= setoresComStats.length; R++) {
+    const cell = wsSetores[XLSX.utils.encode_cell({r:R, c:3})];
+    if (cell && typeof cell.v === 'number') cell.z = '0%';
+  }
+  XLSX.utils.book_append_sheet(wb, wsSetores, 'Por Setor');
+
+  XLSX.writeFile(wb, `relatorio-equipe-${mesLabel.replace(' ','-')}.xlsx`);
+}
+</script>
+</body>
+</html>

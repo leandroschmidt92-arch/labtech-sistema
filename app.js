@@ -225,14 +225,21 @@ function _fluxolabApplyMovLogFromSnapshot(snap) {
   _fluxolabMergeMovLogArr(arr);
 }
 
-async function _fluxolabFetchMovLogRecent() {
+// OTIMIZAÇÃO EGRESS: cache de 5 min para evitar re-fetch a cada abertura do FluxoLAB.
+// O listener Realtime já entrega inserções em tempo real; o fetch inicial é só
+// para preencher o histórico recente na primeira carga ou após longa inatividade.
+let _fluxolabMovLogLastFetch = 0;
+async function _fluxolabFetchMovLogRecent(force) {
   if (typeof _supa === 'undefined') return;
+  const now = Date.now();
+  if (!force && now - _fluxolabMovLogLastFetch < 5 * 60 * 1000) return; // cache 5 min
+  _fluxolabMovLogLastFetch = now;
   try {
     const { data, error } = await _supa
       .from('fluxolab_log')
       .select('raw')
       .order('id', { ascending: false })
-      .limit(500);
+      .limit(200); // OTIMIZAÇÃO EGRESS: reduzido de 500 → 200 (histórico recente suficiente)
     if (error) throw error;
     const arr = (data || []).map(r => r.raw).filter(Boolean);
     if (arr.length) _fluxolabMergeMovLogArr(arr);
@@ -1144,16 +1151,40 @@ const _supa   = window.supabase.createClient(_SB_URL, _SB_KEY, {
   global: { fetch: _labtechFetch },
 });
 
-// Conta abertura de canais Realtime (não cada evento WS)
+// OTIMIZAÇÃO EGRESS (REALTIME): Conta abertura de canais e implementa
+// pause/resume automático de TODOS os canais criados via _supa.channel
+// quando a aba perde o foco. Isso corta agressivamente mensagens
+// Realtime entregues a abas ocultas.
+const _appActiveChannels = new Set();
 (function _wrapSupaChannel(client) {
   if (!client || typeof client.channel !== 'function' || client._sbUsageWrapped) return;
   const orig = client.channel.bind(client);
   client.channel = function(name, opts) {
     try { _sbUsageTrackChannel(name); } catch (e) {}
-    return orig(name, opts);
+    const ch = orig(name, opts);
+    // Rastrea o canal para pausar/retomar depois
+    _appActiveChannels.add(ch);
+    return ch;
   };
   client._sbUsageWrapped = true;
 })(_supa);
+
+// Gerenciador global de background pause para canais do app.js
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      _appActiveChannels.forEach(ch => {
+        // Usa unsubscribe silencioso se possível, senao remove e o dev
+        // precisaria reconectar, mas o método oficial para suspender é unsubscribe
+        if (ch.state === 'joined') ch.unsubscribe();
+      });
+    } else {
+      _appActiveChannels.forEach(ch => {
+        if (ch.state === 'closed' || ch.state === 'left') ch.subscribe();
+      });
+    }
+  });
+}
 
 // ── Client dedicado para autenticação de operadores via PIN ──────────────
 // O token do operador é um JWT ASSINADO MANUALMENTE pela Edge Function
@@ -1206,29 +1237,43 @@ window._db = _db; // exposto globalmente para os patches de integração
 // planejamento.js e pendencias.js dependem de window._fluxolabStateOn(key, handler).
 // Sem isso o load quebrava ANTES de marcar *_Loaded=true e o save nunca gravava.
 window._fluxolabStateHandlers = window._fluxolabStateHandlers || Object.create(null);
-window._fluxolabStateChannel = window._fluxolabStateChannel || null;
+window._fluxolabStateBusSub = window._fluxolabStateBusSub || null;
 window._fluxolabStateOn = function(key, handler){
   if (!key || typeof handler !== 'function') return;
   if (!window._fluxolabStateHandlers[key]) window._fluxolabStateHandlers[key] = [];
   window._fluxolabStateHandlers[key].push(handler);
-  if (typeof _supa === 'undefined' || !_supa) return;
-  if (window._fluxolabStateChannel) return;
+  
+  if (typeof _db === 'undefined' || !_db._busSubscribe) return;
+  if (window._fluxolabStateBusSub) return;
+  
   try {
-    window._fluxolabStateChannel = _supa.channel('fluxolab_state_bus')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'fluxolab_state' }, function(payload){
-        try {
-          const k = payload && payload.new && payload.new.key;
-          if (!k) return;
-          const list = window._fluxolabStateHandlers[k] || [];
-          for (let i = 0; i < list.length; i++) {
-            try { list[i](payload); } catch (e) { console.warn('[fluxolab_state] handler', k, e); }
-          }
-        } catch (e) { console.warn('[fluxolab_state] payload', e); }
-      })
-      .subscribe();
+    // OTIMIZAÇÃO EGRESS (REALTIME): Usa o broadcast 'shim_bus' que já existe e já 
+    // possui todos os deltas do fluxolab_state. Evita abrir um 'postgres_changes' 
+    // dedicado que baixava o blob gigante inteiro em todas as abas.
+    window._fluxolabStateBusSub = _db._busSubscribe(function(ev) {
+      if (!ev) return;
+      // Trata eventos 'blob' (payload < 30KB) ou 'blob-reload' (> 30KB) emitidos pelo shim
+      if (ev.k === 'blob' || ev.k === 'blob-reload') {
+        const k = ev.key;
+        if (!k) return;
+        const list = window._fluxolabStateHandlers[k] || [];
+        if (!list.length) return;
+        
+        // Se for reload (dados > 30KB não vieram no WS para poupar egress), faz fetch via REST
+        if (ev.k === 'blob-reload') {
+          _supa.from('fluxolab_state').select('data').eq('key', k).maybeSingle().then(({data}) => {
+             const payload = { new: { key: k, data: data ? data.data : {} } };
+             for (let i = 0; i < list.length; i++) { try { list[i](payload); } catch(e){} }
+          }).catch(e => console.warn('[fluxolab_state] reload fetch', e));
+        } else {
+          // Payload veio embutido na mensagem leve do shim_bus
+          const payload = { new: { key: k, data: ev.data || {} } };
+          for (let i = 0; i < list.length; i++) { try { list[i](payload); } catch(e){} }
+        }
+      }
+    });
   } catch (e) {
-    console.warn('[fluxolab_state] canal realtime falhou:', e);
-    window._fluxolabStateChannel = null;
+    console.warn('[fluxolab_state] erro ao conectar no shim_bus:', e);
   }
 };
 
@@ -1700,7 +1745,9 @@ function startRealtimeSync(){
   // isso pesa muito na cota. Operador comum continua em Realtime (é 1 única
   // linha, atualização instantânea é barata e importante pro próprio cronômetro).
   const _usersSubscribe = (_usersPath === '/users')
-    ? (path, cb, errCb) => pollRef(_db.ref(path), 60000, cb, errCb)
+    // OTIMIZAÇÃO EGRESS: intervalo dobrado de 60s → 120s para admin/PCP.
+    // O bus Realtime já entrega mudanças em tempo real; o poll é só rede de segurança.
+    ? (path, cb, errCb) => pollRef(_db.ref(path), 120000, cb, errCb)
     : (path, cb, errCb) => _db.ref(path).on('value', cb, errCb);
   _usersListener = _usersSubscribe(_usersPath, snap => {
     if(!snap.exists()){
@@ -3937,19 +3984,21 @@ async function listarBackups(){
   const list = document.getElementById('backup-list');
   list.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:10px">Carregando backups...</div>';
   try {
-    const { data } = await _supa.from('backups').select('*').order('date_key', { ascending: false });
+    // OTIMIZAÇÃO EGRESS: seleciona só metadados — o payload completo (potencialmente MBs)
+    // só é buscado na restauração individual (restaurarBackupSupabase), não na listagem.
+    const { data } = await _supa.from('backups').select('date_key,saved_at,motivo').order('date_key', { ascending: false });
     if(!data || !data.length){
       list.innerHTML='<div class="empty">Nenhum backup encontrado.</div>';
       return;
     }
-    const backups = data.map(b => ({ dk: b.date_key, ...( b.payload || {} ), savedAt: b.saved_at, motivo: b.motivo, dateKey: b.date_key }));
+    const backups = data.map(b => ({ dk: b.date_key, savedAt: b.saved_at, motivo: b.motivo, dateKey: b.date_key }));
 
     list.innerHTML = backups.map(b => {
       const date  = b.dateKey ? b.dateKey.replace(/_/g,' ') : b.dk;
       const saved = b.savedAt ? new Date(b.savedAt).toLocaleString('pt-BR') : '—';
       const motivo= b.motivo === 'fim-expediente' ? '🌙 Fim expediente' :
                     b.motivo === 'zerar-dia-manual' ? '🗑️ Antes de zerar' : b.motivo||'—';
-      const recCount = b.history ? Object.keys(b.history).length : '?';
+      const recCount = b.history ? Object.keys(b.history).length : '—';
       return `<div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px">
         <div>
           <div style="font-weight:600;font-size:13px">${date}</div>
@@ -5892,7 +5941,8 @@ let _pecasIdsConhecidos = null; // null = primeira carga, não toca
 async function startSolicitacoesPecasListener(){
   // Carrega dados iniciais do Supabase
   async function _reloadSolicitacoes(){
-    let q = _supa.from('solicitacoes_pecas').select('*').order('ts', { ascending: false });
+    // OTIMIZAÇÃO EGRESS: projeta só colunas usadas e limita resultado a 300 linhas
+    let q = _supa.from('solicitacoes_pecas').select('id,ts,uid,lida,raw').order('ts', { ascending: false }).limit(300);
     if(currentUser && !currentUser.isAdmin) {
       q = q.eq('uid', currentUser.id);
     }
@@ -6920,7 +6970,8 @@ async function startGarantiaListener(){
   const isAdminOrPcp = currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP' || currentUser.sector === 'DESMEMBRAMENTO' || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'));
   if (!isAdminOrPcp) return;
 
-  const { data } = await _supa.from('garantia').select('*');
+  // OTIMIZAÇÃO EGRESS: id+raw são as únicas colunas usadas no cliente (as demais são mirror para queries externas).
+  const { data } = await _supa.from('garantia').select('id,raw');
   _garantiaCache = {};
   (data || []).forEach(r => { _garantiaCache[r.id] = r.raw || r; });
   if(document.getElementById('view-garantia')?.classList.contains('active')) renderGarantiaView();
@@ -7449,7 +7500,8 @@ let _maquinaPerdidaliberandoUid = null; // uid do usuário que tentou iniciar
 
 // ── Listener Supabase para maquinas_perdidas ──────────────────────────────
 async function startMaquinasPerdidasListener(){
-  const { data } = await _supa.from('maquinas_perdidas').select('*');
+  // OTIMIZAÇÃO EGRESS: id+raw são as únicas colunas usadas no cliente.
+  const { data } = await _supa.from('maquinas_perdidas').select('id,raw');
   _maquinasPerdidas = {};
   (data || []).forEach(r => { _maquinasPerdidas[r.id] = r.raw || r; });
   if(document.getElementById('view-perdidas')?.classList.contains('active')) renderPerdidasView();
@@ -12931,6 +12983,7 @@ function isPrivilegedScheduleUser(u) {
   if(!u) return false;
   if(u.isAdmin) return true;
   if(u.sector === 'QUALIDADE' || u.sector === 'DESMEMBRAMENTO' || u.sector === 'PCP') return true;
+  if(u.sector === 'VISU FLUXOLAB' || u.sector === 'VISUALIZAÇÃO' || u.sector === 'EXIBIÇÃO') return true;
   return false;
 }
 
@@ -13791,7 +13844,8 @@ async function renderPecasSubView(){
 
 // ── Listener Supabase para maquinas_a ───────────────────────────────────
 async function startMaquinasAListener(){
-  const { data } = await _supa.from('maquinas_a').select('*');
+  // OTIMIZAÇÃO EGRESS: id+raw são as únicas colunas usadas no cliente.
+  const { data } = await _supa.from('maquinas_a').select('id,raw');
   _maquinasA = {};
   (data || []).forEach(r => { _maquinasA[r.id] = r.raw || r; });
   if(document.getElementById('view-maquinas-a')?.classList.contains('active')){
@@ -14923,7 +14977,11 @@ let _qualRegistros = {};  // cache local
 async function _initQualListener(){
   async function _reloadQualReg(){
     // Busca os mais recentes e garante um limite generoso explícito para não bater no limite padrão global sem ordenação
-    const { data, error } = await _supaAuthed().from('qualidade_registros').select('*').order('ts', { ascending: false }).limit(2000);
+    // OTIMIZAÇÃO EGRESS: projeta só colunas usadas e reduz limite de 2000 → 500 linhas.
+    // A fonte de verdade é a coluna raw; as demais colunas são só mirror para queries externas.
+    const { data, error } = await _supaAuthed().from('qualidade_registros')
+      .select('id,ts,date_key,selb,equipamento,serie,sku,contador_pb,contador_color,obs,responsavel,uid,etiqueta_impressa,chamado_aberto,raw')
+      .order('ts', { ascending: false }).limit(500);
     if(error) console.warn('[Qualidade] Erro ao carregar qualidade_registros:', error);
     _qualRegistros = {};
     (data||[]).forEach(r => {
@@ -14962,7 +15020,10 @@ async function _initQualListener(){
   }
   async function _reloadQualLib(){
     // Busca os mais recentes e garante um limite generoso explícito
-    const { data, error } = await _supaAuthed().from('qualidade_liberadas').select('*').order('ts', { ascending: false }).limit(2000);
+    // OTIMIZAÇÃO EGRESS: projeta só colunas usadas e reduz limite de 2000 → 500 linhas.
+    const { data, error } = await _supaAuthed().from('qualidade_liberadas')
+      .select('id,ts,date_key,selb,equipamento,serie,sku,uid,raw')
+      .order('ts', { ascending: false }).limit(500);
     if(error) console.warn('[Qualidade] Erro ao carregar qualidade_liberadas:', error);
     window._qualLiberadas = {};
     (data||[]).forEach(r => {
@@ -19172,8 +19233,9 @@ function fluxolabStartListener() {
   // Antes: _db.ref('/fluxolab').on('value', ...) — canal Realtime aberto por
   // TODO cliente conectado, e /fluxolab é reescrito a cada movimentação de
   // SELB no chão de fábrica (alta frequência) → maior consumidor provável
-  // de Realtime Messages. Agora: atualiza a cada 4s via poll (delay OK).
-  _fluxolabListener = pollRef(_db.ref('/fluxolab'), 30000, snap => {
+  // de Realtime Messages. Agora: atualiza a cada 60s via poll (delay OK — o bus Realtime entrega mudanças em tempo real).
+  // OTIMIZAÇÃO EGRESS: intervalo dobrado de 30s → 60s (corta ~50% das requests REST de reconciliação).
+  _fluxolabListener = pollRef(_db.ref('/fluxolab'), 60000, snap => {
     _fluxolabData = snap.val() || {};
     _fluxolabScheduleSyncLiberados();
     const viewEl = document.getElementById('view-fluxolab');
@@ -24096,29 +24158,34 @@ window._bolsaoUnlock = function(groupKey){
 
 // CSS dos bolsões
 (function(){
-  if(document.getElementById('bolsoes-css')) return;
+  // Remove versão antiga se existir
+  var old = document.getElementById('bolsoes-css');
+  if(old) old.remove();
+  var old2 = document.getElementById('bolsoes-css-v2');
+  if(old2) old2.remove();
   var st = document.createElement('style');
-  st.id = 'bolsoes-css';
+  st.id = 'bolsoes-css-v2';
   st.textContent =
-    // Mantém os cinco bolsões sempre lado a lado no desktop. O auto-fit
-    // podia colapsar para uma única coluna após re-renderizações do painel.
-    '.bolsao-grid{display:grid;grid-template-columns:repeat(5,minmax(260px,1fr));gap:12px;overflow-x:auto;padding-bottom:4px}'+
-    '.bolsao-col{background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:10px;display:flex;flex-direction:column;min-height:200px;transition:background .15s}'+
-    '.bolsao-col.drop-hover{background:rgba(61,214,140,.06);border-color:rgba(61,214,140,.4)}'+
-    '.bolsao-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 4px 10px;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:8px}'+
+    // Mantém os cinco bolsões sempre lado a lado no desktop.
+    '.bolsao-grid{display:flex;flex-direction:row;flex-wrap:wrap;align-items:flex-start;gap:10px;width:100%}'+
+    '.bolsao-col{flex:1 1 240px;min-width:220px;background:transparent !important;border:none !important;border-radius:14px;padding:10px 0;display:block;transition:background .15s}'+
+    '.bolsao-col.drop-hover{background:rgba(61,214,140,.06) !important;border:1px solid rgba(61,214,140,.4) !important}'+
+    '.bolsao-head{display:flex;align-items:center;gap:10px;padding:2px 10px 8px;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:6px}'+
     '.bolsao-title{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700}'+
     '.bolsao-count{background:rgba(255,255,255,.08);border-radius:12px;font-size:10px;font-weight:800;padding:2px 8px;color:#cbd5e1}'+
-    '.bolsao-list{display:flex;flex-direction:column;gap:8px;max-height:560px;overflow-y:auto;padding-right:4px;scrollbar-width:thin}'+
-    '.bolsao-list::-webkit-scrollbar{width:6px}'+
-    '.bolsao-list::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:3px}'+
-    '.bolsao-card{background:var(--bg2);border:1px solid rgba(245,166,35,.4);border-left:4px solid var(--warn);border-radius:12px;padding:12px;cursor:grab;transition:transform .12s,box-shadow .12s}'+
-    '.bolsao-card:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(0,0,0,.35)}'+
-    '.bolsao-card.locked{border-style:dashed;border-color:rgba(96,165,250,.55);box-shadow:inset 0 0 0 1px rgba(96,165,250,.15)}'+
-    '.bolsao-card.locked-stock{border-style:dashed;border-color:rgba(167,139,250,.55);box-shadow:inset 0 0 0 1px rgba(167,139,250,.15)}'+
+    '.bolsao-list{display:flex;flex-direction:column;gap:8px;max-height:none;overflow:visible}'+
+    '.bolsao-card{display:block;background:var(--bg2);border:1px solid rgba(245,166,35,.28);border-left:4px solid var(--warn);border-radius:10px;padding:10px 12px;cursor:grab;transition:background .12s,box-shadow .12s;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.3)}'+
+    '.bs-top{display:flex;align-items:center;justify-content:space-between;gap:8px}'+
+    '.bolsao-card:hover{background:var(--bg3);box-shadow:0 4px 14px rgba(0,0,0,.28)}'+
+    '.bolsao-card.locked{border-style:dashed;border-left-style:solid;border-color:rgba(96,165,250,.55);border-left-color:#60a5fa}'+
+    '.bolsao-card.locked-stock{border-style:dashed;border-left-style:solid;border-color:rgba(167,139,250,.55);border-left-color:#a78bfa}'+
     '.bolsao-card.drag-ghost{opacity:.45}'+
-    '.bolsao-lock-btn{background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.45);border-radius:6px;color:#93c5fd;font-size:10px;font-weight:700;padding:2px 8px;cursor:pointer}'+
-    '.bolsao-col-stock{background:rgba(167,139,250,.04);border-color:rgba(167,139,250,.25);border-style:dashed}'+
-    '.bolsao-col-stock.drop-hover{background:rgba(167,139,250,.10);border-color:rgba(167,139,250,.5)}';
+    '.bolsao-cell{min-width:0}'+
+    '.bolsao-cell-pecas{display:flex;flex-direction:column;gap:6px;min-width:0}'+
+    '.bolsao-lock-btn{background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.45);border-radius:6px;color:#93c5fd;font-size:10px;font-weight:700;padding:2px 8px;cursor:pointer;white-space:nowrap}'+
+    '.bolsao-col-stock{background:transparent !important;border:none !important}'+
+    '.bolsao-col-stock.drop-hover{background:rgba(167,139,250,.10) !important;border:1px dashed rgba(167,139,250,.5) !important}'+
+    '.bolsao-empty{font-size:11px;color:var(--muted);text-align:center;padding:10px 0;opacity:.6}';
   document.head.appendChild(st);
 })();
 
@@ -24161,12 +24228,12 @@ window._renderSolicitacoesPanel = function(panelId, q){
       : '';
     var emptyColsHtml = window._BOLSOES_PECAS.map(function(b){
       var colExtraCls = b.manual ? ' bolsao-col-stock' : '';
-      return '<div class="bolsao-col'+colExtraCls+'" style="flex:1 1 0;min-width:0">'
+      return '<div class="bolsao-col'+colExtraCls+'" style="background:transparent;border:none">'
         + '<div class="bolsao-head">'
           + '<div class="bolsao-title" style="color:'+b.color+'">'+b.icon+' '+b.label+'</div>'
           + '<span class="bolsao-count">0</span>'
         + '</div>'
-        + '<div class="bolsao-list"><div style="font-size:11px;color:var(--muted);text-align:center;padding:14px 0;opacity:.6">Vazio</div></div>'
+        + '<div class="bolsao-list"><div class="bolsao-empty">Vazio</div></div>'
       + '</div>';
     }).join('');
     panel.innerHTML = ''
@@ -24185,7 +24252,7 @@ window._renderSolicitacoesPanel = function(panelId, q){
           + '</label>'
         + '</div>'
       + '</div>'
-      + '<div class="bolsao-grid" style="display:flex!important;flex-flow:row nowrap!important;align-items:stretch!important;gap:12px;width:100%!important;overflow-x:auto!important">' + emptyColsHtml + '</div>';
+      + '<div class="bolsao-grid">' + emptyColsHtml + '</div>';
     return;
   }
 
@@ -24222,7 +24289,7 @@ window._renderSolicitacoesPanel = function(panelId, q){
     byBolsao[bk].sort(function(a,b){ return (a.group.minTs||0) - (b.group.minTs||0); });
   });
 
-  function renderCard(entry){
+  function renderCard(entry, bucket){
     var gk         = entry.key;
     var groupItems = entry.group.items;
     var first      = groupItems[0][1];
@@ -24233,6 +24300,10 @@ window._renderSolicitacoesPanel = function(panelId, q){
     var lockBtn    = entry.locked
       ? '<button class="bolsao-lock-btn" onclick="event.stopPropagation();window._bolsaoUnlock(\''+gk.replace(/'/g,"\\'")+'\')">🔒 travado · liberar</button>'
       : '';
+    // Cor do bolsão (idade) aplicada à borda do card — cada coluna fica
+    // visualmente distinta (verde/amarelo/laranja/vermelho/roxo) em vez de
+    // todos os cards ficarem com a mesma cor laranja.
+    var bColor = (bucket && bucket.color) || 'var(--warn)';
 
     var itemsHtml = groupItems.map(function(en){
       var id  = en[0];
@@ -24258,10 +24329,10 @@ window._renderSolicitacoesPanel = function(panelId, q){
       })();
 
       var btnHtml = isAdmin ? (
-        '<div style="display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap" onmousedown="event.stopPropagation()">'
+        '<div style="display:flex;align-items:center;gap:6px;margin-top:0;flex-wrap:wrap" onmousedown="event.stopPropagation()">'
           + '<input id="bipe-' + safeId + '" type="text" placeholder="🔍 Bipe o código..." '
             + 'onmousedown="event.stopPropagation()" '
-            + 'style="flex:1;min-width:120px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);border-radius:8px;color:var(--text);font-family:var(--font);font-size:12px;padding:6px 10px;outline:none" '
+            + 'style="width:150px;flex:0 0 auto;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);border-radius:8px;color:var(--text);font-family:var(--font);font-size:12px;padding:6px 10px;outline:none" '
             + 'onkeydown="if(event.key===\'Enter\'){ event.preventDefault(); window.entregarPecaComCodigo(\'' + safeId + '\',\'' + safeSelb + '\'); }" />'
           + '<button onclick="event.stopPropagation();window.entregarPecaComCodigo(\'' + safeId + '\',\'' + safeSelb + '\')" '
             + 'style="background:rgba(61,214,140,.12);border:1px solid rgba(61,214,140,.45);border-radius:8px;color:var(--accent2);font-size:11px;font-weight:700;padding:6px 12px;cursor:pointer;white-space:nowrap">✓ Entregar</button>'
@@ -24270,34 +24341,33 @@ window._renderSolicitacoesPanel = function(panelId, q){
         + '</div>'
       ) : '';
 
-      return '<div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:8px 10px;margin-top:6px">'
-        + '<div style="display:flex;align-items:center;gap:6px">'
-          + '<span style="font-size:13px">🔩</span>'
-          + '<span style="font-size:12px;font-weight:700;color:var(--warn)">' + (p.peca||'—') + qtdLabel + '</span>'
+      return '<div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:9px;padding:6px 9px;margin-top:6px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">'
+        + '<div style="min-width:0;flex:1 1 160px">'
+          + '<div style="display:flex;align-items:center;gap:6px">'
+            + '<span style="font-size:12px">🔩</span>'
+            + '<span style="font-size:12px;font-weight:700;color:var(--warn)">' + (p.peca||'—') + qtdLabel + '</span>'
+          + '</div>'
+          + obsHtml
         + '</div>'
-        + obsHtml
         + btnHtml
       + '</div>';
     }).join('');
 
     return '<div class="bolsao-card'+lockedCls+'" draggable="true" '
+      + 'style="border-left-color:'+bColor+';border-color:'+bColor+'40" '
       + 'ondragstart="window._bolsaoDragStart(event,\''+gk.replace(/'/g,"\\'")+'\')" '
       + 'ondragend="window._bolsaoDragEnd(event)">'
-      + '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">'
-        + '<div>'
-          + '<div style="display:flex;align-items:center;gap:6px">'
-            + '<div style="font-family:var(--mono);font-weight:800;color:var(--accent);font-size:15px">' + selb + '</div>'
-            + '<button data-selb="' + selb.replace(/"/g,'&quot;') + '" onmousedown="event.stopPropagation()" onclick="event.stopPropagation();window._copiarSelb(this.dataset.selb,this)" title="Copiar SELB" style="background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:5px;color:var(--muted);font-size:10px;font-weight:700;padding:2px 7px;cursor:pointer;line-height:1;flex-shrink:0;transition:all .15s">⎘</button>'
-          + '</div>'
-          + '<div style="font-size:11px;color:var(--text);font-weight:600;margin-top:2px">' + (first.nome||'—') + ' <span style="color:var(--muted);font-weight:400">· ' + (first.setor||'—') + '</span></div>'
-          + (first.equipamento ? '<div style="font-size:10px;color:var(--muted);margin-top:2px">' + first.equipamento + '</div>' : '')
+      + '<div class="bs-top">'
+        + '<div style="display:flex;align-items:center;gap:5px;min-width:0">'
+          + '<span style="font-family:var(--mono);font-weight:800;color:var(--accent);font-size:14px">' + selb + '</span>'
+          + '<button data-selb="' + selb.replace(/"/g,'&quot;') + '" onmousedown="event.stopPropagation()" onclick="event.stopPropagation();window._copiarSelb(this.dataset.selb,this)" title="Copiar SELB" style="background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:5px;color:var(--muted);font-size:10px;font-weight:700;padding:1px 6px;cursor:pointer;line-height:1;flex-shrink:0">⎘</button>'
         + '</div>'
-        + '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">'
-          + '<span style="font-size:10px;color:var(--muted);background:var(--bg3);padding:2px 7px;border-radius:6px;white-space:nowrap">⏱ ' + tempoAtras + '</span>'
-          + lockBtn
-        + '</div>'
+        + '<span style="font-size:10px;color:var(--muted);white-space:nowrap;flex-shrink:0">⏱ ' + tempoAtras + '</span>'
       + '</div>'
-      + itemsHtml
+      + (lockBtn ? '<div style="display:flex;justify-content:flex-end;margin-top:2px">' + lockBtn + '</div>' : '')
+      + '<div class="bs-name" style="font-size:12px;color:var(--text);font-weight:700;margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (first.nome||'—') + (first.setor ? ' · ' + first.setor : '') + '</div>'
+      + '<div class="bs-equip" style="font-size:10px;color:var(--muted);line-height:1.35;margin-top:2px">' + (first.equipamento||'—') + '</div>'
+      + '<div class="bolsao-cell-pecas" style="margin-top:6px">' + itemsHtml + '</div>'
     + '</div>';
   }
 
@@ -24306,7 +24376,7 @@ window._renderSolicitacoesPanel = function(panelId, q){
     var visible = arr.slice(0, 3);    // mostra 3; o restante fica acessível pelo scroll
     var listHtml = arr.map(renderCard).join('') || '<div style="font-size:11px;color:var(--muted);text-align:center;padding:14px 0;opacity:.6">Vazio</div>';
     var colExtraCls = b.manual ? ' bolsao-col-stock' : '';
-    return '<div class="bolsao-col' + colExtraCls + '" style="flex:1 1 0;min-width:0" '
+    return '<div class="bolsao-col' + colExtraCls + '" style="flex:1 1 0;min-width:0;background:transparent;border:none" '
       + 'ondragover="window._bolsaoDragOver(event);this.classList.add(\'drop-hover\')" '
       + 'ondragleave="this.classList.remove(\'drop-hover\')" '
       + 'ondrop="this.classList.remove(\'drop-hover\');window._bolsaoDrop(event,\''+b.key+'\')">'
@@ -24364,17 +24434,18 @@ window._renderSolicitacoesPanel = function(panelId, q){
   // colunas seguintes e transformá-las em uma lista dentro do bolsão anterior.
   var gridEl = document.createElement('div');
   gridEl.className = 'bolsao-grid';
-  gridEl.style.cssText = 'display:flex!important;flex-flow:row nowrap!important;align-items:stretch!important;gap:12px;width:100%!important;overflow-x:auto!important';
+  gridEl.style.cssText = 'display:flex;flex-direction:row;flex-wrap:wrap;align-items:flex-start;gap:10px;width:100%';
   window._BOLSOES_PECAS.forEach(function(b){
     var arr = byBolsao[b.key] || [];
-    var listHtml = arr.map(renderCard).join('') || '<div style="font-size:11px;color:var(--muted);text-align:center;padding:14px 0;opacity:.6">Vazio</div>';
+    var listHtml = arr.map(function(entry){ return renderCard(entry, b); }).join('') || '<div class="bolsao-empty">Vazio</div>';
     var colEl = document.createElement('div');
     colEl.className = 'bolsao-col' + (b.manual ? ' bolsao-col-stock' : '');
-    colEl.style.cssText = 'flex:1 1 0;min-width:0';
+    colEl.style.cssText = 'flex:1 1 240px;min-width:220px;background:transparent;border:none;';
     colEl.setAttribute('ondragover', "window._bolsaoDragOver(event);this.classList.add('drop-hover')");
     colEl.setAttribute('ondragleave', "this.classList.remove('drop-hover')");
     colEl.setAttribute('ondrop', "this.classList.remove('drop-hover');window._bolsaoDrop(event,'" + b.key + "')");
-    colEl.innerHTML = '<div class="bolsao-head"><div class="bolsao-title" style="color:' + b.color + '">' + b.icon + ' ' + b.label + '</div><span class="bolsao-count">' + arr.length + (arr.length > 3 ? ' · rolar' : '') + '</span></div><div class="bolsao-list">' + listHtml + '</div>';
+    colEl.innerHTML = '<div class="bolsao-head"><div class="bolsao-title" style="color:' + b.color + '">' + b.icon + ' ' + b.label + '</div><span class="bolsao-count">' + arr.length + '</span></div>'
+      + '<div class="bolsao-list">' + listHtml + '</div>';
     gridEl.appendChild(colEl);
   });
   panel.appendChild(gridEl);
