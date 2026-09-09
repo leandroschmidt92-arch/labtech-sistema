@@ -326,10 +326,10 @@ function createSupabaseCompatShim(supa) {
   const BUS_TOPIC = 'shim_bus';
   // Reconciliação periódica (rede de segurança caso um evento Realtime se perca).
   // Era 90s por assinatura; com ~13 assinaturas ativas isso sozinho gerava
-  // centenas de requisições por dia em cada aba aberta. 180s + pausa quando a
-  // aba está em segundo plano cortam esse tráfego pela metade ou mais, sem
+  // centenas de requisições por dia em cada aba aberta. 300s + pausa quando a
+  // aba está em segundo plano cortam esse tráfego drasticamente, sem
   // perder consistência (o Realtime continua entregando as mudanças na hora).
-  const RECONCILE_MS = 180000;
+  const RECONCILE_MS = 300000;
   const BLOB_BROADCAST_MAX = 120000; // acima disso manda "reload" em vez do JSON
 
   let _bus = null;

@@ -1202,11 +1202,76 @@ function _supaAuthed(){ return _operatorAccessToken ? _supaOp : _supa; }
 const _db = createSupabaseCompatShim(_supa);
 window._db = _db; // exposto globalmente para os patches de integração
 
+// ── OTIMIZAÇÃO REALTIME: Gerenciador de pausa em background para canais diretos ──
+// Os canais da Camada 2 (fluxolab_state_bus, app_config_bus, pecas_bus,
+// garantia, maquinas_perdidas, maquinas_a, qualidade_bus) não passam pelo
+// shim e não tinham pausa em background. Abas minimizadas ou em segundo
+// plano continuavam recebendo mensagens Realtime indefinidamente — causa
+// principal do alto consumo (86% do egresso). Este gerenciador replica o
+// mesmo comportamento de pausa/retomada já implementado no shim.
+const _rtPauseManager = (() => {
+  const PAUSE_AFTER_MS = 30000; // igual ao shim
+  const _channels = new Set();  // Set de entries { ref, name, reopen }
+  let _bgTimer = null;
+  let _paused = false;
+
+  function _pauseAll() {
+    if (_paused) return;
+    _paused = true;
+    _channels.forEach(entry => {
+      if (entry.ref) {
+        try { _supa.removeChannel(entry.ref); } catch(e) {}
+        entry.ref = null;
+      }
+    });
+  }
+
+  function _resumeAll() {
+    if (!_paused) return;
+    _paused = false;
+    _channels.forEach(entry => {
+      if (!entry.ref && entry.reopen) {
+        try { entry.ref = entry.reopen(); } catch(e) {
+          console.warn('[rtPause] falha ao reabrir canal', entry.name, e);
+        }
+      }
+    });
+  }
+
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        clearTimeout(_bgTimer);
+        _bgTimer = setTimeout(_pauseAll, PAUSE_AFTER_MS);
+      } else {
+        clearTimeout(_bgTimer);
+        _resumeAll();
+      }
+    });
+  }
+
+  // Registra um canal gerenciado. `reopen` é uma função que cria e
+  // faz subscribe do canal, retornando a referência do canal.
+  function register(name, reopen) {
+    const entry = { name, ref: null, reopen };
+    entry.ref = reopen(); // abre imediatamente
+    _channels.add(entry);
+    return {
+      setRef(ch) { entry.ref = ch; },
+      unregister() { _channels.delete(entry); }
+    };
+  }
+
+  return { register, isPaused: () => _paused };
+})();
+
 // ── Canal único Realtime para fluxolab_state (planejamento / pendências / etc.) ──
 // planejamento.js e pendencias.js dependem de window._fluxolabStateOn(key, handler).
 // Sem isso o load quebrava ANTES de marcar *_Loaded=true e o save nunca gravava.
 window._fluxolabStateHandlers = window._fluxolabStateHandlers || Object.create(null);
 window._fluxolabStateChannel = window._fluxolabStateChannel || null;
+// _rtPauseManager handle para pausar/retomar em background
+var _fluxolabStateRtHandle = null;
 window._fluxolabStateOn = function(key, handler){
   if (!key || typeof handler !== 'function') return;
   if (!window._fluxolabStateHandlers[key]) window._fluxolabStateHandlers[key] = [];
@@ -1214,18 +1279,24 @@ window._fluxolabStateOn = function(key, handler){
   if (typeof _supa === 'undefined' || !_supa) return;
   if (window._fluxolabStateChannel) return;
   try {
-    window._fluxolabStateChannel = _supa.channel('fluxolab_state_bus')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'fluxolab_state' }, function(payload){
-        try {
-          const k = payload && payload.new && payload.new.key;
-          if (!k) return;
-          const list = window._fluxolabStateHandlers[k] || [];
-          for (let i = 0; i < list.length; i++) {
-            try { list[i](payload); } catch (e) { console.warn('[fluxolab_state] handler', k, e); }
-          }
-        } catch (e) { console.warn('[fluxolab_state] payload', e); }
-      })
-      .subscribe();
+    function _openFluxolabStateCh() {
+      const ch = _supa.channel('fluxolab_state_bus')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'fluxolab_state' }, function(payload){
+          try {
+            const k = payload && payload.new && payload.new.key;
+            if (!k) return;
+            const list = window._fluxolabStateHandlers[k] || [];
+            for (let i = 0; i < list.length; i++) {
+              try { list[i](payload); } catch (e) { console.warn('[fluxolab_state] handler', k, e); }
+            }
+          } catch (e) { console.warn('[fluxolab_state] payload', e); }
+        })
+        .subscribe();
+      window._fluxolabStateChannel = ch;
+      if (_fluxolabStateRtHandle) _fluxolabStateRtHandle.setRef(ch);
+      return ch;
+    }
+    _fluxolabStateRtHandle = _rtPauseManager.register('fluxolab_state_bus', _openFluxolabStateCh);
   } catch (e) {
     console.warn('[fluxolab_state] canal realtime falhou:', e);
     window._fluxolabStateChannel = null;
@@ -1245,16 +1316,23 @@ window._fluxolabStateOn = function(key, handler){
 // não uma chamada .on() nova no canal do Supabase.
 var _appConfigHandlers = Object.create(null);
 var _appConfigChannel = null;
+var _appConfigRtHandle = null;
 function _appConfigOn(key, handler) {
   _appConfigHandlers[key] = handler;
   if (!_appConfigChannel) {
-    _appConfigChannel = _supa.channel('app_config_bus')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_config' }, (payload) => {
-        const k = payload && payload.new && payload.new.key;
-        const h = k && _appConfigHandlers[k];
-        if (h) h(payload);
-      })
-      .subscribe();
+    function _openAppConfigCh() {
+      const ch = _supa.channel('app_config_bus')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'app_config' }, (payload) => {
+          const k = payload && payload.new && payload.new.key;
+          const h = k && _appConfigHandlers[k];
+          if (h) h(payload);
+        })
+        .subscribe();
+      _appConfigChannel = ch;
+      if (_appConfigRtHandle) _appConfigRtHandle.setRef(ch);
+      return ch;
+    }
+    _appConfigRtHandle = _rtPauseManager.register('app_config_bus', _openAppConfigCh);
   }
 }
 
@@ -5963,15 +6041,16 @@ async function startSolicitacoesPecasListener(){
   await _reloadConfigPecas();
   const isAdminOrPcp = currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP' || currentUser.sector === 'DESMEMBRAMENTO' || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'));
 
-  const _pecasBusBuilder = _supa.channel('pecas_bus')
-    .on('postgres_changes', solFilterConfig, _applyPecasDelta);
-
-  if (isAdminOrPcp) {
-    _pecasBusBuilder.on('postgres_changes', { event: '*', schema: 'public', table: 'config_pecas' }, async () => {
-      await _reloadConfigPecas();
-    });
-  }
-  _pecasBusBuilder.subscribe();
+  _rtPauseManager.register('pecas_bus', function _openPecasBusCh() {
+    const builder = _supa.channel('pecas_bus')
+      .on('postgres_changes', solFilterConfig, _applyPecasDelta);
+    if (isAdminOrPcp) {
+      builder.on('postgres_changes', { event: '*', schema: 'public', table: 'config_pecas' }, async () => {
+        await _reloadConfigPecas();
+      });
+    }
+    return builder.subscribe();
+  });
 }
 
 async function _reloadConfigPecas() {
@@ -6919,19 +6998,22 @@ async function startGarantiaListener(){
   _garantiaCache = {};
   (data || []).forEach(r => { _garantiaCache[r.id] = r.raw || r; });
   if(document.getElementById('view-garantia')?.classList.contains('active')) renderGarantiaView();
-  _supa.channel('garantia')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'garantia' }, (payload) => {
-      // OTIMIZAÇÃO: usa o payload do próprio evento Realtime em vez de
-      // refazer um SELECT * completo a cada mudança — isso custava 1 request
-      // extra POR cliente admin/PCP conectado, a CADA insert/update/delete.
-      if (payload.eventType === 'DELETE') {
-        delete _garantiaCache[payload.old.id];
-      } else {
-        _garantiaCache[payload.new.id] = payload.new.raw || payload.new;
-      }
-      if(document.getElementById('view-garantia')?.classList.contains('active')) renderGarantiaView();
-    })
-    .subscribe();
+
+  _rtPauseManager.register('garantia', function _openGarantiaCh() {
+    return _supa.channel('garantia')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'garantia' }, (payload) => {
+        // OTIMIZAÇÃO: usa o payload do próprio evento Realtime em vez de
+        // refazer um SELECT * completo a cada mudança — isso custava 1 request
+        // extra POR cliente admin/PCP conectado, a CADA insert/update/delete.
+        if (payload.eventType === 'DELETE') {
+          delete _garantiaCache[payload.old.id];
+        } else {
+          _garantiaCache[payload.new.id] = payload.new.raw || payload.new;
+        }
+        if(document.getElementById('view-garantia')?.classList.contains('active')) renderGarantiaView();
+      })
+      .subscribe();
+  });
 }
 
 // ── Visibilidade dos controles admin ────────────────────────────────────────
@@ -7448,22 +7530,24 @@ async function startMaquinasPerdidasListener(){
   _maquinasPerdidas = {};
   (data || []).forEach(r => { _maquinasPerdidas[r.id] = r.raw || r; });
   if(document.getElementById('view-perdidas')?.classList.contains('active')) renderPerdidasView();
-  
+
   const isAdminOrPcp = currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP' || currentUser.sector === 'DESMEMBRAMENTO' || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'));
   if (isAdminOrPcp) {
-    _supa.channel('maquinas_perdidas')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'maquinas_perdidas' }, (payload) => {
-        // OTIMIZAÇÃO: atualiza o cache local direto do payload do evento,
-        // sem refazer SELECT * a cada mudança (custava 1 request extra por
-        // cliente admin/PCP conectado, a cada insert/update/delete).
-        if (payload.eventType === 'DELETE') {
-          delete _maquinasPerdidas[payload.old.id];
-        } else {
-          _maquinasPerdidas[payload.new.id] = payload.new.raw || payload.new;
-        }
-        if(document.getElementById('view-perdidas')?.classList.contains('active')) renderPerdidasView();
-      })
-      .subscribe();
+    _rtPauseManager.register('maquinas_perdidas', function _openMaquinasPerdidasCh() {
+      return _supa.channel('maquinas_perdidas')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'maquinas_perdidas' }, (payload) => {
+          // OTIMIZAÇÃO: atualiza o cache local direto do payload do evento,
+          // sem refazer SELECT * a cada mudança (custava 1 request extra por
+          // cliente admin/PCP conectado, a cada insert/update/delete).
+          if (payload.eventType === 'DELETE') {
+            delete _maquinasPerdidas[payload.old.id];
+          } else {
+            _maquinasPerdidas[payload.new.id] = payload.new.raw || payload.new;
+          }
+          if(document.getElementById('view-perdidas')?.classList.contains('active')) renderPerdidasView();
+        })
+        .subscribe();
+    });
   }
 }
 
@@ -13793,25 +13877,27 @@ async function startMaquinasAListener(){
     const subMaAtivo = document.getElementById('subview-maquinas-a').style.display !== 'none';
     if(subMaAtivo) renderMaquinasAView();
   }
-  
+
   const isAdminOrPcp = currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP' || currentUser.sector === 'DESMEMBRAMENTO' || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'));
   if (isAdminOrPcp) {
-    _supa.channel('maquinas_a')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'maquinas_a' }, (payload) => {
-        // OTIMIZAÇÃO: atualiza o cache local direto do payload do evento,
-        // sem refazer SELECT * a cada mudança (custava 1 request extra por
-        // cliente admin/PCP conectado, a cada insert/update/delete).
-        if (payload.eventType === 'DELETE') {
-          delete _maquinasA[payload.old.id];
-        } else {
-          _maquinasA[payload.new.id] = payload.new.raw || payload.new;
-        }
-        if(document.getElementById('view-maquinas-a')?.classList.contains('active')){
-          const subMaAtivo = document.getElementById('subview-maquinas-a').style.display !== 'none';
-          if(subMaAtivo) renderMaquinasAView();
-        }
-      })
-      .subscribe();
+    _rtPauseManager.register('maquinas_a', function _openMaquinasACh() {
+      return _supa.channel('maquinas_a')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'maquinas_a' }, (payload) => {
+          // OTIMIZAÇÃO: atualiza o cache local direto do payload do evento,
+          // sem refazer SELECT * a cada mudança (custava 1 request extra por
+          // cliente admin/PCP conectado, a cada insert/update/delete).
+          if (payload.eventType === 'DELETE') {
+            delete _maquinasA[payload.old.id];
+          } else {
+            _maquinasA[payload.new.id] = payload.new.raw || payload.new;
+          }
+          if(document.getElementById('view-maquinas-a')?.classList.contains('active')){
+            const subMaAtivo = document.getElementById('subview-maquinas-a').style.display !== 'none';
+            if(subMaAtivo) renderMaquinasAView();
+          }
+        })
+        .subscribe();
+    });
   }
 }
 
@@ -15045,10 +15131,12 @@ async function _initQualListener(){
     if (libPanel && libPanel.style.display !== 'none' && typeof _qualRenderLiberadasList === 'function') _qualRenderLiberadasList();
   }
 
-  _supa.channel('qualidade_bus')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'qualidade_registros' }, _applyQualRegDelta)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'qualidade_liberadas' }, _applyQualLibDelta)
-    .subscribe();
+  _rtPauseManager.register('qualidade_bus', function _openQualidadeBusCh() {
+    return _supa.channel('qualidade_bus')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'qualidade_registros' }, _applyQualRegDelta)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'qualidade_liberadas' }, _applyQualLibDelta)
+      .subscribe();
+  });
 }
 
 // Garante execução do listener na inicialização da página
@@ -19167,8 +19255,9 @@ function fluxolabStartListener() {
   // Antes: _db.ref('/fluxolab').on('value', ...) — canal Realtime aberto por
   // TODO cliente conectado, e /fluxolab é reescrito a cada movimentação de
   // SELB no chão de fábrica (alta frequência) → maior consumidor provável
-  // de Realtime Messages. Agora: atualiza a cada 4s via poll (delay OK).
-  _fluxolabListener = pollRef(_db.ref('/fluxolab'), 30000, snap => {
+  // de Realtime Messages. Agora: atualiza a cada 60s via poll (delay aceitável;
+  // o anti-flicker já evita re-render quando nada mudou).
+  _fluxolabListener = pollRef(_db.ref('/fluxolab'), 60000, snap => {
     _fluxolabData = snap.val() || {};
     _fluxolabScheduleSyncLiberados();
     const viewEl = document.getElementById('view-fluxolab');
