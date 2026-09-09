@@ -330,7 +330,7 @@ function createSupabaseCompatShim(supa) {
   // aba está em segundo plano cortam esse tráfego pela metade ou mais, sem
   // perder consistência (o Realtime continua entregando as mudanças na hora).
   const RECONCILE_MS = 180000;
-  const BLOB_BROADCAST_MAX = 30000; // OTIMIZAÇÃO EGRESS: Acima de 30KB manda "reload" (via REST), economiza WebSocket
+  const BLOB_BROADCAST_MAX = 120000; // acima disso manda "reload" em vez do JSON
 
   let _bus = null;
   const _busHandlers = new Set();
@@ -931,8 +931,6 @@ function createSupabaseCompatShim(supa) {
     fluxolabMoveSelb,
     fluxolabRemoveSelbEverywhere,
     fluxolabDedupeSelbs,
-    // Expõe inscrição bruta no shim_bus para o app.js parar de usar canais postgres_changes separados
-    _busSubscribe: busSubscribe,
     // Diagnóstico: quantos canais Realtime estão realmente abertos.
     _debugChannels() {
       return { modo: USE_PG_CHANGES ? 'postgres_changes' : 'broadcast-bus',

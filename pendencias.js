@@ -13,7 +13,7 @@ var _pendExpandedRows = typeof _pendExpandedRows !== 'undefined' ? _pendExpanded
 
 // Mínimo de linhas: a tabela agora cresce e ENCOLHE conforme os registros.
 const PEND_ROW_MIN = { mistas: 1, complexas: 1 };
-const PEND_FIELDS = ['modelo', 'qtd_wms', 'sugestao', 'obs', 'pecas', 'giroflex'];
+const PEND_FIELDS = ['modelo', 'qtd_wms', 'sugestao', 'obs', 'pecas'];
 
 // ─── Definição das colunas (largura, largura mínima e possibilidade de ocultar) ───
 const PEND_COL_DEFS = [
@@ -419,7 +419,7 @@ async function fluxolabLoadPendencias() {
     if (!Array.isArray(_fluxolabPendenciasState[t])) _fluxolabPendenciasState[t] = [];
     pendTrimRows(t);
     while (_fluxolabPendenciasState[t].length < (PEND_ROW_MIN[t] || 1)) {
-      _fluxolabPendenciasState[t].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '', giroflex: '' });
+      _fluxolabPendenciasState[t].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
     }
   });
 
@@ -506,7 +506,7 @@ function fluxolabApplyRemoteSyncPend(remoteData) {
     if (!remoteData[t]) return;
 
     for (let i = 0; i < remoteData[t].length; i++) {
-      if (!_fluxolabPendenciasState[t][i]) _fluxolabPendenciasState[t][i] = { modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '', giroflex: '' };
+      if (!_fluxolabPendenciasState[t][i]) _fluxolabPendenciasState[t][i] = { modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' };
 
       const remoteRow = remoteData[t][i];
       const localRow = _fluxolabPendenciasState[t][i];
@@ -515,15 +515,16 @@ function fluxolabApplyRemoteSyncPend(remoteData) {
         const val = remoteRow[f] || '';
         localRow[f] = val; // Atualiza a memória local
 
+        // Atualiza a tela discretamente, APENAS se o usuário não estiver digitando neste campo agora
         const inpId = `pnd-${t}-r${i}-${f}`;
         const inpElem = document.getElementById(inpId);
         if (inpElem && document.activeElement !== inpElem) {
           inpElem.value = val;
+
+          // Se for modelo, precisa recalcular Checklists/Bolsões visualmente
           if (f === 'modelo') {
             needRender = true;
           }
-        } else if (f === 'giroflex') {
-          needRender = true;
         }
       });
     }
@@ -623,7 +624,7 @@ function fluxolabUpdateRowElemPend(elem, tableName, field) {
   };
 
   if (isLastRow && rowHasData) {
-    _fluxolabPendenciasState[tableName].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '', giroflex: '' });
+    _fluxolabPendenciasState[tableName].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
     reRender();
     return;
   }
@@ -655,7 +656,7 @@ function fluxolabUpdateRowElemPend(elem, tableName, field) {
 function fluxolabClearPendTable(tableName) {
   const label = tableName === 'mistas' ? 'Pendências Mistas' : 'Complexas';
   if (confirm(`Tem certeza que deseja limpar a lista ${label}? Os ajustes de tamanho da tabela não serão perdidos.`)) {
-    _fluxolabPendenciasState[tableName] = [{ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '', giroflex: '' }];
+    _fluxolabPendenciasState[tableName] = [{ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' }];
     fluxolabSavePendenciasDebounced();
     fluxolabRenderPendencias();
   }
@@ -1099,27 +1100,8 @@ function updateActiveUsersInTables() {
   });
 }
 
-function fluxolabToggleGiroflex(tableName, idx) {
-  if (!_fluxolabPendenciasState[tableName] || !_fluxolabPendenciasState[tableName][idx]) return;
-  const curr = _fluxolabPendenciasState[tableName][idx].giroflex;
-  _fluxolabPendenciasState[tableName][idx].giroflex = curr === '1' ? '' : '1';
-  fluxolabSavePendenciasDebounced();
-  fluxolabRenderPendencias();
-}
-
 // Helpers de cálculo — reaproveita as funções já existentes em planejamento.js
 // (fluxolabPlanGetChecklistStats / fluxolabPlanGetBolsaoStats)
-
-// Injetar os keyframes do giroflex se ainda não existirem
-if (!document.getElementById('giroflex-style')) {
-  const style = document.createElement('style');
-  style.id = 'giroflex-style';
-  style.innerHTML = `@keyframes giroflexAnim {
-    0% { transform: scale(1); filter: drop-shadow(0 0 2px red) brightness(1); }
-    100% { transform: scale(1.3); filter: drop-shadow(0 0 10px red) brightness(1.5); }
-  }`;
-  document.head.appendChild(style);
-}
 
 function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
   const rows = _fluxolabPendenciasState[tableName] || [];
@@ -1316,13 +1298,10 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
       ? `<td style="${tdStyle};color:var(--muted);font-size:14px${hid('obs')}">—</td>
          <td style="${tdLastStyle};color:var(--muted);font-size:14px${hid('pecas')}">—</td>`
       : `<td style="${tdStyle};padding:4px${hid('obs')}">
-           <div style="display:flex;align-items:flex-start;gap:4px;height:100%">
-             ${isFilled ? `<span onclick="fluxolabToggleGiroflex('${tableName}', ${idx})" title="Sinalizar ocorrência" style="cursor:pointer; font-size:18px; margin-top:8px; margin-left:4px; user-select:none; transition: all 0.2s; opacity:${row.giroflex === '1' ? '1' : '0.15'}; filter:${row.giroflex === '1' ? 'drop-shadow(0 0 6px red)' : 'grayscale(1)'}; animation:${row.giroflex === '1' ? 'giroflexAnim .6s ease-in-out infinite alternate' : 'none'}">🚨</span>` : ''}
-             <textarea id="pnd-${tableName}-r${idx}-obs" class="pend-textarea" rows="1" placeholder="..."
-                    onfocus="${inpFocus}" onblur="${inpBlur}"
-                    onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'obs')"
-                    style="${inpBase};flex:1;min-width:0;height:${hObs};padding-top:10px;font-weight:500;text-transform:uppercase;color:var(--text);resize:vertical;max-width:100%">${esc(row.obs || '')}</textarea>
-           </div>
+           <textarea id="pnd-${tableName}-r${idx}-obs" class="pend-textarea" rows="1" placeholder="..."
+                  onfocus="${inpFocus}" onblur="${inpBlur}"
+                  onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'obs')"
+                  style="${inpBase};height:${hObs};padding-top:10px;font-weight:500;text-transform:uppercase;color:var(--text);resize:vertical;max-width:100%">${esc(row.obs || '')}</textarea>
          </td>
          <td style="${tdLastStyle};padding:4px${hid('pecas')}">
            <textarea id="pnd-${tableName}-r${idx}-pecas" class="pend-textarea" rows="1" placeholder="..."
