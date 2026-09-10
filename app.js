@@ -14071,6 +14071,39 @@ async function salvarMaquinaA(){
       fluxolabRemoveSelbGlobal(selb).catch(e => console.warn('[MáquinasA] Erro ao remover do FluxoLAB:', e));
     }
 
+    // ── Remove as solicitações de peças pendentes deste SELB ──────────────
+    // Localiza todos os registros em _solicitacoesPecas com o mesmo SELB e
+    // que ainda não foram lidas, marca-os como lidos no Supabase e remove
+    // do estado local, limpando os bolsões de peças automaticamente.
+    try {
+      const solPendentes = Object.entries(_solicitacoesPecas || {})
+        .filter(([, p]) => !p.lida && (p.selb || '').toUpperCase() === selb.toUpperCase());
+
+      for (const [solId, solData] of solPendentes) {
+        await _supa.from('solicitacoes_pecas')
+          .update({ lida: true, raw: { ...(solData || {}), lida: true } })
+          .eq('id', solId)
+          .catch(e => console.warn('[MáquinasA] Erro ao marcar solicitação como lida:', e));
+
+        // Atualiza o estado local imediatamente
+        if (_solicitacoesPecas[solId]) _solicitacoesPecas[solId].lida = true;
+      }
+
+      if (solPendentes.length > 0) {
+        console.log(`[MáquinasA] ${solPendentes.length} solicitação(ões) de peça do SELB ${selb} removida(s) dos bolsões.`);
+        // Re-renderiza os bolsões para refletir a remoção
+        if (typeof window._renderSolicitacoesPanel === 'function') {
+          window._renderSolicitacoesPanel('pecas-solicitacoes-panel', '');
+          window._renderSolicitacoesPanel('pecas-a-solicitacoes-panel', '');
+        }
+        // Atualiza badge do topbar
+        if (typeof atualizarBadgeTopbarPecas === 'function') atualizarBadgeTopbarPecas();
+      }
+    } catch(eSol) {
+      console.warn('[MáquinasA] Erro ao limpar solicitações de peças:', eSol);
+    }
+
+
     const prev = document.getElementById('ma-equip-preview');
     const nf   = document.getElementById('ma-equip-notfound');
     if (prev) prev.style.display = 'none';
@@ -24173,25 +24206,24 @@ window._bolsaoUnlock = function(groupKey){
   var st = document.createElement('style');
   st.id = 'bolsoes-css';
   st.textContent =
-    // Mantém os cinco bolsões sempre lado a lado no desktop. O auto-fit
-    // podia colapsar para uma única coluna após re-renderizações do painel.
     '.bolsao-grid{display:grid;grid-template-columns:repeat(5,minmax(260px,1fr));gap:12px;overflow-x:auto;padding-bottom:4px}'+
-    '.bolsao-col{background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:10px;display:flex;flex-direction:column;min-height:200px;transition:background .15s}'+
-    '.bolsao-col.drop-hover{background:rgba(61,214,140,.06);border-color:rgba(61,214,140,.4)}'+
-    '.bolsao-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 4px 10px;border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:8px}'+
-    '.bolsao-title{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:700}'+
-    '.bolsao-count{background:rgba(255,255,255,.08);border-radius:12px;font-size:10px;font-weight:800;padding:2px 8px;color:#cbd5e1}'+
-    '.bolsao-list{display:flex;flex-direction:column;gap:8px;max-height:560px;overflow-y:auto;padding-right:4px;scrollbar-width:thin}'+
+    '.bolsao-col{background:linear-gradient(to bottom, rgba(15,23,42,.4), rgba(10,14,23,.8));border:1px solid rgba(255,255,255,.05);border-radius:12px;padding:12px;display:flex;flex-direction:column;min-height:200px;transition:all .2s ease;box-shadow:0 4px 15px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.05);backdrop-filter:blur(4px)}'+
+    '.bolsao-col.drop-hover{background:rgba(61,214,140,.05);border-color:rgba(61,214,140,.3);box-shadow:0 0 10px rgba(61,214,140,.1),inset 0 0 10px rgba(61,214,140,.05)}'+
+    '.bolsao-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 4px 12px;border-bottom:1px solid rgba(255,255,255,.05);margin-bottom:12px}'+
+    '.bolsao-title{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px}'+
+    '.bolsao-count{background:rgba(0,0,0,.4);border:1px solid #000;border-radius:6px;font-size:11px;font-weight:800;padding:3px 8px;color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.1)}'+
+    '.bolsao-list{display:flex;flex-direction:column;gap:10px;max-height:820px;overflow-y:auto;padding-right:6px;scrollbar-width:thin}'+
     '.bolsao-list::-webkit-scrollbar{width:6px}'+
-    '.bolsao-list::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:3px}'+
-    '.bolsao-card{background:var(--bg2);border:1px solid rgba(245,166,35,.4);border-left:4px solid var(--warn);border-radius:12px;padding:12px;cursor:grab;transition:transform .12s,box-shadow .12s}'+
-    '.bolsao-card:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(0,0,0,.35)}'+
-    '.bolsao-card.locked{border-style:dashed;border-color:rgba(96,165,250,.55);box-shadow:inset 0 0 0 1px rgba(96,165,250,.15)}'+
-    '.bolsao-card.locked-stock{border-style:dashed;border-color:rgba(167,139,250,.55);box-shadow:inset 0 0 0 1px rgba(167,139,250,.15)}'+
+    '.bolsao-list::-webkit-scrollbar-thumb{background:rgba(255,255,255,.2);border-radius:3px}'+
+    '.bolsao-card{background:linear-gradient(145deg, var(--bg2), rgba(20,25,35,.9));border:1px solid rgba(245,166,35,.3);border-left:4px solid var(--warn);border-radius:10px;padding:14px;cursor:grab;transition:all .2s ease;box-shadow:0 0 0 2px rgba(0,0,0,.6), 0 4px 10px rgba(0,0,0,.5)}'+
+    '.bolsao-card:hover{transform:translateY(-2px);box-shadow:0 0 0 2px rgba(0,0,0,.8), 0 6px 15px rgba(0,0,0,.6), 0 0 8px rgba(245,166,35,.15);border-color:rgba(245,166,35,.6)}'+
+    '.bolsao-card.locked{border-style:solid;border-color:rgba(96,165,250,.5);border-left-color:#60a5fa;box-shadow:0 0 0 2px rgba(0,0,0,.6), 0 4px 10px rgba(0,0,0,.5)}'+
+    '.bolsao-card.locked-stock{border-style:solid;border-color:rgba(167,139,250,.5);border-left-color:#a78bfa;box-shadow:0 0 0 2px rgba(0,0,0,.6), 0 4px 10px rgba(0,0,0,.5)}'+
     '.bolsao-card.drag-ghost{opacity:.45}'+
-    '.bolsao-lock-btn{background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.45);border-radius:6px;color:#93c5fd;font-size:10px;font-weight:700;padding:2px 8px;cursor:pointer}'+
-    '.bolsao-col-stock{background:rgba(167,139,250,.04);border-color:rgba(167,139,250,.25);border-style:dashed}'+
-    '.bolsao-col-stock.drop-hover{background:rgba(167,139,250,.10);border-color:rgba(167,139,250,.5)}';
+    '.bolsao-lock-btn{background:rgba(0,0,0,.3);border:1px solid #000;border-radius:6px;color:#93c5fd;font-size:10px;font-weight:800;padding:3px 8px;cursor:pointer;transition:all .2s;text-transform:uppercase;letter-spacing:0.5px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}'+
+    '.bolsao-lock-btn:hover{background:rgba(96,165,250,.15);border-color:rgba(96,165,250,.4)}'+
+    '.bolsao-col-stock{background:rgba(167,139,250,.03);border:1px dashed rgba(167,139,250,.2);box-shadow:inset 0 0 10px rgba(167,139,250,.05)}'+
+    '.bolsao-col-stock.drop-hover{background:rgba(167,139,250,.08);border-color:rgba(167,139,250,.4);box-shadow:0 0 10px rgba(167,139,250,.1)}';
   document.head.appendChild(st);
 })();
 
@@ -24234,7 +24266,7 @@ window._renderSolicitacoesPanel = function(panelId, q){
       : '';
     var emptyColsHtml = window._BOLSOES_PECAS.map(function(b){
       var colExtraCls = b.manual ? ' bolsao-col-stock' : '';
-      return '<div class="bolsao-col'+colExtraCls+'" style="flex:1 1 0;min-width:0">'
+      return '<div class="bolsao-col'+colExtraCls+'" style="flex:1 1 0;min-width:0;border-top:3px solid '+b.color+';">'
         + '<div class="bolsao-head">'
           + '<div class="bolsao-title" style="color:'+b.color+'">'+b.icon+' '+b.label+'</div>'
           + '<span class="bolsao-count">0</span>'
@@ -24314,14 +24346,14 @@ window._renderSolicitacoesPanel = function(panelId, q){
       var safeId   = id.replace(/'/g,'');
 
       var qtdLabel = (p.quantidade > 1)
-        ? '<span style="background:rgba(245,166,35,.3);color:var(--warn);border-radius:6px;font-size:10px;font-weight:800;padding:1px 7px;margin-left:4px">x' + p.quantidade + '</span>'
+        ? '<span style="background:rgba(245,166,35,.3);color:var(--warn);border:1px solid #000;border-radius:6px;font-size:10px;font-weight:800;padding:1px 7px;margin-left:4px">x' + p.quantidade + '</span>'
         : '';
       var obsHtml = (function(){
         if(!p.obs) return '';
         var cor = window._tonerCorInfo(p.obs);
         if(cor){
           return '<div style="display:inline-flex;align-items:center;gap:5px;margin-top:6px;'
-            + 'background:' + cor.bg + ';border:1px solid ' + cor.color + '55;border-radius:7px;padding:3px 9px">'
+            + 'background:' + cor.bg + ';border:1px solid #000;box-shadow:inset 0 0 0 1px ' + cor.color + '40;border-radius:7px;padding:3px 9px">'
             + '<span style="font-size:12px">' + cor.emoji + '</span>'
             + '<span style="font-size:12px;font-weight:800;color:' + cor.color + '">' + p.obs.trim().toUpperCase() + '</span>'
             + '<span style="font-size:11px;color:' + cor.color + ';opacity:.9">= ' + cor.label + '</span>'
@@ -24334,16 +24366,16 @@ window._renderSolicitacoesPanel = function(panelId, q){
         '<div style="display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap" onmousedown="event.stopPropagation()">'
           + '<input id="bipe-' + safeId + '" type="text" placeholder="🔍 Bipe o código..." '
             + 'onmousedown="event.stopPropagation()" '
-            + 'style="flex:1;min-width:120px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.15);border-radius:8px;color:var(--text);font-family:var(--font);font-size:12px;padding:6px 10px;outline:none" '
+            + 'style="flex:1;min-width:120px;background:rgba(0,0,0,.4);border:1px solid #000;box-shadow:inset 0 1px 0 rgba(255,255,255,.05);border-radius:8px;color:var(--text);font-family:var(--font);font-size:12px;padding:6px 10px;outline:none" '
             + 'onkeydown="if(event.key===\'Enter\'){ event.preventDefault(); window.entregarPecaComCodigo(\'' + safeId + '\',\'' + safeSelb + '\'); }" />'
           + '<button onclick="event.stopPropagation();window.entregarPecaComCodigo(\'' + safeId + '\',\'' + safeSelb + '\')" '
-            + 'style="background:rgba(61,214,140,.12);border:1px solid rgba(61,214,140,.45);border-radius:8px;color:var(--accent2);font-size:11px;font-weight:700;padding:6px 12px;cursor:pointer;white-space:nowrap">✓ Entregar</button>'
+            + 'style="background:rgba(61,214,140,.12);border:1px solid #000;box-shadow:inset 0 0 0 1px rgba(61,214,140,.3);border-radius:8px;color:var(--accent2);font-size:11px;font-weight:700;padding:6px 12px;cursor:pointer;white-space:nowrap">✓ Entregar</button>'
           + '<button onclick="event.stopPropagation();removerSolicitacaoPeca(\'' + safeId + '\',\'' + safeSelb + '\')" '
-            + 'style="background:rgba(242,87,87,.1);border:1px solid rgba(242,87,87,.4);border-radius:8px;color:var(--danger);font-size:12px;font-weight:700;padding:6px 10px;cursor:pointer">×</button>'
+            + 'style="background:rgba(242,87,87,.1);border:1px solid #000;box-shadow:inset 0 0 0 1px rgba(242,87,87,.3);border-radius:8px;color:var(--danger);font-size:12px;font-weight:700;padding:6px 10px;cursor:pointer">×</button>'
         + '</div>'
       ) : '';
 
-      return '<div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:8px 10px;margin-top:6px">'
+      return '<div style="background:rgba(0,0,0,.3);border:1px solid #000;box-shadow:inset 0 1px 0 rgba(255,255,255,.05);border-radius:10px;padding:8px 10px;margin-top:6px">'
         + '<div style="display:flex;align-items:center;gap:6px">'
           + '<span style="font-size:13px">🔩</span>'
           + '<span style="font-size:12px;font-weight:700;color:var(--warn)">' + (p.peca||'—') + qtdLabel + '</span>'
@@ -24443,7 +24475,7 @@ window._renderSolicitacoesPanel = function(panelId, q){
     var listHtml = arr.map(renderCard).join('') || '<div style="font-size:11px;color:var(--muted);text-align:center;padding:14px 0;opacity:.6">Vazio</div>';
     var colEl = document.createElement('div');
     colEl.className = 'bolsao-col' + (b.manual ? ' bolsao-col-stock' : '');
-    colEl.style.cssText = 'flex:1 1 0;min-width:0';
+    colEl.style.cssText = 'flex:1 1 0;min-width:0;border-top:3px solid '+b.color+';';
     colEl.setAttribute('ondragover', "window._bolsaoDragOver(event);this.classList.add('drop-hover')");
     colEl.setAttribute('ondragleave', "this.classList.remove('drop-hover')");
     colEl.setAttribute('ondrop', "this.classList.remove('drop-hover');window._bolsaoDrop(event,'" + b.key + "')");
