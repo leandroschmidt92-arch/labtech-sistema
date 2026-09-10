@@ -24274,9 +24274,10 @@ window._renderSolicitacoesPanel = function(panelId, q){
         + '<div class="bolsao-list"><div style="font-size:11px;color:var(--muted);text-align:center;padding:14px 0;opacity:.6">Vazio</div></div>'
       + '</div>';
     }).join('');
+    var _emptyCollapsed = (function(){ try{ return localStorage.getItem('bolsoes-panel-collapsed-'+panelId)==='1'; }catch(e){ return false; } })();
     panel.innerHTML = ''
-      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">'
-        + '<div style="display:flex;align-items:center;gap:8px">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:' + (_emptyCollapsed ? '0' : '12px') + ';flex-wrap:wrap;gap:8px">'
+        + '<div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="window._toggleBolsoesPanel(\''+panelId+'\')" title="Recolher/Expandir">'
           + '<span style="font-size:16px">🔔</span>'
           + '<span style="font-size:14px;font-weight:700;color:var(--warn)">Solicitações de Peças Pendentes</span>'
           + '<span style="background:var(--warn);color:#000;border-radius:20px;font-size:11px;font-weight:800;padding:2px 9px">0</span>'
@@ -24288,9 +24289,12 @@ window._renderSolicitacoesPanel = function(panelId, q){
             + '<input type="checkbox" id="chk-auto-print-pecas" ' + (typeof _autoPrintPecasEnabled === 'function' && _autoPrintPecasEnabled() ? 'checked' : '') + ' onchange="toggleAutoPrintPecas(this.checked)" style="width:13px;height:13px;cursor:pointer;accent-color:#f5a623">'
             + '🖨️ Auto-imprimir etiqueta de peças'
           + '</label>'
+          + '<button onclick="event.stopPropagation();window._toggleBolsoesPanel(\''+panelId+'\')" id="btn-toggle-bolsoes-'+panelId+'" title="Recolher/Expandir" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1;padding:2px 6px">' + (_emptyCollapsed ? '▶' : '▼') + '</button>'
         + '</div>'
       + '</div>'
-      + '<div class="bolsao-grid" style="display:flex!important;flex-flow:row nowrap!important;align-items:stretch!important;gap:12px;width:100%!important;overflow-x:auto!important">' + emptyColsHtml + '</div>';
+      + '<div id="bolsoes-body-'+panelId+'" style="' + (_emptyCollapsed ? 'display:none' : '') + '">'
+        + '<div class="bolsao-grid" style="display:flex!important;flex-flow:row nowrap!important;align-items:stretch!important;gap:12px;width:100%!important;overflow-x:auto!important">' + emptyColsHtml + '</div>'
+      + '</div>';
     return;
   }
 
@@ -24447,9 +24451,11 @@ window._renderSolicitacoesPanel = function(panelId, q){
     });
   }
 
+  var _popCollapsed = (function(){ try{ return localStorage.getItem('bolsoes-panel-collapsed-'+panelId)==='1'; }catch(e){ return false; } })();
+
   panel.innerHTML = ''
-    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">'
-      + '<div style="display:flex;align-items:center;gap:8px">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:' + (_popCollapsed ? '0' : '12px') + ';flex-wrap:wrap;gap:8px">'
+      + '<div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="window._toggleBolsoesPanel(\''+panelId+'\')" title="Recolher/Expandir">'
         + '<span style="font-size:16px">🔔</span>'
         + '<span style="font-size:14px;font-weight:700;color:var(--warn)">Solicitações de Peças Pendentes</span>'
         + '<span style="background:var(--warn);color:#000;border-radius:20px;font-size:11px;font-weight:800;padding:2px 9px">' + pendentes.length + '</span>'
@@ -24461,8 +24467,14 @@ window._renderSolicitacoesPanel = function(panelId, q){
           + '<input type="checkbox" id="chk-auto-print-pecas" ' + (typeof _autoPrintPecasEnabled === 'function' && _autoPrintPecasEnabled() ? 'checked' : '') + ' onchange="toggleAutoPrintPecas(this.checked)" style="width:13px;height:13px;cursor:pointer;accent-color:#f5a623">'
           + '🖨️ Auto-imprimir etiqueta de peças'
         + '</label>'
+        + '<button onclick="event.stopPropagation();window._toggleBolsoesPanel(\''+panelId+'\')" id="btn-toggle-bolsoes-'+panelId+'" title="Recolher/Expandir" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1;padding:2px 6px">' + (_popCollapsed ? '▶' : '▼') + '</button>'
       + '</div>'
     + '</div>';
+
+  // Wrapper recolhível para o grid
+  var bodyWrapper = document.createElement('div');
+  bodyWrapper.id = 'bolsoes-body-' + panelId;
+  if (_popCollapsed) bodyWrapper.style.display = 'none';
 
   // Cada bolsão é anexado ao DOM separadamente. Assim, mesmo se algum texto
   // vindo do cadastro tiver HTML inválido, ele não consegue "engolir" as
@@ -24482,8 +24494,84 @@ window._renderSolicitacoesPanel = function(panelId, q){
     colEl.innerHTML = '<div class="bolsao-head"><div class="bolsao-title" style="color:' + b.color + '">' + b.icon + ' ' + b.label + '</div><span class="bolsao-count">' + arr.length + (arr.length > 3 ? ' · rolar' : '') + '</span></div><div class="bolsao-list">' + listHtml + '</div>';
     gridEl.appendChild(colEl);
   });
-  panel.appendChild(gridEl);
+  bodyWrapper.appendChild(gridEl);
+  panel.appendChild(bodyWrapper);
 };
+
+// ── Toggle recolher/expandir o painel de bolsões de peças ────────────────────
+window._toggleBolsoesPanel = function(panelId) {
+  var body = document.getElementById('bolsoes-body-' + panelId);
+  var btn  = document.getElementById('btn-toggle-bolsoes-' + panelId);
+  var header = body ? body.previousElementSibling : null;
+  if (!body) return;
+
+  var isCollapsed = body.style.display === 'none';
+  body.style.display = isCollapsed ? '' : 'none';
+  if (btn) btn.textContent = isCollapsed ? '▼' : '▶';
+  // Ajusta margin-bottom do header
+  if (header) header.style.marginBottom = isCollapsed ? '12px' : '0';
+
+  // Persiste estado
+  try { localStorage.setItem('bolsoes-panel-collapsed-' + panelId, isCollapsed ? '0' : '1'); } catch(e){}
+};
+
+// ── Toggle recolher/expandir seções da aba Aguardando Peças ─────────────────
+// Compartilhado entre index.html e sistema.html (que também define a versão
+// inline no <script>; a última a rodar prevalece — comportamento idêntico).
+if (typeof window.togglePecasSection !== 'function') {
+  window.togglePecasSection = function(bodyId) {
+    var body = document.getElementById(bodyId);
+    var btnMap = {
+      'pecas-sol-body':   'btn-toggle-pecas-sol',
+      'pecas-etq-body':   'btn-toggle-pecas-etq',
+      'pecas-pend-body':  'btn-toggle-pecas-pend',
+      'pecas-lista-body': 'btn-toggle-pecas-lista',
+    };
+    var btn = document.getElementById(btnMap[bodyId]);
+    if (!body) return;
+    var collapsed = body.style.display === 'none';
+    body.style.display = collapsed ? '' : 'none';
+    if (btn) btn.textContent = collapsed ? '▼' : '▶';
+    // Ajusta margin-bottom do elemento pai (cabeçalho imediatamente anterior)
+    var header = body.previousElementSibling;
+    if (header) header.style.marginBottom = collapsed ? '12px' : '0';
+    try { localStorage.setItem('pecas-section-' + bodyId, collapsed ? '1' : '0'); } catch(e){}
+  };
+
+  // Restaura estados salvos ao carregar a página
+  (function restorePecasSectionsGlobal(){
+    var ids = ['pecas-sol-body','pecas-etq-body','pecas-pend-body','pecas-lista-body'];
+    var btnMap = {
+      'pecas-sol-body':   'btn-toggle-pecas-sol',
+      'pecas-etq-body':   'btn-toggle-pecas-etq',
+      'pecas-pend-body':  'btn-toggle-pecas-pend',
+      'pecas-lista-body': 'btn-toggle-pecas-lista',
+    };
+    function restore() {
+      ids.forEach(function(id) {
+        var saved = localStorage.getItem('pecas-section-' + id);
+        // pecas-etq-body começa recolhido por padrão se nunca foi aberto
+        var defaultCollapsed = (id === 'pecas-etq-body');
+        var shouldCollapse = (saved === '0') || (saved === null && defaultCollapsed);
+        if (shouldCollapse) {
+          var body = document.getElementById(id);
+          var btn  = document.getElementById(btnMap[id]);
+          if (body) body.style.display = 'none';
+          if (btn)  btn.textContent = '▶';
+          // Ajusta header
+          if (body && body.previousElementSibling) body.previousElementSibling.style.marginBottom = '0';
+          // Marca no localStorage para próximas visitas
+          if (saved === null) try { localStorage.setItem('pecas-section-' + id, '0'); } catch(e){}
+        }
+      });
+    }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', restore);
+    } else {
+      restore();
+    }
+  })();
+}
 
 // Tick para reclassificar conforme o tempo avança
 if(!window._bolsoesTick){
