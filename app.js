@@ -1210,7 +1210,7 @@ window._db = _db; // exposto globalmente para os patches de integração
 // principal do alto consumo (86% do egresso). Este gerenciador replica o
 // mesmo comportamento de pausa/retomada já implementado no shim.
 const _rtPauseManager = (() => {
-  const PAUSE_AFTER_MS = 30000; // igual ao shim
+  const PAUSE_AFTER_MS = 5000; // Reduzido de 30s para 5s para economizar egress
   const _channels = new Set();  // Set de entries { ref, name, reopen }
   let _bgTimer = null;
   let _paused = false;
@@ -14729,6 +14729,11 @@ const ALERT_SECTORS = new Set(['COMPLEXA','MONTAGEM','LIMPEZA']);
       startSolicitacoesPecasListener();
       startGarantiaListener();
       startDevolucaoListener();
+      
+      // OTIMIZAÇÃO: Registra listener de qualidade apenas para perfis autorizados
+      if (currentUser && (currentUser.isAdmin || ['PCP','DESMEMBRAMENTO','QUALIDADE'].includes(String(currentUser.sector).toUpperCase().trim()) || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'))) {
+        setTimeout(_initQualListener, 500);
+      }
     }
     // Painel de alertas "sem SELB em andamento" desativado
     const _pnl = document.getElementById('selb-alert-panel');
@@ -15036,8 +15041,9 @@ let _qualRegistros = {};  // cache local
 // ── Carrega registros do Supabase e monta o listener em tempo real ──
 async function _initQualListener(){
   async function _reloadQualReg(){
-    // Busca os mais recentes e garante um limite generoso explícito para não bater no limite padrão global sem ordenação
-    const { data, error } = await _supaAuthed().from('qualidade_registros').select('*').order('ts', { ascending: false }).limit(2000);
+    // OTIMIZAÇÃO DE EGRESS (PostgREST): Limita para últimos 30 dias e máx 500 registros
+    const cutoff = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+    const { data, error } = await _supaAuthed().from('qualidade_registros').select('*').gte('ts', cutoff).order('ts', { ascending: false }).limit(500);
     if(error) console.warn('[Qualidade] Erro ao carregar qualidade_registros:', error);
     _qualRegistros = {};
     (data||[]).forEach(r => {
@@ -15075,8 +15081,9 @@ async function _initQualListener(){
     if(view && view.classList.contains('active')) renderQualRegistros();
   }
   async function _reloadQualLib(){
-    // Busca os mais recentes e garante um limite generoso explícito
-    const { data, error } = await _supaAuthed().from('qualidade_liberadas').select('*').order('ts', { ascending: false }).limit(2000);
+    // OTIMIZAÇÃO DE EGRESS (PostgREST): Limita para últimos 30 dias e máx 500 registros
+    const cutoff = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+    const { data, error } = await _supaAuthed().from('qualidade_liberadas').select('*').gte('ts', cutoff).order('ts', { ascending: false }).limit(500);
     if(error) console.warn('[Qualidade] Erro ao carregar qualidade_liberadas:', error);
     window._qualLiberadas = {};
     (data||[]).forEach(r => {
@@ -15171,13 +15178,8 @@ async function _initQualListener(){
       .subscribe();
   });
 }
-
-// Garante execução do listener na inicialização da página
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => setTimeout(_initQualListener, 500));
-} else {
-  setTimeout(_initQualListener, 500);
-}
+// Removida inicialização global incondicional de _initQualListener para economizar egress.
+// Agora é chamado apenas após o login e restrito por perfil (Admin, Qualidade, PCP, Desmembramento).
 
 // ── Preenche equipamento automaticamente ao digitar o SELB ──
 function qualAutoFillSelb(){
