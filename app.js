@@ -14729,9 +14729,19 @@ const ALERT_SECTORS = new Set(['COMPLEXA','MONTAGEM','LIMPEZA']);
       startSolicitacoesPecasListener();
       startGarantiaListener();
       startDevolucaoListener();
-      
-      // OTIMIZAÇÃO: Registra listener de qualidade apenas para perfis autorizados
-      if (currentUser && (currentUser.isAdmin || ['PCP','DESMEMBRAMENTO','QUALIDADE'].includes(String(currentUser.sector).toUpperCase().trim()) || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'))) {
+    }
+    
+    // OTIMIZAÇÃO: Registra listener de qualidade apenas para perfis autorizados
+    // Independente do _globalListenersStarted, pois o 1º login pode ser de um operador sem permissão
+    if (typeof window._qualListenerStarted === 'undefined') window._qualListenerStarted = false;
+    if (!window._qualListenerStarted) {
+      const temAcessoQualidade = currentUser && (
+        currentUser.isAdmin || 
+        (typeof getPermsFor === 'function' && getPermsFor(currentUser.sector)['gaiola-lab']) ||
+        (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin')
+      );
+      if (temAcessoQualidade) {
+        window._qualListenerStarted = true;
         setTimeout(_initQualListener, 500);
       }
     }
@@ -15042,7 +15052,7 @@ let _qualRegistros = {};  // cache local
 async function _initQualListener(){
   async function _reloadQualReg(){
     // OTIMIZAÇÃO DE EGRESS (PostgREST): Limita para últimos 30 dias e máx 500 registros
-    const cutoff = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+    const cutoff = Date.now() - 30 * 24 * 3600 * 1000; // ts é numérico
     const { data, error } = await _supaAuthed().from('qualidade_registros').select('*').gte('ts', cutoff).order('ts', { ascending: false }).limit(500);
     if(error) console.warn('[Qualidade] Erro ao carregar qualidade_registros:', error);
     _qualRegistros = {};
@@ -15082,7 +15092,7 @@ async function _initQualListener(){
   }
   async function _reloadQualLib(){
     // OTIMIZAÇÃO DE EGRESS (PostgREST): Limita para últimos 30 dias e máx 500 registros
-    const cutoff = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+    const cutoff = Date.now() - 30 * 24 * 3600 * 1000; // ts é numérico
     const { data, error } = await _supaAuthed().from('qualidade_liberadas').select('*').gte('ts', cutoff).order('ts', { ascending: false }).limit(500);
     if(error) console.warn('[Qualidade] Erro ao carregar qualidade_liberadas:', error);
     window._qualLiberadas = {};
