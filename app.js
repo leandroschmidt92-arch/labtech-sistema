@@ -15051,9 +15051,8 @@ let _qualRegistros = {};  // cache local
 // ── Carrega registros do Supabase e monta o listener em tempo real ──
 async function _initQualListener(){
   async function _reloadQualReg(){
-    // OTIMIZAÇÃO DE EGRESS (PostgREST): Limita para últimos 30 dias e máx 500 registros
-    const cutoff = Date.now() - 30 * 24 * 3600 * 1000; // ts é numérico
-    const { data, error } = await _supaAuthed().from('qualidade_registros').select('*').gte('ts', cutoff).order('ts', { ascending: false }).limit(500);
+    // OTIMIZAÇÃO DE EGRESS (PostgREST): Limite reduzido para 500 registros para evitar sobrecarga
+    const { data, error } = await _supaAuthed().from('qualidade_registros').select('*').order('ts', { ascending: false }).limit(500);
     if(error) console.warn('[Qualidade] Erro ao carregar qualidade_registros:', error);
     _qualRegistros = {};
     (data||[]).forEach(r => {
@@ -15091,9 +15090,8 @@ async function _initQualListener(){
     if(view && view.classList.contains('active')) renderQualRegistros();
   }
   async function _reloadQualLib(){
-    // OTIMIZAÇÃO DE EGRESS (PostgREST): Limita para últimos 30 dias e máx 500 registros
-    const cutoff = Date.now() - 30 * 24 * 3600 * 1000; // ts é numérico
-    const { data, error } = await _supaAuthed().from('qualidade_liberadas').select('*').gte('ts', cutoff).order('ts', { ascending: false }).limit(500);
+    // OTIMIZAÇÃO DE EGRESS (PostgREST): Limite reduzido para 500 registros para evitar sobrecarga
+    const { data, error } = await _supaAuthed().from('qualidade_liberadas').select('*').order('ts', { ascending: false }).limit(500);
     if(error) console.warn('[Qualidade] Erro ao carregar qualidade_liberadas:', error);
     window._qualLiberadas = {};
     (data||[]).forEach(r => {
