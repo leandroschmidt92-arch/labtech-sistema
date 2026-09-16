@@ -12265,8 +12265,8 @@ function getEquipUnitizador(selbCode){
 
 // ── Import spreadsheet ────────────────────────────────────────────────────────
 async function importEquipFile(input){
-  if(!currentUser || !currentUser.isAdmin){
-    alert('Apenas o administrador pode importar a planilha de equipamentos.');
+  if(!currentUser || (!currentUser.isAdmin && currentUser.sector !== 'PCP')){
+    alert('Apenas o administrador ou o setor PCP podem importar a planilha de equipamentos.');
     input.value = '';
     return;
   }
@@ -12539,7 +12539,7 @@ function renderEquipTable(){
         <button onclick="equipImprimirSelb('${selbEsc}')" title="Imprimir SELB (padrão selbetti 8x3cm)" style="background:rgba(28,107,69,0.12);border:1px solid rgba(28,107,69,0.4);border-radius:7px;color:#1c6b45;font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer">🖨️ Imprimir SELB</button>
       </div>
     </td>
-    <td>${(typeof currentUser !== 'undefined' && currentUser && currentUser.isAdmin) ? `<div class="tbl-acts">
+    <td>${(typeof currentUser !== 'undefined' && currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP')) ? `<div class="tbl-acts">
       <button class="tbtn" onclick="openEditEquip('${selbEsc}')">Editar</button>
       <button class="tbtn" onclick="registrarEquipamentoPerdido('${selbEsc}', '${nomeEsc}')" style="background:rgba(242,87,87,.10);border-color:rgba(242,87,87,.3);color:var(--danger)" title="Registrar como máquina perdida">🔍 Perdida</button>
       <button class="tbtn del" onclick="deleteEquip('${selbEsc}')">Remover</button>
@@ -18668,13 +18668,14 @@ function getPermsFor(sector){
   return (_sectorTabPerms && _sectorTabPerms[sector]) || defaultPermsForSector(sector);
 }
 
-function toggleEquipImportUI(isAdmin){
+function toggleEquipImportUI(u){
+  const canManage = u && (u.isAdmin || u.sector === 'PCP');
   const label = document.getElementById('equip-import-label');
-  if(label) label.style.display = isAdmin ? '' : 'none';
+  if(label) label.style.display = canManage ? '' : 'none';
   const addBtn = document.getElementById('equip-add-btn');
-  if(addBtn) addBtn.style.display = isAdmin ? '' : 'none';
+  if(addBtn) addBtn.style.display = canManage ? '' : 'none';
   const clearBtn = document.getElementById('equip-clear-btn');
-  if(clearBtn) clearBtn.style.display = isAdmin ? '' : 'none';
+  if(clearBtn) clearBtn.style.display = canManage ? '' : 'none';
 }
 
 function applySectorTabPerms(u){
@@ -18685,7 +18686,7 @@ function applySectorTabPerms(u){
       const el = document.getElementById(t.id);
       if(el) el.style.display = '';
     });
-    toggleEquipImportUI(true);
+    toggleEquipImportUI(u);
     return;
   }
   const perms = getPermsFor(u.sector);
@@ -18700,8 +18701,8 @@ function applySectorTabPerms(u){
   // Aba "Tempo SELB" é exclusiva do administrador
   const tabTempoSelb = document.getElementById('tab-tempo-selb');
   if(tabTempoSelb) tabTempoSelb.style.display = 'none';
-  // Importação de planilha de Equipamentos é sempre exclusiva do administrador
-  toggleEquipImportUI(u.isAdmin);
+  // Importação de planilha de Equipamentos: Admin ou PCP
+  toggleEquipImportUI(u);
 }
 
 // UI — matriz de checkboxes

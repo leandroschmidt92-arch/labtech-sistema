@@ -10,6 +10,8 @@ var _pendMediaSortDir = typeof _pendMediaSortDir !== 'undefined' ? _pendMediaSor
 var _pendAbertoSortDir = typeof _pendAbertoSortDir !== 'undefined' ? _pendAbertoSortDir : { mistas: null, complexas: null };
 var _pendActiveSortCol = typeof _pendActiveSortCol !== 'undefined' ? _pendActiveSortCol : { mistas: null, complexas: null };
 var _pendExpandedRows = typeof _pendExpandedRows !== 'undefined' ? _pendExpandedRows : {};
+var _pendViewStateSaveTimer = typeof _pendViewStateSaveTimer !== 'undefined' ? _pendViewStateSaveTimer : null;
+var _pendViewStateSyncRegistered = typeof _pendViewStateSyncRegistered !== 'undefined' ? _pendViewStateSyncRegistered : false;
 
 // Mínimo de linhas: a tabela agora cresce e ENCOLHE conforme os registros.
 const PEND_ROW_MIN = { mistas: 1, complexas: 1 };
@@ -49,6 +51,7 @@ function pendToggleCol(tableName, key) {
   localStorage.setItem('fluxolabPendHiddenCols', JSON.stringify(h));
   _pendColMenuOpen[tableName] = true;
   fluxolabRenderPendencias();
+  pendSaveViewStateDebounced();
 }
 function pendShowAllCols(tableName) {
   const h = pendGetHiddenCols();
@@ -56,6 +59,7 @@ function pendShowAllCols(tableName) {
   localStorage.setItem('fluxolabPendHiddenCols', JSON.stringify(h));
   _pendColMenuOpen[tableName] = true;
   fluxolabRenderPendencias();
+  pendSaveViewStateDebounced();
 }
 function pendNormModelo(modelo) {
   return (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(modelo) : String(modelo || '').toUpperCase().replace(/\s+/g, '');
@@ -76,6 +80,7 @@ function pendToggleListaDetalhada(tableName, checked) {
   } catch (e) {}
   _pendExpandedRows[tableName] = new Set();
   fluxolabRenderPendencias();
+  pendSaveViewStateDebounced();
 }
 
 function pendCountModeloInTable(tableName, modelo, excludeIndex) {
@@ -382,6 +387,101 @@ function pendTrimRows(tableName, keepIndex) {
   return false;
 }
 
+// ════════════════════════════════════════════════════════════════
+// VIEW STATE SYNC — Sincroniza filtros/ordenação/colunas em tempo real
+// Chave Supabase: 'pendencias_view_state'
+// ════════════════════════════════════════════════════════════════
+
+/** Retorna o estado atual de UI (ordenação, colunas, lista detalhada) */
+function pendGetViewState() {
+  let listaDetalhada = {};
+  try { listaDetalhada = JSON.parse(localStorage.getItem('fluxolabPendListaDetalhada') || '{}'); } catch(e) {}
+  return {
+    hiddenCols: pendGetHiddenCols(),
+    listaDetalhada: listaDetalhada,
+    sortState: {
+      mistas: {
+        activeCol: _pendActiveSortCol.mistas || null,
+        mediaDir:  _pendMediaSortDir.mistas  || null,
+        abertoDir: _pendAbertoSortDir.mistas  || null,
+      },
+      complexas: {
+        activeCol: _pendActiveSortCol.complexas || null,
+        mediaDir:  _pendMediaSortDir.complexas  || null,
+        abertoDir: _pendAbertoSortDir.complexas  || null,
+      },
+    },
+  };
+}
+
+/** Aplica um estado de view recebido do Supabase (outro usuário) */
+function pendApplyViewState(state) {
+  if (!state) return;
+  let changed = false;
+
+  if (state.hiddenCols) {
+    try {
+      const cur = JSON.stringify(pendGetHiddenCols());
+      const next = JSON.stringify(state.hiddenCols);
+      if (cur !== next) {
+        localStorage.setItem('fluxolabPendHiddenCols', next);
+        changed = true;
+      }
+    } catch(e) {}
+  }
+
+  if (state.listaDetalhada) {
+    try {
+      let cur = {};
+      try { cur = JSON.parse(localStorage.getItem('fluxolabPendListaDetalhada') || '{}'); } catch(e2) {}
+      const next = JSON.stringify(state.listaDetalhada);
+      if (JSON.stringify(cur) !== next) {
+        localStorage.setItem('fluxolabPendListaDetalhada', next);
+        // Limpa expansões abertas para evitar estado inconsistente
+        Object.keys(PEND_ROW_MIN).forEach(t => { _pendExpandedRows[t] = new Set(); });
+        changed = true;
+      }
+    } catch(e) {}
+  }
+
+  if (state.sortState) {
+    Object.keys(PEND_ROW_MIN).forEach(t => {
+      const s = state.sortState[t];
+      if (!s) return;
+      if (_pendActiveSortCol[t] !== (s.activeCol || null) ||
+          _pendMediaSortDir[t]  !== (s.mediaDir  || null) ||
+          _pendAbertoSortDir[t] !== (s.abertoDir  || null)) {
+        _pendActiveSortCol[t] = s.activeCol || null;
+        _pendMediaSortDir[t]  = s.mediaDir  || null;
+        _pendAbertoSortDir[t] = s.abertoDir  || null;
+        changed = true;
+      }
+    });
+  }
+
+  if (changed && typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'pendencias') {
+    fluxolabRenderPendencias();
+  }
+}
+
+/** Salva o estado de view no Supabase imediatamente */
+async function pendSaveViewStateNow() {
+  if (typeof _supa === 'undefined') return;
+  try {
+    const state = pendGetViewState();
+    await _supa.from('fluxolab_state').upsert(
+      { key: 'pendencias_view_state', data: state },
+      { onConflict: 'key' }
+    );
+  } catch(e) { console.warn('[pend-view] save falhou:', e); }
+}
+
+/** Salva o estado de view com debounce de 500ms */
+function pendSaveViewStateDebounced() {
+  clearTimeout(_pendViewStateSaveTimer);
+  _pendViewStateSaveTimer = setTimeout(() => { pendSaveViewStateNow(); }, 500);
+}
+
 // Carrega o estado do Supabase
 async function fluxolabLoadPendencias() {
   if (typeof currentUser === 'undefined' || !currentUser) return;
@@ -393,6 +493,14 @@ async function fluxolabLoadPendencias() {
       }
       if (error) console.warn('[pend] load erro:', error);
     } catch(e) { console.error('Erro ao carregar pendências:', e); }
+
+    // Carrega view state (ordenação, colunas ocultas, lista detalhada) do Supabase
+    try {
+      const { data: vsData, error: vsError } = await _supa.from('fluxolab_state').select('data').eq('key', 'pendencias_view_state').maybeSingle();
+      if (!vsError && vsData && vsData.data) {
+        pendApplyViewState(vsData.data);
+      }
+    } catch(e) { console.warn('[pend-view] load falhou:', e); }
 
     // Realtime — nunca bloqueia o loaded se o helper falhar
     if (!_pendSyncChannel) {
@@ -409,6 +517,24 @@ async function fluxolabLoadPendencias() {
         }
       } catch (e) {
         console.warn('[pend] falha ao registrar realtime:', e);
+      }
+    }
+
+    // Realtime para view state (filtros/ordenação/colunas) — canal compartilhado
+    if (!_pendViewStateSyncRegistered) {
+      _pendViewStateSyncRegistered = true;
+      try {
+        if (typeof window._fluxolabStateOn === 'function') {
+          window._fluxolabStateOn('pendencias_view_state', payload => {
+            if (payload.new && payload.new.data) {
+              pendApplyViewState(payload.new.data);
+            }
+          });
+        } else {
+          console.warn('[pend-view] _fluxolabStateOn indisponível — sync de filtros desligado');
+        }
+      } catch (e) {
+        console.warn('[pend-view] falha ao registrar realtime de view state:', e);
       }
     }
   }
@@ -789,6 +915,7 @@ function fluxolabSortPendByDiasAberto(tableName) {
 
   if (pendIsListaDetalhada(tableName)) {
     fluxolabRenderPendencias();
+    pendSaveViewStateDebounced();
     return;
   }
 
@@ -799,6 +926,7 @@ function fluxolabSortPendByDiasAberto(tableName) {
   });
 
   fluxolabSavePendenciasDebounced();
+  pendSaveViewStateDebounced();
   fluxolabRenderPendencias();
 }
 
@@ -814,6 +942,7 @@ function fluxolabSortPendByMedia(tableName) {
 
   if (pendIsListaDetalhada(tableName)) {
     fluxolabRenderPendencias();
+    pendSaveViewStateDebounced();
     return;
   }
 
@@ -826,6 +955,7 @@ function fluxolabSortPendByMedia(tableName) {
   });
 
   fluxolabSavePendenciasDebounced();
+  pendSaveViewStateDebounced();
   fluxolabRenderPendencias();
 }
 
