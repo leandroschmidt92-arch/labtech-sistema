@@ -36,6 +36,12 @@
           if (_pvModalEl && _pvModalEl.style.display === 'flex') pvRenderModalTable();
         }
       });
+      window._fluxolabStateOn('pendencias_view_state', payload => {
+        if (_pvModalEl && _pvModalEl.style.display === 'flex') {
+          // Delay just to let pendencias.js process it first (it shares the same event)
+          setTimeout(() => pvRenderModalTable(), 50);
+        }
+      });
     }
     _pvLoaded = true;
   }
@@ -130,92 +136,17 @@
   function pvRenderModalTable(){
     const body = document.getElementById('pv-modal-body');
     if (!body) return;
-    const rows = (_pvState.mistas || []).filter(r => r && r.modelo);
-    let totalDoca=0, totalLab=0, totalChk=0;
-    rows.forEach(r => {
-      if (typeof fluxolabPlanGetBolsaoStats === 'function'){
-        const b = fluxolabPlanGetBolsaoStats(r.modelo); totalDoca += b.doca||0; totalLab += b.lab||0;
+    
+    if (typeof fluxolabRenderPendTable === 'function') {
+      body.innerHTML = fluxolabRenderPendTable('Pendências Mistas', 'mistas', '#fbbf24', 'rgba(251,191,36,.12)');
+      // Make the entire table read-only for operators, while allowing scroll on the wrapper
+      const tableWrapper = body.querySelector('div');
+      if (tableWrapper) {
+        tableWrapper.style.pointerEvents = 'none';
       }
-      if (typeof fluxolabPlanGetChecklistStats === 'function'){
-        totalChk += (fluxolabPlanGetChecklistStats(r.modelo).count || 0);
-      }
-    });
-
-    if (!rows.length){
-      body.innerHTML = `<div style="text-align:center;padding:60px 20px;color:var(--muted)">
-        <div style="font-size:44px;margin-bottom:10px;opacity:.5">📭</div>
-        <div style="font-size:14px;font-weight:600">Nenhuma pendência mista cadastrada no momento.</div>
-      </div>`;
-      return;
+    } else {
+      body.innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted)">Erro: fluxolabRenderPendTable não carregado.</div>';
     }
-
-    const th = 'padding:10px 8px;font-size:10px;color:var(--muted);font-weight:800;text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid var(--border2);background:rgba(0,0,0,.35);text-align:center;white-space:nowrap';
-    const td = 'padding:10px 8px;border-bottom:1px solid var(--border);vertical-align:middle;text-align:center';
-
-    let html = `
-      <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
-        <div style="background:rgba(74,222,128,.12);border:1px solid rgba(74,222,128,.35);
-                    border-radius:8px;padding:8px 14px;font-size:12px;font-weight:800;color:#4ade80">
-          Checklists: ${totalChk}</div>
-        <div style="background:rgba(34,211,238,.08);border:1px solid rgba(34,211,238,.3);
-                    border-radius:8px;padding:8px 14px;font-size:12px;font-weight:800;color:#22d3ee">
-          DOCA: ${totalDoca}</div>
-        <div style="background:rgba(167,139,250,.08);border:1px solid rgba(167,139,250,.3);
-                    border-radius:8px;padding:8px 14px;font-size:12px;font-weight:800;color:#a78bfa">
-          LAB: ${totalLab}</div>
-        <div style="flex:1"></div>
-        <div style="font-size:11px;color:var(--muted);align-self:center">${rows.length} registro(s)</div>
-      </div>
-      <div style="overflow-x:auto;border:1px solid var(--border2);border-radius:12px;background:rgba(0,0,0,.2)">
-      <table style="width:100%;border-collapse:collapse;font-family:var(--font);font-size:14px">
-        <thead><tr>
-          <th style="${th}">Ord</th>
-          <th style="${th}">Lote</th>
-          <th style="${th};text-align:left;padding-left:14px">Modelo</th>
-          <th style="${th}">Checklists</th>
-          <th style="${th}">⏱ Dias Úteis Andamento</th>
-          <th style="${th}">Dias em Aberto</th>
-          <th style="${th}">Qtd WMS</th>
-          <th style="${th}">Sugerido</th>
-          <th style="${th}">DOCA</th>
-          <th style="${th}">LAB</th>
-          <th style="${th};text-align:left">Observação</th>
-          <th style="${th};text-align:left">Peças</th>
-        </tr></thead><tbody>`;
-
-    rows.forEach((r, i) => {
-      const chk = (typeof fluxolabPlanGetChecklistStats === 'function')
-        ? fluxolabPlanGetChecklistStats(r.modelo) : {count:0, media:0, mediaAberto:0, maxAberto:0, maxDiasUteis:0};
-      const bol = (typeof fluxolabPlanGetBolsaoStats === 'function')
-        ? fluxolabPlanGetBolsaoStats(r.modelo) : {doca:0, lab:0};
-      const bg = i % 2 === 0 ? 'rgba(255,255,255,.015)' : 'transparent';
-      const badge = chk.count > 0
-        ? `<span style="background:rgba(74,222,128,.15);color:#4ade80;font-size:9px;font-weight:800;padding:2px 6px;border-radius:8px;margin-left:8px;letter-spacing:.03em">✓</span>`
-        : `<span style="background:rgba(248,113,113,.15);color:#f87171;font-size:9px;font-weight:800;padding:2px 6px;border-radius:8px;margin-left:8px;letter-spacing:.03em">✗</span>`;
-      const esc = s => String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-      const duMax = chk.maxDiasUteis || chk.media || 0;
-      const duColor = duMax >= 20 ? '#ef4444' : duMax >= 10 ? '#f59e0b' : duMax >= 4 ? '#facc15' : 'var(--text)';
-      const duHtml = duMax ? `${duMax}d` : '-';
-      html += `
-        <tr style="background:${bg}">
-          <td style="${td};color:var(--muted);font-weight:800;font-size:15px">${i+1}º</td>
-          <td style="${td};color:var(--muted);font-weight:800;font-size:15px">${i+1}</td>
-          <td style="${td};text-align:left;padding-left:14px;color:#fbbf24;font-weight:800;font-size:14px">
-            ${esc(r.modelo)}${badge}
-          </td>
-          <td style="${td};color:${chk.count>0?'#4ade80':'#f87171'};font-weight:900;font-size:18px">${chk.count||'-'}</td>
-          <td style="${td};color:${duColor};font-weight:900;font-size:18px;font-family:var(--mono)" title="Maior Dias Úteis Andamento">${duHtml}</td>
-          <td style="${td};color:${chk.maxAberto>0?'#fbbf24':'var(--muted)'};font-weight:900;font-size:18px;font-family:var(--mono)" title="Dias em aberto">${chk.maxAberto ? (chk.maxAberto + 'd') : '-'}</td>
-          <td style="${td};color:var(--text);font-weight:800;font-size:18px">${esc(r.qtd_wms)||'-'}</td>
-          <td style="${td};color:var(--accent);font-weight:800;font-size:18px">${esc(r.sugestao)||'-'}</td>
-          <td style="${td};color:#22d3ee;font-weight:900;font-size:18px;background:rgba(34,211,238,.05)">${bol.doca||'-'}</td>
-          <td style="${td};color:#a78bfa;font-weight:900;font-size:18px;background:rgba(167,139,250,.05)">${bol.lab||'-'}</td>
-          <td style="${td};text-align:left;color:var(--text);font-weight:500;text-transform:uppercase;font-size:12px">${esc(r.obs)||'—'}</td>
-          <td style="${td};text-align:left;color:var(--text);font-weight:500;text-transform:uppercase;font-size:12px">${esc(r.pecas)||'—'}</td>
-        </tr>`;
-    });
-    html += `</tbody></table></div>`;
-    body.innerHTML = html;
   }
 
   // ───────────────── PAINEL ADMIN — PERMISSÕES ─────────────────

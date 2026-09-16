@@ -6,9 +6,24 @@
 var _fluxolabPendenciasState = typeof _fluxolabPendenciasState !== 'undefined' ? _fluxolabPendenciasState : { mistas: [], complexas: [] };
 var _fluxolabPendLoaded = typeof _fluxolabPendLoaded !== 'undefined' ? _fluxolabPendLoaded : false;
 var _pendSyncChannel = typeof _pendSyncChannel !== 'undefined' ? _pendSyncChannel : null;
-var _pendMediaSortDir = typeof _pendMediaSortDir !== 'undefined' ? _pendMediaSortDir : { mistas: null, complexas: null };
-var _pendAbertoSortDir = typeof _pendAbertoSortDir !== 'undefined' ? _pendAbertoSortDir : { mistas: null, complexas: null };
-var _pendActiveSortCol = typeof _pendActiveSortCol !== 'undefined' ? _pendActiveSortCol : { mistas: null, complexas: null };
+
+// Sort state persisted in localStorage for page-reload survival
+(function _pendRestoreSortState() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('fluxolabPendSortState') || '{}');
+    if (typeof _pendMediaSortDir === 'undefined')
+      _pendMediaSortDir  = { mistas: saved.mistas?.mediaDir  || null, complexas: saved.complexas?.mediaDir  || null };
+    if (typeof _pendAbertoSortDir === 'undefined')
+      _pendAbertoSortDir = { mistas: saved.mistas?.abertoDir || null, complexas: saved.complexas?.abertoDir || null };
+    if (typeof _pendActiveSortCol === 'undefined')
+      _pendActiveSortCol = { mistas: saved.mistas?.activeCol || null, complexas: saved.complexas?.activeCol || null };
+  } catch(e) {
+    if (typeof _pendMediaSortDir  === 'undefined') _pendMediaSortDir  = { mistas: null, complexas: null };
+    if (typeof _pendAbertoSortDir === 'undefined') _pendAbertoSortDir = { mistas: null, complexas: null };
+    if (typeof _pendActiveSortCol === 'undefined') _pendActiveSortCol = { mistas: null, complexas: null };
+  }
+})();
+
 var _pendExpandedRows = typeof _pendExpandedRows !== 'undefined' ? _pendExpandedRows : {};
 var _pendViewStateSaveTimer = typeof _pendViewStateSaveTimer !== 'undefined' ? _pendViewStateSaveTimer : null;
 var _pendViewStateSyncRegistered = typeof _pendViewStateSyncRegistered !== 'undefined' ? _pendViewStateSyncRegistered : false;
@@ -457,6 +472,18 @@ function pendApplyViewState(state) {
         changed = true;
       }
     });
+    // Persiste no localStorage para sobreviver ao reload
+    try {
+      const ss = {};
+      Object.keys(PEND_ROW_MIN).forEach(t => {
+        ss[t] = {
+          activeCol: _pendActiveSortCol[t] || null,
+          mediaDir:  _pendMediaSortDir[t]  || null,
+          abertoDir: _pendAbertoSortDir[t] || null,
+        };
+      });
+      localStorage.setItem('fluxolabPendSortState', JSON.stringify(ss));
+    } catch(e) {}
   }
 
   if (changed && typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'pendencias') {
@@ -903,6 +930,21 @@ function pendToggleExpand(tableName, idx) {
   else _pendExpandedRows[tableName].add(idx);
 }
 
+/** Salva o estado de ordenação atual no localStorage para sobreviver a reloads */
+function pendPersistSortState() {
+  try {
+    const ss = {};
+    Object.keys(PEND_ROW_MIN).forEach(t => {
+      ss[t] = {
+        activeCol: _pendActiveSortCol[t] || null,
+        mediaDir:  _pendMediaSortDir[t]  || null,
+        abertoDir: _pendAbertoSortDir[t] || null,
+      };
+    });
+    localStorage.setItem('fluxolabPendSortState', JSON.stringify(ss));
+  } catch(e) {}
+}
+
 // Ordena a tabela pela coluna "Dias em Aberto" (clique alterna maior→menor / menor→maior)
 function fluxolabSortPendByDiasAberto(tableName) {
   const list = _fluxolabPendenciasState[tableName];
@@ -912,6 +954,7 @@ function fluxolabSortPendByDiasAberto(tableName) {
   const nextDir = currentDir === 'desc' ? 'asc' : 'desc';
   _pendAbertoSortDir[tableName] = nextDir;
   _pendActiveSortCol[tableName] = 'diasab';
+  pendPersistSortState();
 
   if (pendIsListaDetalhada(tableName)) {
     fluxolabRenderPendencias();
@@ -939,6 +982,7 @@ function fluxolabSortPendByMedia(tableName) {
   const nextDir = currentDir === 'desc' ? 'asc' : 'desc';
   _pendMediaSortDir[tableName] = nextDir;
   _pendActiveSortCol[tableName] = 'media';
+  pendPersistSortState();
 
   if (pendIsListaDetalhada(tableName)) {
     fluxolabRenderPendencias();
