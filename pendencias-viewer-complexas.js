@@ -28,6 +28,15 @@
       }
     } catch(e){ console.error('[pvc] load', e); }
 
+    // Carrega o view state (filtros, ordenação, colunas) do Supabase
+    try {
+      const { data: vsData } = await _supa.from('fluxolab_state')
+        .select('data').eq('key','pendencias_view_state').maybeSingle();
+      if (vsData && vsData.data && typeof pendApplyViewState === 'function') {
+        pendApplyViewState(vsData.data);
+      }
+    } catch(e){ console.warn('[pvc] view state load failed', e); }
+
     if (!_pvChannel) {
       _pvChannel = true;
       window._fluxolabStateOn('pendencias_mistas_complexas', payload => {
@@ -37,8 +46,11 @@
         }
       });
       window._fluxolabStateOn('pendencias_view_state', payload => {
+        // Aplica o novo estado de filtros/ordenação nas variáveis globais
+        if (payload.new && payload.new.data && typeof pendApplyViewState === 'function') {
+          pendApplyViewState(payload.new.data);
+        }
         if (_pvModalEl && _pvModalEl.style.display === 'flex') {
-          // Delay just to let pendencias.js process it first (it shares the same event)
           setTimeout(() => pvRenderModalTable(), 50);
         }
       });
