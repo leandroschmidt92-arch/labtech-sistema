@@ -1231,7 +1231,10 @@ const _rtPauseManager = (() => {
     _paused = false;
     _channels.forEach(entry => {
       if (!entry.ref && entry.reopen) {
-        try { entry.ref = entry.reopen(); } catch(e) {
+        try { 
+          entry.ref = entry.reopen(); 
+          if(entry.onResume) entry.onResume();
+        } catch(e) {
           console.warn('[rtPause] falha ao reabrir canal', entry.name, e);
         }
       }
@@ -1252,8 +1255,8 @@ const _rtPauseManager = (() => {
 
   // Registra um canal gerenciado. `reopen` é uma função que cria e
   // faz subscribe do canal, retornando a referência do canal.
-  function register(name, reopen) {
-    const entry = { name, ref: null, reopen };
+  function register(name, reopen, onResume) {
+    const entry = { name, ref: null, reopen, onResume };
     entry.ref = reopen(); // abre imediatamente
     _channels.add(entry);
     return {
@@ -5988,8 +5991,14 @@ async function startSolicitacoesPecasListener(){
     atualizarNotifPecasAdmin();
     atualizarBadgeTopbarPecas();
     if(currentUser && !currentUser.isAdmin) atualizarOpPecaPendente(currentUser.id);
-    if(document.getElementById('view-pecas')?.classList.contains('active')) _renderSolicitacoesPanel('pecas-solicitacoes-panel','');
-    if(document.getElementById('subview-pecas-a')?.style.display !== 'none') _renderSolicitacoesPanel('pecas-a-solicitacoes-panel','');
+    if (document.getElementById('view-pecas')?.classList.contains('active')) {
+      const q = (document.getElementById('pecas-search')?.value || '').toUpperCase();
+      _renderSolicitacoesPanel('pecas-solicitacoes-panel', q);
+    }
+    if (document.getElementById('subview-pecas-a')?.style.display !== 'none') {
+      const q = (document.getElementById('pecas-a-search')?.value || '').toUpperCase();
+      _renderSolicitacoesPanel('pecas-a-solicitacoes-panel', q);
+    }
     if(document.getElementById('view-solicitacoes')?.classList.contains('active')) renderSolicitacoesDoDia();
   }
   await _reloadSolicitacoes();
@@ -6029,8 +6038,14 @@ async function startSolicitacoesPecasListener(){
     atualizarNotifPecasAdmin();
     atualizarBadgeTopbarPecas();
     if (currentUser && !currentUser.isAdmin) atualizarOpPecaPendente(currentUser.id);
-    if (document.getElementById('view-pecas')?.classList.contains('active')) _renderSolicitacoesPanel('pecas-solicitacoes-panel','');
-    if (document.getElementById('subview-pecas-a')?.style.display !== 'none') _renderSolicitacoesPanel('pecas-a-solicitacoes-panel','');
+    if (document.getElementById('view-pecas')?.classList.contains('active')) {
+      const q = (document.getElementById('pecas-search')?.value || '').toUpperCase();
+      _renderSolicitacoesPanel('pecas-solicitacoes-panel', q);
+    }
+    if (document.getElementById('subview-pecas-a')?.style.display !== 'none') {
+      const q = (document.getElementById('pecas-a-search')?.value || '').toUpperCase();
+      _renderSolicitacoesPanel('pecas-a-solicitacoes-panel', q);
+    }
     if (document.getElementById('view-solicitacoes')?.classList.contains('active')) renderSolicitacoesDoDia();
   }
 
@@ -6050,6 +6065,11 @@ async function startSolicitacoesPecasListener(){
       });
     }
     return builder.subscribe();
+  }, async function _onPecasBusResume() {
+    await _reloadSolicitacoes();
+    if (isAdminOrPcp) {
+      await _reloadConfigPecas();
+    }
   });
 }
 
