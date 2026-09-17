@@ -149,7 +149,7 @@
     if (!body) return;
     
     if (typeof fluxolabRenderPendTable === 'function') {
-      body.innerHTML = fluxolabRenderPendTable('Pendências Complexas', 'complexas', '#f472b6', 'rgba(244,114,182,.12)');
+      body.innerHTML = fluxolabRenderPendTable('Pendências Complexas', 'complexas', '#f472b6', '#f472b6');
       // Make the entire table read-only for operators, while allowing scroll on the wrapper
       const tableWrapper = body.querySelector('div');
       if (tableWrapper) {

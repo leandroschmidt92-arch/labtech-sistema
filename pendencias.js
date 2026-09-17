@@ -414,6 +414,7 @@ function pendGetViewState() {
   return {
     hiddenCols: pendGetHiddenCols(),
     listaDetalhada: listaDetalhada,
+    colSizes: pendGetSavedSizes(),
     sortState: {
       mistas: {
         activeCol: _pendActiveSortCol.mistas || null,
@@ -440,6 +441,17 @@ function pendApplyViewState(state) {
       const next = JSON.stringify(state.hiddenCols);
       if (cur !== next) {
         localStorage.setItem('fluxolabPendHiddenCols', next);
+        changed = true;
+      }
+    } catch(e) {}
+  }
+
+  if (state.colSizes) {
+    try {
+      const cur = JSON.stringify(pendGetSavedSizes());
+      const next = JSON.stringify(state.colSizes);
+      if (cur !== next) {
+        localStorage.setItem('fluxolabPendSizes', next);
         changed = true;
       }
     } catch(e) {}
@@ -1183,6 +1195,7 @@ function pendColDragEnd() {
   const colEl = Array.from(document.querySelectorAll('col[data-rz]')).find(c => c.getAttribute('data-rz') === _pendColDrag.id);
   const w = (colEl && parseInt(colEl.style.width, 10)) || _pendColDrag.startW;
   pendSetSavedSize(_pendColDrag.id, w + 'px');
+  pendSaveViewStateDebounced();
   _pendColDrag = null;
   document.body.style.cursor = '';
   document.body.style.userSelect = '';

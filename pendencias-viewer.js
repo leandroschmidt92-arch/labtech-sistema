@@ -150,7 +150,7 @@
     if (!body) return;
     
     if (typeof fluxolabRenderPendTable === 'function') {
-      body.innerHTML = fluxolabRenderPendTable('Pendências Mistas', 'mistas', '#fbbf24', 'rgba(251,191,36,.12)');
+      body.innerHTML = fluxolabRenderPendTable('Pendências Mistas', 'mistas', '#fbbf24', '#fbbf24');
       // Make the entire table read-only for operators, while allowing scroll on the wrapper
       const tableWrapper = body.querySelector('div');
       if (tableWrapper) {
