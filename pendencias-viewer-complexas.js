@@ -105,9 +105,9 @@
       backdrop-filter:blur(4px)`;
     m.innerHTML = `
       <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:18px;
-                  width:100%;max-width:1200px;max-height:90vh;overflow:hidden;
+                  width:95vw;max-width:95vw;max-height:92vh;overflow:hidden;
                   display:flex;flex-direction:column;box-shadow:0 30px 80px rgba(0,0,0,.6)">
-        <div style="padding:18px 22px;border-bottom:1px solid var(--border);
+        <div style="padding:18px 22px;border-bottom:1px solid var(--border);flex-shrink:0;
                     display:flex;align-items:center;justify-content:space-between;gap:12px">
           <div style="display:flex;align-items:center;gap:12px">
             <div style="background:rgba(244,114,182,.15);border:1px solid rgba(244,114,182,.4);
@@ -126,9 +126,9 @@
           </div>
           <button id="pvc-modal-close" style="background:transparent;border:1px solid var(--border2);
                     color:var(--muted);width:36px;height:36px;border-radius:8px;cursor:pointer;
-                    font-size:18px;line-height:1">✕</button>
+                    font-size:18px;line-height:1;flex-shrink:0">✕</button>
         </div>
-        <div id="pvc-modal-body" style="overflow:auto;padding:16px 20px;flex:1"></div>
+        <div id="pvc-modal-body" style="overflow:auto;padding:16px 20px;flex:1;min-height:0"></div>
       </div>`;
     document.body.appendChild(m);
     m.querySelector('#pvc-modal-close').onclick = pvCloseModal;
