@@ -581,6 +581,36 @@ async function fluxolabLoadPendencias() {
 
   Object.keys(PEND_ROW_MIN).forEach(t => pendGroupStateByPedido(t));
 
+  // Após o agrupamento, re-aplica a ordenação salva (se existir).
+  // O pendGroupStateByPedido re-ordena fisicamente os dados por pedido,
+  // desfazendo qualquer sort que o usuário havia salvo. Este bloco refaz
+  // a ordenação escolhida para garantir que o reload preserva os filtros.
+  Object.keys(PEND_ROW_MIN).forEach(t => {
+    const activeCol = _pendActiveSortCol[t];
+    if (!activeCol) return;
+    if (!pendIsListaDetalhada(t)) {
+      // Só re-ordena fisicamente quando NÃO está em "lista detalhada"
+      // (no modo lista detalhada a ordenação é feita no display, não nos dados)
+      if (activeCol === 'diasab' && _pendAbertoSortDir[t]) {
+        const dir = _pendAbertoSortDir[t];
+        pendApplyStateSort(t, (a, b) => {
+          const da = (typeof fluxolabPlanGetChecklistStats === 'function') ? (fluxolabPlanGetChecklistStats(a.row.modelo).maxAberto || 0) : 0;
+          const db = (typeof fluxolabPlanGetChecklistStats === 'function') ? (fluxolabPlanGetChecklistStats(b.row.modelo).maxAberto || 0) : 0;
+          return dir === 'desc' ? (db - da) : (da - db);
+        });
+      } else if (activeCol === 'media' && _pendMediaSortDir[t]) {
+        const dir = _pendMediaSortDir[t];
+        pendApplyStateSort(t, (a, b) => {
+          const sa = (typeof fluxolabPlanGetChecklistStats === 'function') ? fluxolabPlanGetChecklistStats(a.row.modelo) : {};
+          const sb = (typeof fluxolabPlanGetChecklistStats === 'function') ? fluxolabPlanGetChecklistStats(b.row.modelo) : {};
+          const ma = sa.maxDiasUteis || sa.media || 0;
+          const mb = sb.maxDiasUteis || sb.media || 0;
+          return dir === 'desc' ? (mb - ma) : (ma - mb);
+        });
+      }
+    }
+  });
+
   if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'pendencias') {
     fluxolabRenderPendencias();
   }
