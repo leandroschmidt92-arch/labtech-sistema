@@ -4018,7 +4018,13 @@ async function listarBackups(){
   const list = document.getElementById('backup-list');
   list.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:10px">Carregando backups...</div>';
   try {
-    const { data } = await _supa.from('backups').select('*').order('date_key', { ascending: false });
+    // OTIMIZAcAO EGRESS: a lista de backups so precisa dos metadados.
+    // select('*') baixava a coluna 'payload' (o backup inteiro do dia) de
+    // TODOS os backups a cada abertura do modal — megabytes por linha.
+    const { data } = await _supa.from('backups')
+      .select('date_key,saved_at,motivo')
+      .order('date_key', { ascending: false })
+      .limit(60);
     if(!data || !data.length){
       list.innerHTML='<div class="empty">Nenhum backup encontrado.</div>';
       return;
@@ -4030,7 +4036,7 @@ async function listarBackups(){
       const saved = b.savedAt ? new Date(b.savedAt).toLocaleString('pt-BR') : '—';
       const motivo= b.motivo === 'fim-expediente' ? '🌙 Fim expediente' :
                     b.motivo === 'zerar-dia-manual' ? '🗑️ Antes de zerar' : b.motivo||'—';
-      const recCount = b.history ? Object.keys(b.history).length : '?';
+      const recCount = b.history ? Object.keys(b.history).length : '—'; // contagem exige baixar o payload
       return `<div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px">
         <div>
           <div style="font-weight:600;font-size:13px">${date}</div>
@@ -29104,7 +29110,7 @@ window.fluxolabVarrerDuplicados = async function() {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         e.stopImmediatePropagation(); // impede o handler inline do HTML de enviar
-        if (mentionState.matches.length > 0) applyMention(mentionState.matches[mentionState.selectedIndex]);
+        if (mentionState.matches.length > 0) applyMention(mentionState.matches[mentionState.selectedIndex].name);
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
         mentionState.selectedIndex = (mentionState.selectedIndex + 1) % mentionState.matches.length;
@@ -29115,7 +29121,7 @@ window.fluxolabVarrerDuplicados = async function() {
         updateMentionPopup();
       } else if (e.key === 'Tab') {
         e.preventDefault();
-        applyMention(mentionState.matches[mentionState.selectedIndex]);
+        applyMention(mentionState.matches[mentionState.selectedIndex].name);
       } else if (e.key === 'Escape') {
         closeMentionPopup();
       }
@@ -29138,8 +29144,8 @@ window.fluxolabVarrerDuplicados = async function() {
         while (item && item !== mentionPopup) {
           var idx = item.getAttribute('data-idx');
           if (idx !== null) {
-            var name = mentionState.matches[parseInt(idx, 10)];
-            if (name) applyMention(name);
+            var match = mentionState.matches[parseInt(idx, 10)];
+            if (match) applyMention(match.name);
             return;
           }
           item = item.parentNode;
@@ -29169,24 +29175,32 @@ window.fluxolabVarrerDuplicados = async function() {
     closeMentionPopup();
   }
 
+
   function updateMentionPopup() {
     if (!mentionState.active || !mentionPopup) return;
 
     var allNames = (typeof users !== 'undefined' && Array.isArray(users))
-      ? users.map(function(u) { return u.name ? u.name.split(' ')[0] : ''; }).filter(Boolean)
+      ? users.map(function(u) {
+          return {
+            name: u.name ? u.name.split(' ')[0].toLowerCase() : '',
+            sector: u.sector || '',
+            isAdmin: u.isAdmin || false
+          };
+        }).filter(function(u) { return Boolean(u.name); })
       : [];
 
-    // Normaliza para minúsculas e remove duplicatas
     var seen = {};
-    var uniqueNames = [];
-    allNames.forEach(function(n) {
-      var lower = n.toLowerCase();
-      if (!seen[lower]) { seen[lower] = true; uniqueNames.push(lower); }
+    var uniqueUsers = [];
+    allNames.forEach(function(u) {
+      if (!seen[u.name]) { 
+        seen[u.name] = true; 
+        uniqueUsers.push(u); 
+      }
     });
-    uniqueNames.unshift('todos');
+    uniqueUsers.unshift({ name: 'todos', sector: 'GERAL', isAdmin: false });
 
-    mentionState.matches = uniqueNames.filter(function(n) {
-      return n.startsWith(mentionState.query);
+    mentionState.matches = uniqueUsers.filter(function(u) {
+      return u.name.startsWith(mentionState.query);
     });
 
     if (mentionState.matches.length === 0) {
@@ -29208,44 +29222,67 @@ window.fluxolabVarrerDuplicados = async function() {
     }
 
     mentionPopup.innerHTML = '';
-    mentionState.matches.forEach(function(m, i) {
+    mentionState.matches.forEach(function(u, i) {
+      var m = u.name;
+      var secColor = 'var(--muted)';
+      if (u.isAdmin) secColor = 'var(--purple)';
+      else if (u.sector === 'MONTAGEM')    secColor = 'var(--mont)';
+      else if (u.sector === 'LIMPEZA')     secColor = 'var(--limp)';
+      else if (u.sector === 'ELETRÔNICA')  secColor = 'var(--elet)';
+      else if (u.sector === 'COMPLEXA')    secColor = 'var(--comp)';
+
+      var secTag = u.isAdmin ? 'ADMIN' : (u.sector || '');
+
       var item = document.createElement('div');
       item.setAttribute('data-idx', String(i));
-      item.style.cssText = 'padding:8px 12px; cursor:pointer; font-size:13px; user-select:none;';
-      if (i === mentionState.selectedIndex) {
-        item.style.background = 'var(--bg3)';
-        item.style.fontWeight = 'bold';
-        item.style.color = 'var(--accent)';
-      } else {
-        item.style.color = 'var(--text)';
+      item.style.cssText = 'padding:8px 12px; cursor:pointer; font-size:13px; user-select:none; display:flex; justify-content:space-between; align-items:center;';
+      
+      var nameSpan = document.createElement('span');
+      nameSpan.textContent = '@' + m;
+      nameSpan.style.color = (i === mentionState.selectedIndex) ? 'var(--accent)' : 'var(--text)';
+      nameSpan.style.fontWeight = (i === mentionState.selectedIndex) ? 'bold' : 'normal';
+
+      item.appendChild(nameSpan);
+
+      if (secTag) {
+        var secSpan = document.createElement('span');
+        secSpan.textContent = secTag;
+        secSpan.style.fontSize = '9px';
+        secSpan.style.fontWeight = '700';
+        secSpan.style.color = secColor;
+        item.appendChild(secSpan);
       }
-      item.textContent = '@' + m;
+
+      item.style.background = (i === mentionState.selectedIndex) ? 'var(--bg3)' : '';
 
       // Listener direto no item — mais confiável que delegação
-      // Usa uma IIFE para capturar o valor correto de m em cada iteração
-      (function(name) {
-        item.addEventListener('mousedown', function(e) {
+      (function(name, el, nSpan) {
+        el.addEventListener('mousedown', function(e) {
           e.preventDefault();     // Impede blur do input
           e.stopPropagation();    // Impede bubbling para o popup pai
           applyMention(name);
         });
-        item.addEventListener('mouseover', function() {
+        el.addEventListener('mouseover', function() {
           mentionState.selectedIndex = i;
-          // Só atualiza os estilos sem reconstruir o HTML todo
           var items = mentionPopup.querySelectorAll('[data-idx]');
-          items.forEach(function(el, idx) {
+          items.forEach(function(e, idx) {
+            var s = e.firstChild; // nameSpan
             if (idx === i) {
-              el.style.background = 'var(--bg3)';
-              el.style.fontWeight = 'bold';
-              el.style.color = 'var(--accent)';
+              e.style.background = 'var(--bg3)';
+              if (s) {
+                s.style.fontWeight = 'bold';
+                s.style.color = 'var(--accent)';
+              }
             } else {
-              el.style.background = '';
-              el.style.fontWeight = '';
-              el.style.color = 'var(--text)';
+              e.style.background = '';
+              if (s) {
+                s.style.fontWeight = 'normal';
+                s.style.color = 'var(--text)';
+              }
             }
           });
         });
-      })(m);
+      })(m, item, nameSpan);
 
       mentionPopup.appendChild(item);
     });

@@ -504,15 +504,15 @@ function pendApplyViewState(state) {
 }
 
 /** Salva o estado de view no Supabase imediatamente */
+// OTIMIZAcAO EGRESS: o estado de view (filtros, ordenacao, colunas ocultas,
+// larguras) e preferencia de tela. Antes ia para fluxolab_state e era
+// retransmitido pelo Realtime para todas as abas a cada arrasto de coluna.
+// Agora vive somente no localStorage do proprio usuario.
+const PEND_VIEW_STATE_LS_KEY = 'fluxolabPendViewState';
 async function pendSaveViewStateNow() {
-  if (typeof _supa === 'undefined') return;
   try {
-    const state = pendGetViewState();
-    await _supa.from('fluxolab_state').upsert(
-      { key: 'pendencias_view_state', data: state },
-      { onConflict: 'key' }
-    );
-  } catch(e) { console.warn('[pend-view] save falhou:', e); }
+    localStorage.setItem(PEND_VIEW_STATE_LS_KEY, JSON.stringify(pendGetViewState()));
+  } catch(e) { console.warn('[pend-view] save local falhou:', e); }
 }
 
 /** Salva o estado de view com debounce de 500ms */
@@ -533,13 +533,11 @@ async function fluxolabLoadPendencias() {
       if (error) console.warn('[pend] load erro:', error);
     } catch(e) { console.error('Erro ao carregar pendências:', e); }
 
-    // Carrega view state (ordenação, colunas ocultas, lista detalhada) do Supabase
+    // view state agora e local (sem round-trip nem Realtime)
     try {
-      const { data: vsData, error: vsError } = await _supa.from('fluxolab_state').select('data').eq('key', 'pendencias_view_state').maybeSingle();
-      if (!vsError && vsData && vsData.data) {
-        pendApplyViewState(vsData.data);
-      }
-    } catch(e) { console.warn('[pend-view] load falhou:', e); }
+      const _vsRaw = localStorage.getItem(PEND_VIEW_STATE_LS_KEY);
+      if (_vsRaw) pendApplyViewState(JSON.parse(_vsRaw));
+    } catch(e) { console.warn('[pend-view] load local falhou:', e); }
 
     // Realtime — nunca bloqueia o loaded se o helper falhar
     if (!_pendSyncChannel) {
@@ -559,24 +557,10 @@ async function fluxolabLoadPendencias() {
       }
     }
 
-    // Realtime para view state (filtros/ordenação/colunas) — canal compartilhado
-    if (!_pendViewStateSyncRegistered) {
-      _pendViewStateSyncRegistered = true;
-      try {
-        if (typeof window._fluxolabStateOn === 'function') {
-          window._fluxolabStateOn('pendencias_view_state', payload => {
-            if (payload.new && payload.new.data) {
-              pendApplyViewState(payload.new.data);
-            }
-          });
-        } else {
-          console.warn('[pend-view] _fluxolabStateOn indisponível — sync de filtros desligado');
-        }
-      } catch (e) {
-        console.warn('[pend-view] falha ao registrar realtime de view state:', e);
-      }
-    }
+    // (Realtime de view state removido: preferencia local, nao precisa trafegar)
   }
+
+
 
   // A tabela acompanha a quantidade de registros: corta o excesso de linhas
   // vazias no final e garante sempre uma linha livre para digitar.
@@ -629,6 +613,8 @@ async function fluxolabLoadPendencias() {
 }
 
 // Salva o estado no Supabase
+// OTIMIZAcAO EGRESS: ver comentario em planejamento.js
+const PEND_SAVE_DEBOUNCE_MS = 2500;
 let _fluxolabPendSaveTimer;
 let _fluxolabPendLastSavedJSON = null;
 let _fluxolabPendSaving = false;
@@ -638,7 +624,7 @@ async function fluxolabSavePendenciasNow() {
   if (typeof _supa === 'undefined') return false;
   if (_fluxolabPendSaving) {
     clearTimeout(_fluxolabPendSaveTimer);
-    _fluxolabPendSaveTimer = setTimeout(() => { fluxolabSavePendenciasDebounced(); }, 400);
+    _fluxolabPendSaveTimer = setTimeout(() => { fluxolabSavePendenciasDebounced(); }, PEND_SAVE_DEBOUNCE_MS);
     return false;
   }
   let snap;
@@ -667,7 +653,7 @@ async function fluxolabSavePendenciasNow() {
 function fluxolabSavePendenciasDebounced() {
   if (!_fluxolabPendLoaded) return;
   clearTimeout(_fluxolabPendSaveTimer);
-  _fluxolabPendSaveTimer = setTimeout(() => { fluxolabSavePendenciasNow(); }, 900);
+  _fluxolabPendSaveTimer = setTimeout(() => { fluxolabSavePendenciasNow(); }, PEND_SAVE_DEBOUNCE_MS);
 }
 
 if (typeof window !== 'undefined' && !window._pendFlushBound) {

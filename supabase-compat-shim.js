@@ -331,7 +331,7 @@ function createSupabaseCompatShim(supa) {
   // aba está em segundo plano cortam esse tráfego drasticamente, sem
   // perder consistência (o Realtime continua entregando as mudanças na hora).
   const RECONCILE_MS = 300000;
-  const BLOB_BROADCAST_MAX = 120000; // acima disso manda "reload" em vez do JSON
+  const BLOB_BROADCAST_MAX = 12000; // acima disso manda "reload" em vez do JSON
 
   let _bus = null;
   const _busHandlers = new Set();

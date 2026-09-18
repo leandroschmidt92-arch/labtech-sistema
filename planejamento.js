@@ -115,6 +115,10 @@ async function fluxolabLoadPlanejamento() {
 
 // Salva o estado no Supabase
 // Debounce curto + dedupe + flush em beforeunload / troca de aba.
+// OTIMIZAcAO EGRESS: cada gravacao deste blob e re-transmitida pelo
+// Realtime para TODAS as abas abertas. Debounce curto (400/900ms)
+// significava ~2 retransmissoes por segundo enquanto o usuario digita.
+const FLUXOLAB_SAVE_DEBOUNCE_MS = 2500;
 let _fluxolabPlanSaveTimer;
 let _fluxolabPlanLastSavedJSON = null;
 let _fluxolabPlanSaving = false;
@@ -124,7 +128,7 @@ async function fluxolabSavePlanejamentoNow() {
   if (typeof _supa === 'undefined') return false;
   if (_fluxolabPlanSaving) {
     clearTimeout(_fluxolabPlanSaveTimer);
-    _fluxolabPlanSaveTimer = setTimeout(() => { fluxolabSavePlanejamentoDebounced(); }, 400);
+    _fluxolabPlanSaveTimer = setTimeout(() => { fluxolabSavePlanejamentoDebounced(); }, FLUXOLAB_SAVE_DEBOUNCE_MS);
     return false;
   }
   let snap;
@@ -161,7 +165,7 @@ async function fluxolabSavePlanejamentoNow() {
 function fluxolabSavePlanejamentoDebounced() {
   if (!_fluxolabPlanLoaded) return;
   clearTimeout(_fluxolabPlanSaveTimer);
-  _fluxolabPlanSaveTimer = setTimeout(() => { fluxolabSavePlanejamentoNow(); }, 900);
+  _fluxolabPlanSaveTimer = setTimeout(() => { fluxolabSavePlanejamentoNow(); }, FLUXOLAB_SAVE_DEBOUNCE_MS);
 }
 
 // Garante flush ao sair / ocultar a página

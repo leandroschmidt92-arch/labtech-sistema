@@ -28,14 +28,7 @@
       }
     } catch(e){ console.error('[pvc] load', e); }
 
-    // Carrega o view state (filtros, ordenação, colunas) do Supabase
-    try {
-      const { data: vsData } = await _supa.from('fluxolab_state')
-        .select('data').eq('key','pendencias_view_state').maybeSingle();
-      if (vsData && vsData.data && typeof pendApplyViewState === 'function') {
-        pendApplyViewState(vsData.data);
-      }
-    } catch(e){ console.warn('[pvc] view state load failed', e); }
+    // view state nao e mais lido do servidor (preferencia local do admin)
 
     if (!_pvChannel) {
       _pvChannel = true;
@@ -43,15 +36,6 @@
         if (payload.new && payload.new.data && Array.isArray(payload.new.data.complexas)) {
           _pvState.complexas = payload.new.data.complexas;
           if (_pvModalEl && _pvModalEl.style.display === 'flex') pvRenderModalTable();
-        }
-      });
-      window._fluxolabStateOn('pendencias_view_state', payload => {
-        // Aplica o novo estado de filtros/ordenação nas variáveis globais
-        if (payload.new && payload.new.data && typeof pendApplyViewState === 'function') {
-          pendApplyViewState(payload.new.data);
-        }
-        if (_pvModalEl && _pvModalEl.style.display === 'flex') {
-          setTimeout(() => pvRenderModalTable(), 50);
         }
       });
     }
@@ -284,17 +268,15 @@
     if (typeof _supa === 'undefined' || typeof users === 'undefined'){
       return setTimeout(pvBoot, 500);
     }
-    if (typeof currentUser !== 'undefined' && currentUser) {
-      pvLoad();
-    }
+    // OTIMIZAcAO EGRESS: nao carrega nem assina nada no boot. O modal
+    // (pvOpenModal) chama pvLoad() na primeira abertura — antes disso o
+    // operador nao consome egress algum desta tela.
     pvEnsureButton();
 
     setInterval(() => {
       try {
         if (typeof currentUser !== 'undefined' && currentUser) {
-          if (!_pvLoaded) {
-            pvLoad();
-          }
+          /* carregamento sob demanda: ver pvOpenModal */
         } else {
           if (_pvLoaded) {
             _pvLoaded = false;
