@@ -28989,6 +28989,7 @@ window.fluxolabVarrerDuplicados = async function() {
 
   /* ── Iniciar chat ── */
   function initChat() {
+    initMentionPopup();
     if (!window._db) return;
 
     var fab = document.getElementById('chat-fab-container');
@@ -29065,4 +29066,214 @@ window.fluxolabVarrerDuplicados = async function() {
   }
   hookLogin();
 
+
+  /* ── Autocomplete Menções ── */
+  var mentionPopup = null;
+  var mentionState = { active: false, query: '', startIndex: -1, selectedIndex: 0, matches: [] };
+
+
+  function initMentionPopup() {
+    if (mentionPopup) return;
+    // Popup vai no body com position:fixed — ignora o overflow:hidden do chat-panel
+    mentionPopup = document.createElement('div');
+    mentionPopup.id = 'chat-mentions-popup';
+    mentionPopup.style.cssText = [
+      'display:none',
+      'position:fixed',
+      'background:var(--bg2)',
+      'border:1px solid var(--border)',
+      'border-radius:8px',
+      'box-shadow:0 4px 16px rgba(0,0,0,0.25)',
+      'z-index:99999',
+      'max-height:160px',
+      'overflow-y:auto',
+      'flex-direction:column',
+      'min-width:160px',
+    ].join(';');
+    document.body.appendChild(mentionPopup);
+
+    var inp = document.getElementById('chat-input');
+    if (!inp) return;
+
+    inp.addEventListener('input', handleMentionInput);
+
+    // Captura de eventos de teclado via addEventListener (não sobrescreve onkeydown do HTML)
+    inp.addEventListener('keydown', function(e) {
+      var popupOpen = mentionState.active && mentionPopup && mentionPopup.style.display !== 'none';
+      if (!popupOpen) return; // deixa o handler inline do HTML cuidar do Enter normal
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        e.stopImmediatePropagation(); // impede o handler inline do HTML de enviar
+        if (mentionState.matches.length > 0) applyMention(mentionState.matches[mentionState.selectedIndex]);
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        mentionState.selectedIndex = (mentionState.selectedIndex + 1) % mentionState.matches.length;
+        updateMentionPopup();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        mentionState.selectedIndex = (mentionState.selectedIndex - 1 + mentionState.matches.length) % mentionState.matches.length;
+        updateMentionPopup();
+      } else if (e.key === 'Tab') {
+        e.preventDefault();
+        applyMention(mentionState.matches[mentionState.selectedIndex]);
+      } else if (e.key === 'Escape') {
+        closeMentionPopup();
+      }
+    }, true); // capture:true — garante que roda antes do handler inline do HTML
+
+    // Listener global em capture para clique nos itens do popup
+    document.addEventListener('pointerdown', function(e) {
+      if (!mentionPopup || mentionPopup.style.display === 'none') return;
+      // Verifica se o clique é dentro do popup
+      var node = e.target;
+      var insidePopup = false;
+      while (node) {
+        if (node === mentionPopup) { insidePopup = true; break; }
+        node = node.parentNode;
+      }
+      if (insidePopup) {
+        e.preventDefault(); // impede perda de foco do input
+        // Encontra o item clicado
+        var item = e.target;
+        while (item && item !== mentionPopup) {
+          var idx = item.getAttribute('data-idx');
+          if (idx !== null) {
+            var name = mentionState.matches[parseInt(idx, 10)];
+            if (name) applyMention(name);
+            return;
+          }
+          item = item.parentNode;
+        }
+      } else {
+        // Clique fora do popup — fecha
+        closeMentionPopup();
+      }
+    }, true); // capture:true — roda antes de qualquer outro handler
+  }
+
+  function handleMentionInput(e) {
+    var val = e.target.value;
+    var caret = e.target.selectionStart;
+    var lastAt = val.lastIndexOf('@', caret - 1);
+    if (lastAt !== -1) {
+      var queryStr = val.substring(lastAt + 1, caret);
+      if (!/\s/.test(queryStr)) {
+        mentionState.active = true;
+        mentionState.query = queryStr.toLowerCase();
+        mentionState.startIndex = lastAt;
+        mentionState.selectedIndex = 0;
+        updateMentionPopup();
+        return;
+      }
+    }
+    closeMentionPopup();
+  }
+
+  function updateMentionPopup() {
+    if (!mentionState.active || !mentionPopup) return;
+
+    var allNames = (typeof users !== 'undefined' && Array.isArray(users))
+      ? users.map(function(u) { return u.name ? u.name.split(' ')[0] : ''; }).filter(Boolean)
+      : [];
+
+    // Normaliza para minúsculas e remove duplicatas
+    var seen = {};
+    var uniqueNames = [];
+    allNames.forEach(function(n) {
+      var lower = n.toLowerCase();
+      if (!seen[lower]) { seen[lower] = true; uniqueNames.push(lower); }
+    });
+    uniqueNames.unshift('todos');
+
+    mentionState.matches = uniqueNames.filter(function(n) {
+      return n.startsWith(mentionState.query);
+    });
+
+    if (mentionState.matches.length === 0) {
+      mentionPopup.style.display = 'none';
+      return;
+    }
+
+    if (mentionState.selectedIndex >= mentionState.matches.length) {
+      mentionState.selectedIndex = 0;
+    }
+
+    // Posiciona o popup acima do input (position:fixed no body)
+    var inp = document.getElementById('chat-input');
+    if (inp) {
+      var rect = inp.getBoundingClientRect();
+      mentionPopup.style.left = rect.left + 'px';
+      mentionPopup.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+      mentionPopup.style.top = 'auto';
+    }
+
+    mentionPopup.innerHTML = '';
+    mentionState.matches.forEach(function(m, i) {
+      var item = document.createElement('div');
+      item.setAttribute('data-idx', String(i));
+      item.style.cssText = 'padding:8px 12px; cursor:pointer; font-size:13px; user-select:none;';
+      if (i === mentionState.selectedIndex) {
+        item.style.background = 'var(--bg3)';
+        item.style.fontWeight = 'bold';
+        item.style.color = 'var(--accent)';
+      } else {
+        item.style.color = 'var(--text)';
+      }
+      item.textContent = '@' + m;
+
+      // Listener direto no item — mais confiável que delegação
+      // Usa uma IIFE para capturar o valor correto de m em cada iteração
+      (function(name) {
+        item.addEventListener('mousedown', function(e) {
+          e.preventDefault();     // Impede blur do input
+          e.stopPropagation();    // Impede bubbling para o popup pai
+          applyMention(name);
+        });
+        item.addEventListener('mouseover', function() {
+          mentionState.selectedIndex = i;
+          // Só atualiza os estilos sem reconstruir o HTML todo
+          var items = mentionPopup.querySelectorAll('[data-idx]');
+          items.forEach(function(el, idx) {
+            if (idx === i) {
+              el.style.background = 'var(--bg3)';
+              el.style.fontWeight = 'bold';
+              el.style.color = 'var(--accent)';
+            } else {
+              el.style.background = '';
+              el.style.fontWeight = '';
+              el.style.color = 'var(--text)';
+            }
+          });
+        });
+      })(m);
+
+      mentionPopup.appendChild(item);
+    });
+    mentionPopup.style.display = 'flex';
+    mentionPopup.style.flexDirection = 'column';
+  }
+
+  function applyMention(m) {
+    if (!m) return;
+    var inp = document.getElementById('chat-input');
+    if (!inp) return;
+    var val = inp.value;
+    // Usa o startIndex (posição do @) e o endIndex salvo (fim da query digitada)
+    var endIndex = mentionState.startIndex + 1 + mentionState.query.length;
+    var before = val.substring(0, mentionState.startIndex);
+    var after  = val.substring(endIndex);
+    var insert = '@' + m + ' ';
+    inp.value = before + insert + after;
+    var newPos = before.length + insert.length;
+    inp.focus();
+    inp.setSelectionRange(newPos, newPos);
+    closeMentionPopup();
+  }
+
+  function closeMentionPopup() {
+    mentionState.active = false;
+    if (mentionPopup) mentionPopup.style.display = 'none';
+  }
+
 })();
+
