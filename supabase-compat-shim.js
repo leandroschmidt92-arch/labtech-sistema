@@ -60,6 +60,7 @@ function createSupabaseCompatShim(supa) {
     alarme_global:       { mode: 'blob', blobKey: 'alarme_global' },
     schedule_override:   { mode: 'blob', blobKey: 'schedule_override' },
     faceAuth:            { mode: 'rows', table: 'face_auth' },
+    chat_diario:         { mode: 'blob', blobKey: 'chat_diario' },
   };
 
   // Colunas dedicadas que tentamos espelhar (best-effort). A fonte de

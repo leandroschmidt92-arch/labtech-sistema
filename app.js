@@ -27879,12 +27879,8 @@ window._copiarSelb = function (selb, btn) {
 
   /* ── Adiciona o botão FAB na tela ── */
   function _addFab() {
-    if(document.getElementById('alm-fab')) return;
-    _styles();
-    var f=document.createElement('button');
-    f.id='alm-fab'; f.title='Alarme'; f.textContent='🔔';
-    f.onclick=function(){ _painel(); };
-    document.body.appendChild(f);
+    // FAB desabilitado: ícone oculto por opção de configuração
+    return;
   }
   function _removeFab() {
     var f=document.getElementById('alm-fab'); if(f)f.remove();
@@ -28770,3 +28766,238 @@ window.fluxolabVarrerDuplicados = async function() {
 
   if (typeof _fluxolabRenderGrid === 'function') _fluxolabRenderGrid();
 };
+
+/* === chat.js === */
+(function(){
+  'use strict';
+
+  var _chatRef   = null;
+  var _isOpen    = false;
+  var _unread    = 0;
+  var _rendered  = {};   // id -> true, evita re-renderizar ao receber value
+
+  function todayKey() {
+    var d = new Date();
+    return d.getFullYear() + '-'
+      + String(d.getMonth()+1).padStart(2,'0') + '-'
+      + String(d.getDate()).padStart(2,'0');
+  }
+
+  /* ── Abrir / Fechar ── */
+  window._chatToggle = function() {
+    _isOpen = !_isOpen;
+    var panel = document.getElementById('chat-panel');
+    var badge = document.getElementById('chat-badge');
+    if (_isOpen) {
+      panel.style.display = 'flex';
+      _unread = 0;
+      if (badge) badge.style.display = 'none';
+      setTimeout(function() {
+        var inp = document.getElementById('chat-input');
+        if (inp) inp.focus();
+        scrollBottom();
+      }, 50);
+    } else {
+      panel.style.display = 'none';
+    }
+  };
+
+  /* ── Enviar ── */
+  window._chatEnviar = function() {
+    var inp = document.getElementById('chat-input');
+    if (!inp) return;
+    var msg = (inp.value || '').trim();
+    if (!msg || !currentUser || !window._db) return;
+
+    var today = todayKey();
+    var key   = '_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
+    var entry = {
+      nome:    currentUser.name    || 'Desconhecido',
+      setor:   currentUser.sector  || '',
+      isAdmin: !!currentUser.isAdmin,
+      uid:     currentUser.id      || '',
+      msg:     msg,
+      ts:      Date.now()
+    };
+
+    // Salva em /chat_diario/<hoje>/<key>
+    _db.ref('/chat_diario/' + today + '/' + key).set(entry).catch(function(err) {
+      console.warn('[Chat] Erro ao enviar:', err);
+    });
+
+    inp.value = '';
+    inp.focus();
+  };
+
+  /* ── Scroll ── */
+  function scrollBottom() {
+    var box = document.getElementById('chat-messages');
+    if (box) box.scrollTop = box.scrollHeight;
+  }
+
+  /* ── Hora formatada ── */
+  function fmtTime(ts) {
+    var d = new Date(ts);
+    return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+  }
+
+  /* ── Escape HTML ── */
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>');
+  }
+
+  /* ── Renderiza uma mensagem (se ainda não foi renderizada) ── */
+  function renderOne(id, data) {
+    if (_rendered[id] || !data || !data.msg) return;
+    _rendered[id] = true;
+
+    var box = document.getElementById('chat-messages');
+    if (!box) return;
+
+    var isMe = currentUser && currentUser.id === data.uid;
+
+    var secColor = 'var(--muted)';
+    if (data.isAdmin) secColor = 'var(--purple)';
+    else if (data.setor === 'MONTAGEM')    secColor = 'var(--mont)';
+    else if (data.setor === 'LIMPEZA')     secColor = 'var(--limp)';
+    else if (data.setor === 'ELETRÔNICA')  secColor = 'var(--elet)';
+    else if (data.setor === 'COMPLEXA')    secColor = 'var(--comp)';
+
+    var secTag = data.isAdmin ? 'ADMIN' : (data.setor || '');
+
+    var headerHtml = isMe ? '' :
+      '<div style="font-size:10px;margin-bottom:3px;display:flex;gap:6px;align-items:center;">' +
+        '<span style="font-weight:700;color:var(--text);">' + esc(data.nome) + '</span>' +
+        '<span style="color:' + secColor + ';font-weight:700;font-size:9px;">' + esc(secTag) + '</span>' +
+      '</div>';
+
+    var bg     = isMe ? 'var(--accent)' : 'var(--bg4)';
+    var color  = isMe ? '#fff' : 'var(--text)';
+    var radius = isMe ? '12px 12px 2px 12px' : '12px 12px 12px 2px';
+
+    var div = document.createElement('div');
+    div.style.cssText = 'display:flex;flex-direction:column;max-width:85%;align-self:' + (isMe ? 'flex-end' : 'flex-start') + ';';
+    div.innerHTML =
+      headerHtml +
+      '<div style="background:' + bg + ';color:' + color + ';padding:8px 12px;border-radius:' + radius + ';font-size:13px;line-height:1.4;word-wrap:break-word;">' +
+        esc(data.msg) +
+      '</div>' +
+      '<div style="font-size:9px;color:var(--muted);text-align:' + (isMe ? 'right' : 'left') + ';margin-top:2px;">' +
+        fmtTime(data.ts) +
+      '</div>';
+
+    // Inserir na posição correta por timestamp
+    var inserted = false;
+    var children = box.childNodes;
+    for (var i = children.length - 1; i >= 0; i--) {
+      var el = children[i];
+      if (el._chatTs && el._chatTs <= data.ts) {
+        box.insertBefore(div, el.nextSibling);
+        inserted = true;
+        break;
+      }
+    }
+    if (!inserted) box.appendChild(div);
+    div._chatTs = data.ts;
+
+    // Badge de não lido
+    if (!isMe && !_isOpen) {
+      _unread++;
+      var badge = document.getElementById('chat-badge');
+      if (badge) {
+        badge.textContent = _unread > 99 ? '99+' : String(_unread);
+        badge.style.display = 'block';
+      }
+    }
+
+    // Auto-scroll somente se perto do fim
+    var atBottom = box.scrollHeight - box.clientHeight <= box.scrollTop + 80;
+    if (atBottom || isMe) scrollBottom();
+  }
+
+  /* ── Callback de value ── */
+  function onValue(snap) {
+    var val = snap.val();
+    if (!val || typeof val !== 'object') return;
+    // val é { <key>: { nome, msg, ts, ... }, ... }
+    var keys = Object.keys(val).sort(function(a, b) {
+      return (val[a].ts || 0) - (val[b].ts || 0);
+    });
+    keys.forEach(function(k) { renderOne(k, val[k]); });
+  }
+
+  /* ── Iniciar chat ── */
+  function initChat() {
+    if (!window._db) return;
+
+    var fab = document.getElementById('chat-fab-container');
+    if (fab) fab.style.display = 'block';
+
+    if (_chatRef) { _chatRef.off('value', onValue); }
+
+    var today = todayKey();
+    _chatRef = _db.ref('/chat_diario/' + today);
+
+    var box = document.getElementById('chat-messages');
+    if (box) box.innerHTML = '';
+    _rendered = {};
+
+    _chatRef.on('value', onValue);
+
+    // Cleanup de dias anteriores (só admin)
+    if (currentUser && currentUser.isAdmin) {
+      try {
+        _db.ref('/chat_diario').once('value', function(snap) {
+          var all = snap.val();
+          if (!all) return;
+          Object.keys(all).forEach(function(k) {
+            if (k !== today) {
+              _db.ref('/chat_diario/' + k).set(null).catch(function(){});
+            }
+          });
+        });
+      } catch(e) {}
+    }
+  }
+
+  /* ── Parar chat ── */
+  function stopChat() {
+    if (_chatRef) { _chatRef.off('value', onValue); _chatRef = null; }
+    var fab = document.getElementById('chat-fab-container');
+    if (fab) fab.style.display = 'none';
+    if (_isOpen) window._chatToggle();
+    _rendered = {};
+    _unread = 0;
+  }
+
+  /* ── Hook em loginAs / logout ── */
+  function hookLogin(tries) {
+    tries = tries || 0;
+    if (typeof loginAs === 'function' && !window.__chatHooked) {
+      window.__chatHooked = true;
+      var _origLogin = loginAs;
+      window.loginAs = function(u) {
+        var r = _origLogin.apply(this, arguments);
+        if (u) { setTimeout(initChat, 200); }
+        else stopChat();
+        return r;
+      };
+      var _origLogout = typeof logout === 'function' ? logout : null;
+      if (_origLogout) {
+        window.logout = function() {
+          var r = _origLogout.apply(this, arguments);
+          stopChat();
+          return r;
+        };
+      }
+      if (typeof currentUser !== 'undefined' && currentUser) {
+        setTimeout(initChat, 200);
+      }
+    } else if (!window.__chatHooked && tries < 120) {
+      setTimeout(function(){ hookLogin(tries+1); }, 100);
+    }
+  }
+  hookLogin();
+
+})();
+
