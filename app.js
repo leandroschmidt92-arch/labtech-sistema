@@ -28783,6 +28783,25 @@ window.fluxolabVarrerDuplicados = async function() {
       + String(d.getDate()).padStart(2,'0');
   }
 
+  /* ── Beep do Chat (Menção) ── */
+  var _chatCtx = null;
+  function beepMention() {
+    try {
+      if (!_chatCtx) _chatCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (_chatCtx.state === 'suspended') _chatCtx.resume();
+      var t = _chatCtx.currentTime + 0.05;
+      [0, 0.2].forEach(function(delay) {
+        var o = _chatCtx.createOscillator(), g = _chatCtx.createGain();
+        o.connect(g); g.connect(_chatCtx.destination);
+        o.type = 'sine'; o.frequency.setValueAtTime(880, t + delay);
+        g.gain.setValueAtTime(0, t + delay);
+        g.gain.linearRampToValueAtTime(0.3, t + delay + 0.01);
+        g.gain.linearRampToValueAtTime(0, t + delay + 0.15);
+        o.start(t + delay); o.stop(t + delay + 0.16);
+      });
+    } catch(e) {}
+  }
+
   /* ── Abrir / Fechar ── */
   window._chatToggle = function() {
     _isOpen = !_isOpen;
@@ -28797,6 +28816,14 @@ window.fluxolabVarrerDuplicados = async function() {
         if (inp) inp.focus();
         scrollBottom();
       }, 50);
+      
+      // Pede permissão para notificação se não tiver
+      if (window.Notification && Notification.permission !== 'granted' && Notification.permission !== 'denied') {
+        Notification.requestPermission();
+      }
+      // Habilita som
+      if (!_chatCtx) try { _chatCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){}
+      if (_chatCtx && _chatCtx.state === 'suspended') _chatCtx.resume();
     } else {
       panel.style.display = 'none';
     }
@@ -28849,12 +28876,21 @@ window.fluxolabVarrerDuplicados = async function() {
   /* ── Renderiza uma mensagem (se ainda não foi renderizada) ── */
   function renderOne(id, data) {
     if (_rendered[id] || !data || !data.msg) return;
+    
+    // Verifica se já passou tempo demais para tocar notificação (impede spam ao recarregar a página)
+    var isOld = (Date.now() - data.ts) > 10000;
     _rendered[id] = true;
 
     var box = document.getElementById('chat-messages');
     if (!box) return;
 
     var isMe = currentUser && currentUser.id === data.uid;
+    var myFirstName = (currentUser && currentUser.name) ? currentUser.name.split(' ')[0].toLowerCase() : '';
+    var mentioned = !isMe && myFirstName && data.msg.toLowerCase().indexOf('@' + myFirstName) !== -1;
+    var isTodos = !isMe && data.msg.toLowerCase().indexOf('@todos') !== -1;
+
+    // Destacar visualmente a mensagem se mencionado
+    var isHighlight = mentioned || isTodos;
 
     var secColor = 'var(--muted)';
     if (data.isAdmin) secColor = 'var(--purple)';
@@ -28871,16 +28907,25 @@ window.fluxolabVarrerDuplicados = async function() {
         '<span style="color:' + secColor + ';font-weight:700;font-size:9px;">' + esc(secTag) + '</span>' +
       '</div>';
 
-    var bg     = isMe ? 'var(--accent)' : 'var(--bg4)';
+    var bg     = isMe ? 'var(--accent)' : (isHighlight ? 'var(--accent-hover, #3b82f640)' : 'var(--bg4)');
     var color  = isMe ? '#fff' : 'var(--text)';
     var radius = isMe ? '12px 12px 2px 12px' : '12px 12px 12px 2px';
+    var border = isHighlight ? '1px solid var(--accent)' : '1px solid transparent';
 
     var div = document.createElement('div');
     div.style.cssText = 'display:flex;flex-direction:column;max-width:85%;align-self:' + (isMe ? 'flex-end' : 'flex-start') + ';';
+    
+    // Deixar a menção em negrito visualmente na mensagem
+    var displayMsg = esc(data.msg);
+    if (isHighlight) {
+      if (mentioned) displayMsg = displayMsg.replace(new RegExp('@' + myFirstName, 'gi'), '<strong style="color:var(--accent)">$&</strong>');
+      if (isTodos) displayMsg = displayMsg.replace(/@todos/gi, '<strong style="color:var(--accent)">$&</strong>');
+    }
+
     div.innerHTML =
       headerHtml +
-      '<div style="background:' + bg + ';color:' + color + ';padding:8px 12px;border-radius:' + radius + ';font-size:13px;line-height:1.4;word-wrap:break-word;">' +
-        esc(data.msg) +
+      '<div style="background:' + bg + ';color:' + color + ';padding:8px 12px;border-radius:' + radius + ';border:' + border + ';font-size:13px;line-height:1.4;word-wrap:break-word;">' +
+        displayMsg +
       '</div>' +
       '<div style="font-size:9px;color:var(--muted);text-align:' + (isMe ? 'right' : 'left') + ';margin-top:2px;">' +
         fmtTime(data.ts) +
@@ -28907,6 +28952,22 @@ window.fluxolabVarrerDuplicados = async function() {
       if (badge) {
         badge.textContent = _unread > 99 ? '99+' : String(_unread);
         badge.style.display = 'block';
+      }
+    }
+    
+    // Ação de Menção (só para mensagens novas)
+    if (isHighlight && !isOld) {
+      beepMention();
+      if (window.Notification && Notification.permission === 'granted' && document.hidden) {
+        var notif = new Notification("Nova mensagem de " + data.nome, {
+          body: data.msg,
+          icon: '/logo-labtech.png'
+        });
+        notif.onclick = function() {
+          window.focus();
+          if (!_isOpen) window._chatToggle();
+          notif.close();
+        };
       }
     }
 
@@ -28958,6 +29019,11 @@ window.fluxolabVarrerDuplicados = async function() {
         });
       } catch(e) {}
     }
+    
+    // Solicita permissão para notificação logo no login se ainda não definido
+    if (window.Notification && Notification.permission === 'default') {
+      setTimeout(function(){ Notification.requestPermission(); }, 2000);
+    }
   }
 
   /* ── Parar chat ── */
@@ -29000,4 +29066,3 @@ window.fluxolabVarrerDuplicados = async function() {
   hookLogin();
 
 })();
-
