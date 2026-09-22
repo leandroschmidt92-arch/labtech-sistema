@@ -1788,7 +1788,10 @@ function startRealtimeSync(){
   // isso pesa muito na cota. Operador comum continua em Realtime (é 1 única
   // linha, atualização instantânea é barata e importante pro próprio cronômetro).
   const _usersSubscribe = (_usersPath === '/users')
-    ? (path, cb, errCb) => pollRef(_db.ref(path), 60000, cb, errCb)
+    // Dashboard não precisa baixar toda a equipe a cada minuto. O poll ainda
+    // roda imediatamente ao voltar à aba (pollRef), mantendo a tela útil sem
+    // multiplicar requests por cada monitor/admin aberto.
+    ? (path, cb, errCb) => pollRef(_db.ref(path), 300000, cb, errCb)
     : (path, cb, errCb) => _db.ref(path).on('value', cb, errCb);
   _usersListener = _usersSubscribe(_usersPath, snap => {
     if(!snap.exists()){
@@ -2823,32 +2826,7 @@ function loginAs(u){
     });
   }
 
-  // Inicia o listener de checklists do FluxoLAB em background logo após o login,
-  // garantindo que fluxolabModeloTemChecklist() já tenha dados quando a aba
-  // Qualidade for aberta (sem precisar visitar o FluxoLAB antes).
-  if (typeof fluxolabStartChecklistsListener === 'function') {
-    try { fluxolabStartChecklistsListener(); } catch(e) { console.warn('[Qualidade] Falha ao iniciar listener de checklists:', e); }
-  }
-  // Listener do log de movimentações — necessário para impressão automática
-  // de etiquetas na aba Aguardando Peças sem abrir o FluxoLAB antes.
-  if (typeof fluxolabStartLogListener === 'function') {
-    try { fluxolabStartLogListener(); } catch(e) { console.warn('[FluxoLAB Log] Falha ao iniciar listener pós-login:', e); }
-  }
-  // Carrega locks dos bolsões de peças do Supabase (persistência compartilhada)
-  if (typeof _loadBolsaoLocksSupabase === 'function') {
-    try { _loadBolsaoLocksSupabase(); } catch(e) { console.warn('[Bolsões] Falha ao carregar locks:', e); }
-  }
-  // Rebusca os dados de Qualidade (registros + revisadas) já com a
-  // identidade autenticada do login que acabou de ocorrer. A carga inicial
-  // de _initQualListener roda antes do login (só com acesso anônimo do
-  // banco) e não se atualiza sozinha — sem isto, cards como "Revisadas"
-  // podem ficar presos em 0 até um evento realtime disparar.
-  if (typeof window._reloadQualReg === 'function') {
-    window._reloadQualReg().catch(e => console.warn('[Qualidade] Falha ao rebuscar registros pós-login:', e));
-  }
-  if (typeof window._reloadQualLib === 'function') {
-    window._reloadQualLib().catch(e => console.warn('[Qualidade] Falha ao rebuscar liberadas pós-login:', e));
-  }
+  // FluxoLAB e Qualidade inicializam seus dados sob demanda ao abrir a área.
   scheduleCheck();
   const admCred = document.getElementById('admin-cred');
   if(admCred) admCred.classList.remove('open');
@@ -3275,6 +3253,7 @@ function setView(v,btn){
       window._qualListenerStarted = true;
       _initQualListener().catch(e => console.warn('[Qualidade] listener:', e));
     }
+    if(typeof fluxolabStartChecklistsListener === 'function') fluxolabStartChecklistsListener();
     renderQualRegistros();
   }
   if(v==='relatorios')  { showRelRefreshBadge(); }
@@ -19384,9 +19363,11 @@ function fluxolabStartListener() {
   // Antes: _db.ref('/fluxolab').on('value', ...) — canal Realtime aberto por
   // TODO cliente conectado, e /fluxolab é reescrito a cada movimentação de
   // SELB no chão de fábrica (alta frequência) → maior consumidor provável
-  // de Realtime Messages. Agora: atualiza a cada 60s via poll (delay aceitável;
+  // de Realtime Messages. Agora: atualiza a cada 5min via poll e atualiza
+  // imediatamente ao voltar à aba (pollRef). Isso evita que cada tela aberta
+  // faça 1.440 leituras/dia desta árvore grande;
   // o anti-flicker já evita re-render quando nada mudou).
-  _fluxolabListener = pollRef(_db.ref('/fluxolab'), 60000, snap => {
+  _fluxolabListener = pollRef(_db.ref('/fluxolab'), 300000, snap => {
     _fluxolabData = snap.val() || {};
     _fluxolabScheduleSyncLiberados();
     const viewEl = document.getElementById('view-fluxolab');
@@ -19448,6 +19429,9 @@ function renderFluxoLAB() {
   // e entradas não se percam por push assíncrono antes de abrir o painel
   fluxolabStartLogListener();
   try { fluxolabStartLiberadosListener(); } catch(e) { console.warn('[FluxoLAB] Liberados listener falhou:', e); }
+  if (typeof _loadBolsaoLocksSupabase === 'function') {
+    _loadBolsaoLocksSupabase();
+  }
   _fluxolabRenderGrid();
   _fluxolabUpdateTimestamp();
   _fmovPopulateSelbList();
