@@ -118,7 +118,10 @@ async function fluxolabLoadPlanejamento() {
 // OTIMIZAcAO EGRESS: cada gravacao deste blob e re-transmitida pelo
 // Realtime para TODAS as abas abertas. Debounce curto (400/900ms)
 // significava ~2 retransmissoes por segundo enquanto o usuario digita.
-const FLUXOLAB_SAVE_DEBOUNCE_MS = 2500;
+// Cada alteração transmite o estado compartilhado para os demais clientes.
+// Cinco segundos agrupam uma sequência normal de edição sem risco de perder
+// dados (o flush ao sair da página continua ativo).
+const FLUXOLAB_SAVE_DEBOUNCE_MS = 5000;
 let _fluxolabPlanSaveTimer;
 let _fluxolabPlanLastSavedJSON = null;
 let _fluxolabPlanSaving = false;

@@ -1261,48 +1261,55 @@ const _rtPauseManager = (() => {
     _channels.add(entry);
     return {
       setRef(ch) { entry.ref = ch; },
-      unregister() { _channels.delete(entry); }
+      unregister() {
+        if (entry.ref) {
+          try { _supa.removeChannel(entry.ref); } catch(e) {}
+          entry.ref = null;
+        }
+        _channels.delete(entry);
+      }
     };
   }
 
   return { register, isPaused: () => _paused };
 })();
 
-// ── Canal único Realtime para fluxolab_state (planejamento / pendências / etc.) ──
+// ── Realtime seletivo para fluxolab_state (planejamento / pendências / etc.) ──
 // planejamento.js e pendencias.js dependem de window._fluxolabStateOn(key, handler).
+// Cada chave tem seu próprio filtro no servidor. Um único canal para a tabela
+// inteira fazia toda sessão baixar também blobs grandes de outras telas.
 // Sem isso o load quebrava ANTES de marcar *_Loaded=true e o save nunca gravava.
 window._fluxolabStateHandlers = window._fluxolabStateHandlers || Object.create(null);
-window._fluxolabStateChannel = window._fluxolabStateChannel || null;
-// _rtPauseManager handle para pausar/retomar em background
-var _fluxolabStateRtHandle = null;
+window._fluxolabStateChannels = window._fluxolabStateChannels || Object.create(null);
+window._fluxolabStateRtHandles = window._fluxolabStateRtHandles || Object.create(null);
 window._fluxolabStateOn = function(key, handler){
   if (!key || typeof handler !== 'function') return;
   if (!window._fluxolabStateHandlers[key]) window._fluxolabStateHandlers[key] = [];
   window._fluxolabStateHandlers[key].push(handler);
   if (typeof _supa === 'undefined' || !_supa) return;
-  if (window._fluxolabStateChannel) return;
+  if (window._fluxolabStateChannels[key]) return;
   try {
     function _openFluxolabStateCh() {
-      const ch = _supa.channel('fluxolab_state_bus')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'fluxolab_state' }, function(payload){
+      const ch = _supa.channel('fluxolab_state_' + key)
+        .on('postgres_changes', {
+          event: '*', schema: 'public', table: 'fluxolab_state', filter: 'key=eq.' + key
+        }, function(payload){
           try {
-            const k = payload && payload.new && payload.new.key;
-            if (!k) return;
-            const list = window._fluxolabStateHandlers[k] || [];
+            const list = window._fluxolabStateHandlers[key] || [];
             for (let i = 0; i < list.length; i++) {
-              try { list[i](payload); } catch (e) { console.warn('[fluxolab_state] handler', k, e); }
+              try { list[i](payload); } catch (e) { console.warn('[fluxolab_state] handler', key, e); }
             }
           } catch (e) { console.warn('[fluxolab_state] payload', e); }
         })
         .subscribe();
-      window._fluxolabStateChannel = ch;
-      if (_fluxolabStateRtHandle) _fluxolabStateRtHandle.setRef(ch);
+      window._fluxolabStateChannels[key] = ch;
+      if (window._fluxolabStateRtHandles[key]) window._fluxolabStateRtHandles[key].setRef(ch);
       return ch;
     }
-    _fluxolabStateRtHandle = _rtPauseManager.register('fluxolab_state_bus', _openFluxolabStateCh);
+    window._fluxolabStateRtHandles[key] = _rtPauseManager.register('fluxolab_state_' + key, _openFluxolabStateCh);
   } catch (e) {
     console.warn('[fluxolab_state] canal realtime falhou:', e);
-    window._fluxolabStateChannel = null;
+    delete window._fluxolabStateChannels[key];
   }
 };
 
@@ -3245,6 +3252,13 @@ function setView(v,btn){
     console.warn('[Security] setView tempo-selb bloqueado — não é admin');
     return;
   }
+  // Dados destas áreas são consultados e assinados apenas quando a área está
+  // aberta. Ao trocar de tela, fecha o canal para não receber eventos que a
+  // pessoa não está vendo.
+  if(v !== 'garantia' && typeof stopGarantiaListener === 'function') stopGarantiaListener();
+  if(v !== 'perdidas' && typeof stopMaquinasPerdidasListener === 'function') stopMaquinasPerdidasListener();
+  if(v !== 'maquinas-a' && typeof stopMaquinasAListener === 'function') stopMaquinasAListener();
+  if(v !== 'gaiola-lab' && v !== 'qualidade' && typeof stopQualListener === 'function') stopQualListener();
   if(v==='fluxolab')    { renderFluxoLAB(); }
   if(v==='bip-mobile')  {
     // Reaproveita o painel "Movimentação de SELB" do FluxoLAB — garante que
@@ -3255,11 +3269,20 @@ function setView(v,btn){
   } else {
     _bipMobileRestoreCard();
   }
-  if(v==='gaiola-lab' || v==='qualidade') { renderQualRegistros(); }
+  if(v==='gaiola-lab' || v==='qualidade') {
+    // Qualidade só mantém Realtime enquanto alguém realmente acessa a área.
+    if(typeof _initQualListener === 'function' && !window._qualListenerStarted){
+      window._qualListenerStarted = true;
+      _initQualListener().catch(e => console.warn('[Qualidade] listener:', e));
+    }
+    renderQualRegistros();
+  }
   if(v==='relatorios')  { showRelRefreshBadge(); }
   if(v==='pecas')       { renderPecasView(); }
   if(v==='solicitacoes'){ renderSolicitacoesDoDia(); }
-  if(v==='maquinas-a')  { renderMaquinasAView(); }
+  if(v==='maquinas-a')  { startMaquinasAListener(); renderMaquinasAView(); }
+  if(v==='perdidas')    { startMaquinasPerdidasListener(); renderPerdidasView(); }
+  if(v==='garantia')    { startGarantiaListener(); renderGarantiaView(); }
   if(v==='admin')       { renderScheduleOverrideBtn(); renderSbUsagePanel(true); _sbUsageStartAutoRefresh(); }
   if(v !== 'admin')     { _sbUsageStopAutoRefresh(); }
   if(v !== 'scanner') {
@@ -7023,18 +7046,21 @@ async function moverPeca(id, direcao){
 let _garantiaCache    = {};   // cache local { id: {...} }
 let _garantiaFilter   = '';   // filtro de status atual
 let _garantiaListener = null; // referência ao listener Supabase
+let _garantiaRtHandle = null;
 
 // ── Listener Supabase para garantia ─────────────────────────────────────────
 async function startGarantiaListener(){
+  if (_garantiaListener) return;
   const isAdminOrPcp = currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP' || currentUser.sector === 'DESMEMBRAMENTO' || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'));
   if (!isAdminOrPcp) return;
+  _garantiaListener = true;
 
   const { data } = await _supa.from('garantia').select('*');
   _garantiaCache = {};
   (data || []).forEach(r => { _garantiaCache[r.id] = r.raw || r; });
   if(document.getElementById('view-garantia')?.classList.contains('active')) renderGarantiaView();
 
-  _rtPauseManager.register('garantia', function _openGarantiaCh() {
+  _garantiaRtHandle = _rtPauseManager.register('garantia', function _openGarantiaCh() {
     return _supa.channel('garantia')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'garantia' }, (payload) => {
         // OTIMIZAÇÃO: usa o payload do próprio evento Realtime em vez de
@@ -7049,6 +7075,11 @@ async function startGarantiaListener(){
       })
       .subscribe();
   });
+}
+function stopGarantiaListener(){
+  if(_garantiaRtHandle) _garantiaRtHandle.unregister();
+  _garantiaRtHandle = null;
+  _garantiaListener = null;
 }
 
 // ── Visibilidade dos controles admin ────────────────────────────────────────
@@ -7556,11 +7587,15 @@ async function confirmarRemoverDevolucao(id, nome){
 // Campos: selb, equipamento, setor, observacao, registradoPor, registradoEm, status ('perdida'|'encontrada')
 // ════════════════════════════════════════════
 let _maquinasPerdidas = {}; // cache local { id: {...} }
+let _maquinasPerdidasListener = null;
+let _maquinasPerdidasRtHandle = null;
 let _maquinaPerdidaliberandoId = null; // id da máquina sendo liberada pelo admin
 let _maquinaPerdidaliberandoUid = null; // uid do usuário que tentou iniciar
 
 // ── Listener Supabase para maquinas_perdidas ──────────────────────────────
 async function startMaquinasPerdidasListener(){
+  if (_maquinasPerdidasListener) return;
+  _maquinasPerdidasListener = true;
   const { data } = await _supa.from('maquinas_perdidas').select('*');
   _maquinasPerdidas = {};
   (data || []).forEach(r => { _maquinasPerdidas[r.id] = r.raw || r; });
@@ -7568,7 +7603,7 @@ async function startMaquinasPerdidasListener(){
 
   const isAdminOrPcp = currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP' || currentUser.sector === 'DESMEMBRAMENTO' || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'));
   if (isAdminOrPcp) {
-    _rtPauseManager.register('maquinas_perdidas', function _openMaquinasPerdidasCh() {
+    _maquinasPerdidasRtHandle = _rtPauseManager.register('maquinas_perdidas', function _openMaquinasPerdidasCh() {
       return _supa.channel('maquinas_perdidas')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'maquinas_perdidas' }, (payload) => {
           // OTIMIZAÇÃO: atualiza o cache local direto do payload do evento,
@@ -7584,6 +7619,11 @@ async function startMaquinasPerdidasListener(){
         .subscribe();
     });
   }
+}
+function stopMaquinasPerdidasListener(){
+  if(_maquinasPerdidasRtHandle) _maquinasPerdidasRtHandle.unregister();
+  _maquinasPerdidasRtHandle = null;
+  _maquinasPerdidasListener = null;
 }
 
 // ── Abre modal para registrar nova máquina perdida (somente admin) ─────────
@@ -13793,6 +13833,8 @@ function renderRpBody(recs){
 // Campos: selb, equipamento, setor, observacao, registradoPor, registradoEm, status ('ativa'|'removida')
 // ════════════════════════════════════════════
 let _maquinasA = {}; // cache local { id: {...} }
+let _maquinasAListener = null;
+let _maquinasARtHandle = null;
 
 // ── Sub-tab intercalável ──────────────────────────────────────────────────
 function setMaquinasASubTab(tab, btn){
@@ -13905,6 +13947,8 @@ async function renderPecasSubView(){
 
 // ── Listener Supabase para maquinas_a ───────────────────────────────────
 async function startMaquinasAListener(){
+  if (_maquinasAListener) return;
+  _maquinasAListener = true;
   const { data } = await _supa.from('maquinas_a').select('*');
   _maquinasA = {};
   (data || []).forEach(r => { _maquinasA[r.id] = r.raw || r; });
@@ -13915,7 +13959,7 @@ async function startMaquinasAListener(){
 
   const isAdminOrPcp = currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP' || currentUser.sector === 'DESMEMBRAMENTO' || (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin'));
   if (isAdminOrPcp) {
-    _rtPauseManager.register('maquinas_a', function _openMaquinasACh() {
+    _maquinasARtHandle = _rtPauseManager.register('maquinas_a', function _openMaquinasACh() {
       return _supa.channel('maquinas_a')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'maquinas_a' }, (payload) => {
           // OTIMIZAÇÃO: atualiza o cache local direto do payload do evento,
@@ -13934,6 +13978,11 @@ async function startMaquinasAListener(){
         .subscribe();
     });
   }
+}
+function stopMaquinasAListener(){
+  if(_maquinasARtHandle) _maquinasARtHandle.unregister();
+  _maquinasARtHandle = null;
+  _maquinasAListener = null;
 }
 
 // ── Abre modal para registrar Máquina A (somente admin) ──────────────────
@@ -14748,38 +14797,17 @@ const ALERT_SECTORS = new Set(['COMPLEXA','MONTAGEM','LIMPEZA']);
       try { startRealtimeSync(); } catch(e){ console.error('sync error',e); }
     }
 
-    // Inicia o carregamento e sincronismo de planejamento e pendencias se as funções existirem
-    if (typeof fluxolabLoadPlanejamento === 'function') {
-      fluxolabLoadPlanejamento().catch(e => console.error('erro fluxolabLoadPlanejamento:', e));
-    }
-    if (typeof fluxolabLoadPendencias === 'function') {
-      fluxolabLoadPendencias().catch(e => console.error('erro fluxolabLoadPendencias:', e));
-    }
+    // Planejamento e Pendências são carregados somente quando a respectiva
+    // subaba é aberta; evitar assinaturas e blobs Realtime em toda sessão.
     
     if(!_globalListenersStarted){
       _globalListenersStarted = true;
       startAlertsListener();
-      startMaquinasPerdidasListener();
-      startMaquinasAListener();
       startSolicitacoesPecasListener();
-      startGarantiaListener();
       startDevolucaoListener();
     }
     
-    // OTIMIZAÇÃO: Registra listener de qualidade apenas para perfis autorizados
-    // Independente do _globalListenersStarted, pois o 1º login pode ser de um operador sem permissão
-    if (typeof window._qualListenerStarted === 'undefined') window._qualListenerStarted = false;
-    if (!window._qualListenerStarted) {
-      const temAcessoQualidade = currentUser && (
-        currentUser.isAdmin || 
-        (typeof getPermsFor === 'function' && getPermsFor(currentUser.sector)['gaiola-lab']) ||
-        (typeof getSectorTipo === 'function' && getSectorTipo(currentUser.sector) === 'admin')
-      );
-      if (temAcessoQualidade) {
-        window._qualListenerStarted = true;
-        setTimeout(_initQualListener, 500);
-      }
-    }
+    // Qualidade também é carregada sob demanda ao abrir sua aba.
     // Painel de alertas "sem SELB em andamento" desativado
     const _pnl = document.getElementById('selb-alert-panel');
     if(_pnl) _pnl.innerHTML = '';
@@ -14796,6 +14824,10 @@ const ALERT_SECTORS = new Set(['COMPLEXA','MONTAGEM','LIMPEZA']);
     _solicitacoesPecas = {};
     _garantiaCache = {};
     _devolucaoCache = {};
+    _garantiaListener = null;
+    _maquinasPerdidasListener = null;
+    _maquinasAListener = null;
+    window._qualListenerStarted = false;
     
     // Desconecta e remove todos os canais do Supabase Realtime
     if (typeof _supa !== 'undefined' && typeof _supa.removeAllChannels === 'function') {
@@ -14820,6 +14852,19 @@ const ALERT_SECTORS = new Set(['COMPLEXA','MONTAGEM','LIMPEZA']);
     // removeAllChannels() acima já o removeu do servidor, então limpamos a
     // referência local para que _appConfigOn() recrie o canal no próximo login.
     _appConfigChannel = null;
+
+    // Os canais filtrados de fluxolab_state também são recriados no próximo
+    // login. Sem limpar estes mapas, a próxima sessão manteria referências a
+    // canais já removidos por removeAllChannels().
+    if (window._fluxolabStateRtHandles) {
+      Object.keys(window._fluxolabStateRtHandles).forEach(function(key) {
+        const handle = window._fluxolabStateRtHandles[key];
+        if (handle && typeof handle.unregister === 'function') handle.unregister();
+      });
+    }
+    window._fluxolabStateHandlers = Object.create(null);
+    window._fluxolabStateChannels = Object.create(null);
+    window._fluxolabStateRtHandles = Object.create(null);
 
     if (typeof _fluxolabPendLoaded !== 'undefined') _fluxolabPendLoaded = false;
     if (typeof _fluxolabPlanLoaded !== 'undefined') _fluxolabPlanLoaded = false;
@@ -15214,12 +15259,17 @@ async function _initQualListener(){
     if (libPanel && libPanel.style.display !== 'none' && typeof _qualRenderLiberadasList === 'function') _qualRenderLiberadasList();
   }
 
-  _rtPauseManager.register('qualidade_bus', function _openQualidadeBusCh() {
+  window._qualRtHandle = _rtPauseManager.register('qualidade_bus', function _openQualidadeBusCh() {
     return _supa.channel('qualidade_bus')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'qualidade_registros' }, _applyQualRegDelta)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'qualidade_liberadas' }, _applyQualLibDelta)
       .subscribe();
   });
+}
+function stopQualListener(){
+  if(window._qualRtHandle) window._qualRtHandle.unregister();
+  window._qualRtHandle = null;
+  window._qualListenerStarted = false;
 }
 // Removida inicialização global incondicional de _initQualListener para economizar egress.
 // Agora é chamado apenas após o login e restrito por perfil (Admin, Qualidade, PCP, Desmembramento).
@@ -21343,8 +21393,16 @@ function fluxolabSwitchTab(tab) {
   if (tab === 'checklists') fluxolabRenderChecklistsImported();
   if (tab === 'caindo')     fluxolabRenderCaindoHoje();
   if (tab === 'liberados')  fluxolabRenderLiberadosHoje();
-  if (tab === 'planejamento' && typeof fluxolabRenderPlanejamento === 'function') fluxolabRenderPlanejamento();
-  if (tab === 'pendencias' && typeof fluxolabRenderPendencias === 'function') fluxolabRenderPendencias();
+    if (tab === 'planejamento') {
+      if (typeof fluxolabLoadPlanejamento === 'function' && (typeof _fluxolabPlanLoaded === 'undefined' || !_fluxolabPlanLoaded)) {
+        fluxolabLoadPlanejamento().then(() => fluxolabRenderPlanejamento?.()).catch(e => console.warn('[Planejamento] carga:', e));
+      } else if (typeof fluxolabRenderPlanejamento === 'function') fluxolabRenderPlanejamento();
+    }
+    if (tab === 'pendencias') {
+      if (typeof fluxolabLoadPendencias === 'function' && (typeof _fluxolabPendLoaded === 'undefined' || !_fluxolabPendLoaded)) {
+        fluxolabLoadPendencias().then(() => fluxolabRenderPendencias?.()).catch(e => console.warn('[Pendências] carga:', e));
+      } else if (typeof fluxolabRenderPendencias === 'function') fluxolabRenderPendencias();
+    }
 }
 
 function fluxolabRenderModelos() {

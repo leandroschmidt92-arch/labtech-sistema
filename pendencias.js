@@ -614,7 +614,8 @@ async function fluxolabLoadPendencias() {
 
 // Salva o estado no Supabase
 // OTIMIZAcAO EGRESS: ver comentario em planejamento.js
-const PEND_SAVE_DEBOUNCE_MS = 2500;
+// Agrupa uma sequência de edições em uma única gravação/retransmissão.
+const PEND_SAVE_DEBOUNCE_MS = 5000;
 let _fluxolabPendSaveTimer;
 let _fluxolabPendLastSavedJSON = null;
 let _fluxolabPendSaving = false;
