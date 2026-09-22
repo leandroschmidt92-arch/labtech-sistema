@@ -2389,8 +2389,17 @@ function getTotalDia(uid){
     // Último fallback: _dateKey (dia de início) — apenas para registros muito antigos
     return h._dateKey === todayDk;
   });
-  // Deduplica por SELB: mesmo SELB aprovado mais de uma vez conta como 1 máquina
-  const selbsUnicos = new Set(recs.map(h => h.selb).filter(Boolean));
+  // Deduplica por SELB dentro do mesmo setor. O setor é gravado no histórico
+  // no momento da execução; assim, se o profissional for transferido (por
+  // exemplo, de LIMPEZA para MONTAGEM) e executar o mesmo SELB na nova etapa,
+  // as duas produções são contabilizadas. Repetições no mesmo setor continuam
+  // contando apenas uma vez.
+  const selbsUnicos = new Set(recs.map(h => {
+    const selb = String(h.selb || '').trim().toUpperCase();
+    if(!selb) return '';
+    const sector = String(h.sector || '').trim().toUpperCase();
+    return selb + '||' + sector;
+  }).filter(Boolean));
   // Registros sem SELB identificado contam individualmente
   const semSelb = recs.filter(h => !h.selb).length;
   return selbsUnicos.size + semSelb;
@@ -28789,9 +28798,9 @@ window.fluxolabVarrerDuplicados = async function() {
       + String(d.getDate()).padStart(2,'0');
   }
 
-  /* ── Beep do Chat (Menção) ── */
+  /* ── Beep do Chat ── */
   var _chatCtx = null;
-  function beepMention() {
+  function beepChat() {
     try {
       if (!_chatCtx) _chatCtx = new (window.AudioContext || window.webkitAudioContext)();
       if (_chatCtx.state === 'suspended') _chatCtx.resume();
@@ -28961,9 +28970,14 @@ window.fluxolabVarrerDuplicados = async function() {
       }
     }
     
-    // Ação de Menção (só para mensagens novas)
+    // Toda mensagem nova de outra pessoa emite um bip. Mensagens que já
+    // estavam no histórico ao abrir/recarregar o chat não fazem som.
+    if (!isMe && !isOld) {
+      beepChat();
+    }
+
+    // Notificação do sistema permanece reservada para menções.
     if (isHighlight && !isOld) {
-      beepMention();
       if (window.Notification && Notification.permission === 'granted' && document.hidden) {
         var notif = new Notification("Nova mensagem de " + data.nome, {
           body: data.msg,
@@ -29179,10 +29193,14 @@ window.fluxolabVarrerDuplicados = async function() {
   function updateMentionPopup() {
     if (!mentionState.active || !mentionPopup) return;
 
+    // Usa os cadastros completos, e não apenas o primeiro nome. Antes dois
+    // profissionais chamados, por exemplo, "João" viravam uma única opção e
+    // um deles desaparecia da lista de menções.
     var allNames = (typeof users !== 'undefined' && Array.isArray(users))
       ? users.map(function(u) {
           return {
-            name: u.name ? u.name.split(' ')[0].toLowerCase() : '',
+            id: u.id || '',
+            name: u.name ? u.name.trim() : '',
             sector: u.sector || '',
             isAdmin: u.isAdmin || false
           };
@@ -29192,15 +29210,17 @@ window.fluxolabVarrerDuplicados = async function() {
     var seen = {};
     var uniqueUsers = [];
     allNames.forEach(function(u) {
-      if (!seen[u.name]) { 
-        seen[u.name] = true; 
+      // O identificador do operador mantém pessoas com o mesmo nome visíveis.
+      var uniqueKey = u.id || u.name.toLowerCase();
+      if (!seen[uniqueKey]) {
+        seen[uniqueKey] = true;
         uniqueUsers.push(u); 
       }
     });
-    uniqueUsers.unshift({ name: 'todos', sector: 'GERAL', isAdmin: false });
+    uniqueUsers.unshift({ id: '__todos__', name: 'todos', sector: 'GERAL', isAdmin: false });
 
     mentionState.matches = uniqueUsers.filter(function(u) {
-      return u.name.startsWith(mentionState.query);
+      return u.name.toLowerCase().startsWith(mentionState.query);
     });
 
     if (mentionState.matches.length === 0) {
@@ -29313,4 +29333,3 @@ window.fluxolabVarrerDuplicados = async function() {
   }
 
 })();
-
