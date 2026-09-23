@@ -1210,7 +1210,7 @@ window._db = _db; // exposto globalmente para os patches de integração
 // principal do alto consumo (86% do egresso). Este gerenciador replica o
 // mesmo comportamento de pausa/retomada já implementado no shim.
 const _rtPauseManager = (() => {
-  const PAUSE_AFTER_MS = 5000; // Reduzido de 30s para 5s para economizar egress
+  const PAUSE_AFTER_MS = 30000; // 30s — permite alternar abas brevemente sem perder o canal Realtime
   const _channels = new Set();  // Set de entries { ref, name, reopen }
   let _bgTimer = null;
   let _paused = false;
@@ -2826,7 +2826,28 @@ function loginAs(u){
     });
   }
 
-  // FluxoLAB e Qualidade inicializam seus dados sob demanda ao abrir a área.
+  // FluxoLAB e Qualidade inicializam seus dados sob demanda ao abrir a área,
+  // mas certas dependências (Mistas/Complexas do operador e Liberadas no Dia do Dash) 
+  // exigem carga inicial.
+  if (typeof fluxolabLoadPendencias === 'function' && (typeof _fluxolabPendLoaded === 'undefined' || !_fluxolabPendLoaded)) {
+    fluxolabLoadPendencias().then(() => { if(typeof fluxolabRenderPendencias === 'function') fluxolabRenderPendencias(); }).catch(e => console.warn(e));
+  }
+  // Badge "Liberadas no Dia": usa COUNT com filtro de data (HEAD request — zero egress de linhas)
+  // O listener completo só é iniciado quando o usuário abre a aba Qualidade (economia de egress).
+  (async function _fetchLiberadasBadge(){
+    try {
+      const hoje = new Date(); hoje.setHours(0,0,0,0);
+      const { count, error } = await _supaAuthed()
+        .from('qualidade_registros')
+        .select('*', { count: 'exact', head: true })
+        .gte('ts', hoje.toISOString());
+      if (!error && count != null) {
+        const el = document.getElementById('dash-liberadas-total');
+        if (el) el.textContent = count;
+      }
+    } catch(e) { console.warn('[Dash] badge liberadas:', e); }
+  })();
+
   scheduleCheck();
   const admCred = document.getElementById('admin-cred');
   if(admCred) admCred.classList.remove('open');
@@ -5186,10 +5207,11 @@ function updateSummary(){
   if(elComp) elComp.textContent = tComp;
   if(elTot)  elTot.textContent  = tTot;
 
-  // Atualiza badge de Liberadas no Dia (mesma fonte/lógica do card
-  // "Liberados no Dia" da aba Qualidade — ver _qualLiberadosHojeCount)
+  // Atualiza badge de Liberadas no Dia — só sobrescreve se o listener de Qualidade
+  // estiver ativo (ou seja, _qualRegistros populado). Se ainda não estiver,
+  // o badge já foi preenchido pela query COUNT leve no login e não deve ser zerado.
   const elLib = document.getElementById('dash-liberadas-total');
-  if(elLib) elLib.textContent = _qualLiberadosHojeCount();
+  if(elLib && window._qualListenerStarted) elLib.textContent = _qualLiberadosHojeCount();
 
   // ── Expectativa de Produção (por setor, sempre visível — MONTAGEM, LIMPEZA e COMPLEXA) ──
   // Cada operador ativo tem meta diária (8 na Montagem/Limpeza, 1 na Complexa),
@@ -5978,6 +6000,31 @@ function _enqueueAutoPrintPeca(p){
     }
   });
 }
+
+// ── Enfileira grupo de itens do mesmo SELB em UMA única etiqueta ──────────────
+function _enqueueAutoPrintPecaGrupo(itens){
+  if(!_autoPrintPecasEnabled() || !itens || !itens.length) return;
+  // Filtra apenas itens ainda não impressos
+  const novos = itens.filter(function(p){
+    const id = p.id || (p.selb + '_' + p.ts);
+    return !_pecasImpressasIds.has(id);
+  });
+  if(!novos.length) return;
+  // Marca todos como impressos antes de enviar
+  novos.forEach(function(p){
+    const id = p.id || (p.selb + '_' + p.ts);
+    _pecasImpressasIds.add(id);
+  });
+  // Envia TODOS os itens do SELB em um único request → uma única etiqueta
+  _enviarPecaParaAgenteImpressao(novos).then(function(ok){
+    const selb = novos[0].selb || '';
+    if(ok){
+      _mostrarToastMovPrint('🔩 Spool: etiqueta SELB ' + selb + ' (' + novos.length + ' peça(s)) enviada à impressora');
+    } else {
+      _mostrarToastMovPrint('⚠️ Spool offline — etiqueta de peça não impressa. Verifique o print-agent.');
+    }
+  });
+}
 // ── Fim auto-impressão de peças ──────────────────────────────────────────────
 
 let _pecasIdsConhecidos = null; // null = primeira carga, não toca
@@ -5996,11 +6043,16 @@ async function startSolicitacoesPecasListener(){
       const idsNovos = Object.keys(novo).filter(id => !_pecasIdsConhecidos.has(id));
       if(idsNovos.length > 0){
         _tocarAlertaPeca();
-        // ── Auto-impressão: enfileira etiqueta de cada nova solicitação ──
+        // ── Auto-impressão: agrupa itens por SELB → uma etiqueta por SELB ──
+        const itensPorSelb = {};
         idsNovos.forEach(id => {
           const p = novo[id];
-          if(p && p.selb && !p.lida) _enqueueAutoPrintPeca({ id, ...p });
+          if(p && p.selb && !p.lida) {
+            if(!itensPorSelb[p.selb]) itensPorSelb[p.selb] = [];
+            itensPorSelb[p.selb].push({ id, ...p });
+          }
         });
+        Object.values(itensPorSelb).forEach(grupo => _enqueueAutoPrintPecaGrupo(grupo));
       }
     }
     _pecasIdsConhecidos = new Set(Object.keys(novo));
@@ -6027,6 +6079,9 @@ async function startSolicitacoesPecasListener(){
     solFilterConfig = { event: '*', schema: 'public', table: 'solicitacoes_pecas' };
   }
 
+  let _pecasPrintBuffer = [];
+  let _pecasPrintTimer = null;
+
   // OTIMIZAÇÃO K: handler de delta sem SELECT* completo.
   // Antes: _reloadSolicitacoes() era chamado a cada evento Realtime →
   // 1 SELECT * (todas as solicitações) por cliente conectado, por evento.
@@ -6045,9 +6100,22 @@ async function startSolicitacoesPecasListener(){
         if (currentUser && currentUser.isAdmin && _pecasIdsConhecidos !== null && !_pecasIdsConhecidos.has(id)) {
           _tocarAlertaPeca();
           _pecasIdsConhecidos.add(id);
-          // ── Auto-impressão: enfileira etiqueta da nova solicitação no spool ──
+          // ── Auto-impressão com Debounce: agrupa peças do mesmo SELB que chegam juntas no spool ──
           const _novaPeca = row.raw || row;
-          if (_novaPeca && _novaPeca.selb && !_novaPeca.lida) _enqueueAutoPrintPeca(_novaPeca);
+          if (_novaPeca && _novaPeca.selb && !_novaPeca.lida) {
+            _novaPeca.id = id;
+            _pecasPrintBuffer.push(_novaPeca);
+            if (_pecasPrintTimer) clearTimeout(_pecasPrintTimer);
+            _pecasPrintTimer = setTimeout(() => {
+              const itensPorSelb = {};
+              _pecasPrintBuffer.forEach(p => {
+                if(!itensPorSelb[p.selb]) itensPorSelb[p.selb] = [];
+                itensPorSelb[p.selb].push(p);
+              });
+              _pecasPrintBuffer = [];
+              Object.values(itensPorSelb).forEach(grupo => _enqueueAutoPrintPecaGrupo(grupo));
+            }, 800);
+          }
         }
         _solicitacoesPecas[id] = row.raw || row;
       }
@@ -13063,7 +13131,7 @@ let _scheduleOverrideRef = null;
 function isPrivilegedScheduleUser(u) {
   if(!u) return false;
   if(u.isAdmin) return true;
-  if(u.sector === 'QUALIDADE' || u.sector === 'DESMEMBRAMENTO' || u.sector === 'PCP') return true;
+  if(u.sector === 'QUALIDADE' || u.sector === 'DESMEMBRAMENTO' || u.sector === 'PCP' || u.sector === 'VISU FLUXOLAB') return true;
   return false;
 }
 
@@ -15147,6 +15215,7 @@ async function _initQualListener(){
     _fluxolabScheduleSyncLiberados();
     const view = document.getElementById('view-qualidade') || document.getElementById('view-gaiola-lab');
     if(view && view.classList.contains('active')) renderQualRegistros();
+    if(typeof updateSummary === 'function') updateSummary();
   }
   async function _reloadQualLib(){
     // OTIMIZAÇÃO DE EGRESS (PostgREST): Limite reduzido para 500 registros para evitar sobrecarga
@@ -15175,6 +15244,7 @@ async function _initQualListener(){
   }
   window._qualLiberadas = window._qualLiberadas || {};
   await Promise.all([_reloadQualReg(), _reloadQualLib()]);
+  if(typeof updateSummary === 'function') updateSummary();
   window._reloadQualReg = _reloadQualReg;
   window._reloadQualLib = _reloadQualLib;
 
@@ -15208,6 +15278,7 @@ async function _initQualListener(){
     _fluxolabScheduleSyncLiberados();
     const view = document.getElementById('view-qualidade') || document.getElementById('view-gaiola-lab');
     if (view && view.classList.contains('active')) renderQualRegistros();
+    if (typeof updateSummary === 'function') updateSummary();
   }
 
   function _applyQualLibDelta(payload) {
@@ -20142,9 +20213,31 @@ function _fluxolabRenderGrid() {
   // Renderiza/atualiza a barra de filtro acima do grid
   _fluxolabRenderModelFilterBar(Array.from(allModelsSet), matchCountsByBolsao, totalMatches);
 
-  // Atualiza badge total de SELBs nos bolsões
+  // Atualiza badge total de SELBs nos bolsões e badge de Estagnados
   (function() {
     var _badge = document.getElementById('fluxolab-bolsoes-total-badge');
+    // Lista de estagnados globais
+    window._fluxolabEstagnadosCache = [];
+    bolsaoListRaw.forEach(function(bb) { 
+      var isEstagnado = bb.b.key !== 'SCRAP' && bb.b.key !== 'DOCA_1' && bb.b.key !== 'GAIOLA_AG_PECAS'; // Ignorar estoques
+      if (bb.items) {
+        bb.items.forEach(function(item) {
+          var k = item[0], v = item[1];
+          if (v.ts && isEstagnado) {
+            var dias = Math.floor((Date.now() - v.ts) / 86400000);
+            if (dias >= 3) {
+              window._fluxolabEstagnadosCache.push({
+                selb: v.selb || k,
+                dias: dias,
+                bolsao: bb.b.label,
+                modelo: v.equipamento && v.equipamento !== 'DESCONHECIDO' ? v.equipamento : ((typeof getEquipName === 'function' ? getEquipName(v.selb || k) : '') || '')
+              });
+            }
+          }
+        });
+      }
+    });
+
     if (_badge) {
       var _total = 0;
       bolsaoListView.forEach(function(bb) { _total += (bb.items ? bb.items.length : 0); });
@@ -20154,6 +20247,11 @@ function _fluxolabRenderGrid() {
       } else {
         _badge.style.display = 'none';
       }
+    }
+
+    var _badgeEst = document.getElementById('fluxolab-estagnados-count');
+    if (_badgeEst) {
+      _badgeEst.textContent = window._fluxolabEstagnadosCache.length;
     }
   })();
 
@@ -29375,3 +29473,88 @@ window.fluxolabVarrerDuplicados = async function() {
   }
 
 })();
+window.fluxolabAbrirEstagnados = function() {
+  var estagnados = window._fluxolabEstagnadosCache || [];
+  if (estagnados.length === 0) {
+    if (typeof showToast === 'function') showToast('Nenhum SELB estagnado (>3 dias) encontrado.', false);
+    else alert('Nenhum SELB estagnado (>3 dias) encontrado.');
+    return;
+  }
+  
+  estagnados.sort(function(a, b) { return b.dias - a.dias; });
+
+  var rows = estagnados.map(function(e) {
+    return '<tr>' +
+      '<td style="padding:8px;border-bottom:1px solid var(--border)"><strong>' + e.selb + '</strong></td>' +
+      '<td style="padding:8px;border-bottom:1px solid var(--border)">' + e.dias + ' dias</td>' +
+      '<td style="padding:8px;border-bottom:1px solid var(--border)">' + e.bolsao + '</td>' +
+      '<td style="padding:8px;border-bottom:1px solid var(--border);word-break:break-word">' + (e.modelo || '') + '</td>' +
+    '</tr>';
+  }).join('');
+
+  var overlay = document.createElement('div');
+  overlay.style.position = 'fixed';
+  overlay.style.top = '0'; overlay.style.left = '0'; overlay.style.width = '100%'; overlay.style.height = '100%';
+  overlay.style.backgroundColor = 'rgba(0,0,0,0.6)';
+  overlay.style.zIndex = '999999';
+  overlay.style.display = 'flex'; overlay.style.alignItems = 'center'; overlay.style.justifyContent = 'center';
+  overlay.style.backdropFilter = 'blur(4px)';
+  
+  var modal = document.createElement('div');
+  modal.style.backgroundColor = 'var(--bg1, #1e293b)';
+  modal.style.border = '1px solid var(--border, #334155)';
+  modal.style.borderRadius = '12px';
+  modal.style.padding = '24px';
+  modal.style.width = '1100px';
+  modal.style.maxWidth = '95vw';
+  modal.style.maxHeight = '90vh';
+  modal.style.display = 'flex';
+  modal.style.flexDirection = 'column';
+  modal.style.boxShadow = '0 10px 30px rgba(0,0,0,0.5)';
+  modal.style.color = 'var(--text, #f8fafc)';
+  
+  var selbListStr = estagnados.map(function(e) { return e.selb; }).join('\n');
+
+  modal.innerHTML = 
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
+      '<h2 style="margin:0;font-size:20px;color:#ef4444">🛑 SELBs Estagnados (> 3 dias)</h2>' +
+      '<button id="btn-close-estagnados" style="background:none;border:none;font-size:24px;color:var(--muted);cursor:pointer;line-height:1">&times;</button>' +
+    '</div>' +
+    '<div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center">' +
+      '<span style="font-size:14px;color:var(--muted)">Total: ' + estagnados.length + ' SELB(s) parados.</span>' +
+      '<button id="btn-copy-estagnados" style="background:var(--accent, #3b82f6);color:#fff;border:none;border-radius:6px;padding:8px 16px;font-weight:bold;cursor:pointer">📋 Copiar SELBs</button>' +
+    '</div>' +
+    '<div style="overflow-y:auto;flex:1;border:1px solid var(--border, #334155);border-radius:6px">' +
+      '<table style="width:100%;border-collapse:collapse;text-align:left;font-size:13px">' +
+        '<thead style="background:var(--bg3, #0f172a);position:sticky;top:0">' +
+          '<tr><th style="padding:8px">SELB</th><th style="padding:8px">Tempo Parado</th><th style="padding:8px">Bolsão</th><th style="padding:8px">Modelo</th></tr>' +
+        '</thead>' +
+        '<tbody>' + rows + '</tbody>' +
+      '</table>' +
+    '</div>';
+
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  document.getElementById('btn-close-estagnados').onclick = function() {
+    document.body.removeChild(overlay);
+  };
+  
+  overlay.onclick = function(e) {
+    if (e.target === overlay) document.body.removeChild(overlay);
+  };
+
+  document.getElementById('btn-copy-estagnados').onclick = function() {
+    navigator.clipboard.writeText(selbListStr).then(function() {
+      var btn = document.getElementById('btn-copy-estagnados');
+      btn.textContent = '✅ Copiado!';
+      btn.style.background = '#10b981';
+      setTimeout(function() {
+        if(document.body.contains(btn)){
+            btn.textContent = '📋 Copiar SELBs';
+            btn.style.background = 'var(--accent, #3b82f6)';
+        }
+      }, 2000);
+    });
+  };
+};

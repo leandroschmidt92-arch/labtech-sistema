@@ -721,6 +721,12 @@ function fluxolabApplyRemoteSyncPend(remoteData) {
     const activeId = document.activeElement ? document.activeElement.id : null;
     if (!activeId || activeId.indexOf('pnd-') !== 0) fluxolabRenderPendencias();
   }
+  if (typeof window._pvRenderModalTable === 'function' && window._pvModalEl_ref && window._pvModalEl_ref.style.display === 'flex') {
+    window._pvRenderModalTable();
+  }
+  if (typeof window._pvcRenderModalTable === 'function' && window._pvcModalEl_ref && window._pvcModalEl_ref.style.display === 'flex') {
+    window._pvcRenderModalTable();
+  }
   if (typeof updateActiveUsersInTables === 'function') updateActiveUsersInTables();
   try { _fluxolabPendLastSavedJSON = JSON.stringify(_fluxolabPendenciasState); } catch (e) {}
 }

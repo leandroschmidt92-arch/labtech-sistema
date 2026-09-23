@@ -19,27 +19,9 @@
 
   // ───────────────── DADOS ─────────────────
   async function pvLoad(){
-    if (typeof _supa === 'undefined') return;
-    try {
-      const {data} = await _supa.from('fluxolab_state')
-        .select('data').eq('key','pendencias_mistas_complexas').maybeSingle();
-      if (data && data.data && Array.isArray(data.data.mistas)) {
-        _pvState.mistas = data.data.mistas;
-      }
-    } catch(e){ console.error('[pv] load', e); }
-
-    // view state nao e mais lido do servidor (preferencia local do admin)
-
-    if (!_pvChannel) {
-      _pvChannel = true;
-      window._fluxolabStateOn('pendencias_mistas_complexas', payload => {
-        if (payload.new && payload.new.data && Array.isArray(payload.new.data.mistas)) {
-          _pvState.mistas = payload.new.data.mistas;
-          if (_pvModalEl && _pvModalEl.style.display === 'flex') pvRenderModalTable();
-        }
-      });
+    if (typeof fluxolabLoadPendencias === 'function') {
+      await fluxolabLoadPendencias();
     }
-    _pvLoaded = true;
   }
 
   // ───────────────── BOTÃO FLUTUANTE (OPERADOR) ─────────────────
@@ -298,6 +280,8 @@
     pvBoot();
   }
 
-  // Expor para debug se precisar
+  // Expor para update realtime e debug
   window.pvOpenPendMistas = pvOpenModal;
+  window._pvRenderModalTable = pvRenderModalTable;
+  Object.defineProperty(window, '_pvModalEl_ref', { get: () => _pvModalEl });
 })();

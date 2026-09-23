@@ -19,27 +19,9 @@
 
   // ───────────────── DADOS ─────────────────
   async function pvLoad(){
-    if (typeof _supa === 'undefined') return;
-    try {
-      const {data} = await _supa.from('fluxolab_state')
-        .select('data').eq('key','pendencias_mistas_complexas').maybeSingle();
-      if (data && data.data && Array.isArray(data.data.complexas)) {
-        _pvState.complexas = data.data.complexas;
-      }
-    } catch(e){ console.error('[pvc] load', e); }
-
-    // view state nao e mais lido do servidor (preferencia local do admin)
-
-    if (!_pvChannel) {
-      _pvChannel = true;
-      window._fluxolabStateOn('pendencias_mistas_complexas', payload => {
-        if (payload.new && payload.new.data && Array.isArray(payload.new.data.complexas)) {
-          _pvState.complexas = payload.new.data.complexas;
-          if (_pvModalEl && _pvModalEl.style.display === 'flex') pvRenderModalTable();
-        }
-      });
+    if (typeof fluxolabLoadPendencias === 'function') {
+      await fluxolabLoadPendencias();
     }
-    _pvLoaded = true;
   }
 
   // ───────────────── BOTÃO FLUTUANTE (OPERADOR) ─────────────────
@@ -296,4 +278,6 @@
   }
 
   window.pvOpenPendComplexas = pvOpenModal;
+  window._pvcRenderModalTable = pvRenderModalTable;
+  Object.defineProperty(window, '_pvcModalEl_ref', { get: () => _pvModalEl });
 })();
