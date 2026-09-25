@@ -15213,6 +15213,8 @@ async function _initQualListener(){
       _qualRegistros[r.id] = rec;
     });
     _fluxolabScheduleSyncLiberados();
+    if (typeof window._pvRenderModalTable === 'function' && document.getElementById('pv-modal') && document.getElementById('pv-modal').style.display === 'flex') { window._pvRenderModalTable(); }
+    if (typeof window._pvcRenderModalTable === 'function' && document.getElementById('pvc-modal') && document.getElementById('pvc-modal').style.display === 'flex') { window._pvcRenderModalTable(); }
     const view = document.getElementById('view-qualidade') || document.getElementById('view-gaiola-lab');
     if(view && view.classList.contains('active')) renderQualRegistros();
     if(typeof updateSummary === 'function') updateSummary();
@@ -16140,7 +16142,9 @@ function renderQualRegistros(){
             var reg=(_qualRegistros&&_qualRegistros[id]);
             if(!reg){alert('Registro não encontrado');return;}
             var nRaw={...reg,pedido:v};
-            _supaAuthed().from('qualidade_registros').update({raw:nRaw}).eq('id',id).then(function(r){if(r.error){alert('Erro: '+r.error.message);}else{_qualRegistros[id]=nRaw;renderQualRegistros();try{if(typeof fluxolabRemoverPedidoDaLista==='function'){fluxolabRemoverPedidoDaLista(v);}else if(typeof fluxolabRenderChecklistsImported==='function'){fluxolabRenderChecklistsImported();}}catch(e){}}});
+            _supaAuthed().from('qualidade_registros').update({raw:nRaw}).eq('id',id).then(function(r){if(r.error){alert('Erro: '+r.error.message);}else{_qualRegistros[id]=nRaw;renderQualRegistros();try{if(typeof fluxolabRemoverPedidoDaLista==='function'){fluxolabRemoverPedidoDaLista(v);}else if(typeof fluxolabRenderChecklistsImported==='function'){fluxolabRenderChecklistsImported();
+    if (typeof window._pvRenderModalTable === 'function' && document.getElementById('pv-modal') && document.getElementById('pv-modal').style.display === 'flex') { window._pvRenderModalTable(); }
+    if (typeof window._pvcRenderModalTable === 'function' && document.getElementById('pvc-modal') && document.getElementById('pvc-modal').style.display === 'flex') { window._pvcRenderModalTable(); }}}catch(e){}}});
           })(this,'${rid}','${selbVal}')" style="width:90px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 6px;font-size:12px;font-family:var(--mono);outline:none" />`;
         })()}
       </td>
@@ -20145,9 +20149,10 @@ function _fluxolabRenderGrid() {
       // Urgência do modelo deste SELB
       const _urgQ = _fluxolabModeloUrgenteQtd(modeloSelb);
       const urgChip = _fluxolabUrgBadge(_urgQ, 'sm');
-      return '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;background:' + (_urgQ ? 'rgba(239,68,68,.10)' : chipBg) + ';border:1px solid ' + (_urgQ ? 'rgba(239,68,68,.7)' : chipBd) + ';border-radius:8px;padding:6px 10px;transition:background .15s,opacity .15s;opacity:' + chipOp + '" onmouseover="this.style.background=\'var(--bg4)\'" onmouseout="this.style.background=\'' + chipBg + '\'">'
+      return '<div style="position:relative;display:flex;align-items:center;justify-content:space-between;gap:6px;background:' + (_urgQ ? 'rgba(239,68,68,.10)' : chipBg) + ';border:1px solid ' + (_urgQ ? 'rgba(239,68,68,.7)' : chipBd) + ';border-radius:8px;padding:6px 10px;transition:background .15s,opacity .15s;opacity:' + chipOp + '" onmouseover="this.style.background=\'var(--bg4)\'" onmouseout="this.style.background=\'' + chipBg + '\'">'
+        + (urgChip ? '<div style="position:absolute;top:4px;right:' + (adminRemoveBtn ? '36px' : '6px') + ';z-index:2;pointer-events:none">' + urgChip + '</div>' : '')
         + '<div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1">'
-          + '<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:' + b.color + ';white-space:nowrap">' + selbCode + warnBadge + starBadge + urgChip + '</span>'
+          + '<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:' + b.color + ';white-space:nowrap">' + selbCode + warnBadge + starBadge + '</span>'
           + '<div style="min-width:0;flex:1">'
             + (v.userName ? '<div style="font-size:10px;color:var(--muted);white-space:normal;word-break:break-word;line-height:1.25">' + v.userName + (v.movidoPor && v.movidoPor !== v.userName ? ' · mov. por ' + v.movidoPor : '') + '</div>' : '')
             + (modeloSelb ? '<div title="Modelo do equipamento" style="font-size:10px;font-weight:600;color:' + b.color + ';white-space:normal;word-break:break-word;line-height:1.25;opacity:.9;margin-top:2px">📦 ' + modeloSelb + '</div>' : '')
@@ -20216,24 +20221,38 @@ function _fluxolabRenderGrid() {
   // Atualiza badge total de SELBs nos bolsões e badge de Estagnados
   (function() {
     var _badge = document.getElementById('fluxolab-bolsoes-total-badge');
-    // Lista de estagnados globais
+    // Lista de estagnados globais + vinculados
     window._fluxolabEstagnadosCache = [];
+    var badgeCountReal = 0;
+    var tempAgrupados = {};
     bolsaoListRaw.forEach(function(bb) { 
       var isEstagnado = bb.b.key !== 'SCRAP' && bb.b.key !== 'DOCA_1' && bb.b.key !== 'GAIOLA_AG_PECAS'; // Ignorar estoques
-      if (bb.items) {
+      if (bb.items && isEstagnado) {
         bb.items.forEach(function(item) {
           var k = item[0], v = item[1];
-          if (v.ts && isEstagnado) {
+          if (v.ts) {
             var dias = Math.floor((Date.now() - v.ts) / 86400000);
-            if (dias >= 3) {
-              window._fluxolabEstagnadosCache.push({
-                selb: v.selb || k,
-                dias: dias,
-                bolsao: bb.b.label,
-                modelo: v.equipamento && v.equipamento !== 'DESCONHECIDO' ? v.equipamento : ((typeof getEquipName === 'function' ? getEquipName(v.selb || k) : '') || '')
-              });
-            }
+            var modelo = v.equipamento && v.equipamento !== 'DESCONHECIDO' ? v.equipamento : ((typeof getEquipName === 'function' ? getEquipName(v.selb || k) : '') || '');
+            var obj = {
+              selb: v.selb || k,
+              dias: dias,
+              bolsao: bb.b.label,
+              modelo: modelo
+            };
+            var ch = bb.b.label + '|' + modelo;
+            if (!tempAgrupados[ch]) tempAgrupados[ch] = { items: [], hasEstagnado: false };
+            tempAgrupados[ch].items.push(obj);
+            if (dias >= 4) tempAgrupados[ch].hasEstagnado = true;
           }
+        });
+      }
+    });
+
+    Object.values(tempAgrupados).forEach(function(g) {
+      if (g.hasEstagnado) {
+        g.items.forEach(function(i) {
+          window._fluxolabEstagnadosCache.push(i);
+          if (i.dias >= 4) badgeCountReal++;
         });
       }
     });
@@ -20251,7 +20270,7 @@ function _fluxolabRenderGrid() {
 
     var _badgeEst = document.getElementById('fluxolab-estagnados-count');
     if (_badgeEst) {
-      _badgeEst.textContent = window._fluxolabEstagnadosCache.length;
+      _badgeEst.textContent = badgeCountReal;
     }
   })();
 
@@ -22862,10 +22881,11 @@ function _fluxolabUrgBadge(qtd, size){
   if (!qtd) return '';
   const sm = size === 'sm';
   return '<span class="fx-urg" title="' + qtd + ' checklist(s) em Urgência Laboratório"'
-    + ' style="flex-shrink:0;display:inline-flex;align-items:center;gap:4px;background:rgba(239,68,68,.18);'
-    + 'border:1px solid rgba(239,68,68,.65);color:#ef4444;border-radius:7px;'
-    + (sm ? 'padding:1px 6px;font-size:9px;margin-left:5px;' : 'padding:3px 9px;font-size:11px;')
-    + 'font-weight:900;letter-spacing:.04em;white-space:nowrap">🚨 URGÊNCIA' + (qtd > 1 ? ' ' + qtd : '') + '</span>';
+    + ' style="flex-shrink:0;display:inline-flex;align-items:center;gap:3px;'
+    + 'background:rgba(239,68,68,.22);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);'
+    + 'border:1px solid rgba(239,68,68,.5);color:#ff6b6b;border-radius:5px;'
+    + (sm ? 'padding:1px 5px;font-size:8px;' : 'padding:2px 7px;font-size:10px;')
+    + 'font-weight:800;letter-spacing:.05em;white-space:nowrap;text-shadow:0 1px 3px rgba(0,0,0,.6)">🚨 URG' + (qtd > 1 ? ' ' + qtd : '') + '</span>';
 }
 try {
   if (typeof document !== 'undefined' && !document.getElementById('fluxolab-urg-style')) {
@@ -29476,85 +29496,121 @@ window.fluxolabVarrerDuplicados = async function() {
 window.fluxolabAbrirEstagnados = function() {
   var estagnados = window._fluxolabEstagnadosCache || [];
   if (estagnados.length === 0) {
-    if (typeof showToast === 'function') showToast('Nenhum SELB estagnado (>3 dias) encontrado.', false);
-    else alert('Nenhum SELB estagnado (>3 dias) encontrado.');
+    if (typeof showToast === 'function') showToast('Nenhum SELB estagnado encontrado.', false);
+    else alert('Nenhum SELB estagnado encontrado.');
     return;
   }
-  
-  estagnados.sort(function(a, b) { return b.dias - a.dias; });
 
-  var rows = estagnados.map(function(e) {
-    return '<tr>' +
-      '<td style="padding:8px;border-bottom:1px solid var(--border)"><strong>' + e.selb + '</strong></td>' +
-      '<td style="padding:8px;border-bottom:1px solid var(--border)">' + e.dias + ' dias</td>' +
-      '<td style="padding:8px;border-bottom:1px solid var(--border)">' + e.bolsao + '</td>' +
-      '<td style="padding:8px;border-bottom:1px solid var(--border);word-break:break-word">' + (e.modelo || '') + '</td>' +
-    '</tr>';
-  }).join('');
+  // Separar: >= 4 dias = estagnados; < 4 dias = em andamento relacionados
+  var acima  = estagnados.filter(function(e){ return e.dias >= 4; });
+  var abaixo = estagnados.filter(function(e){ return e.dias <  4; });
+
+  // Ordenar sempre pelo maior número de dias no topo
+  function srtDias(arr) {
+    arr.sort(function(a, b) { return b.dias - a.dias; });
+  }
+  srtDias(acima);
+  srtDias(abaixo);
+
+  var theadHtml = [
+    '<thead style="background:var(--bg3,#0f172a);position:sticky;top:0">',
+    '<tr>',
+    '<th style="padding:8px">SELB</th>',
+    '<th style="padding:8px">Tempo</th>',
+    '<th style="padding:8px">Bolsão</th>',
+    '<th style="padding:8px">Modelo</th>',
+    '</tr></thead>'
+  ].join('');
+
+  function buildRows(arr, muted) {
+    var border = 'padding:8px;border-bottom:1px solid var(--border)';
+    return arr.map(function(e) {
+      var style = muted ? ' style="color:var(--muted,#94a3b8)"' : '';
+      return '<tr' + style + '>' +
+        '<td style="' + border + '"><strong>' + e.selb + '</strong></td>' +
+        '<td style="' + border + '">' + e.dias + ' dias</td>' +
+        '<td style="' + border + '">' + e.bolsao + '</td>' +
+        '<td style="' + border + ';word-break:break-word">' + (e.modelo || '') + '</td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  var listAcima  = acima.map(function(e){ return e.selb; }).join('\n');
+  var listAbaixo = abaixo.map(function(e){ return e.selb; }).join('\n');
 
   var overlay = document.createElement('div');
-  overlay.style.position = 'fixed';
-  overlay.style.top = '0'; overlay.style.left = '0'; overlay.style.width = '100%'; overlay.style.height = '100%';
-  overlay.style.backgroundColor = 'rgba(0,0,0,0.6)';
-  overlay.style.zIndex = '999999';
-  overlay.style.display = 'flex'; overlay.style.alignItems = 'center'; overlay.style.justifyContent = 'center';
-  overlay.style.backdropFilter = 'blur(4px)';
-  
-  var modal = document.createElement('div');
-  modal.style.backgroundColor = 'var(--bg1, #1e293b)';
-  modal.style.border = '1px solid var(--border, #334155)';
-  modal.style.borderRadius = '12px';
-  modal.style.padding = '24px';
-  modal.style.width = '1100px';
-  modal.style.maxWidth = '95vw';
-  modal.style.maxHeight = '90vh';
-  modal.style.display = 'flex';
-  modal.style.flexDirection = 'column';
-  modal.style.boxShadow = '0 10px 30px rgba(0,0,0,0.5)';
-  modal.style.color = 'var(--text, #f8fafc)';
-  
-  var selbListStr = estagnados.map(function(e) { return e.selb; }).join('\n');
+  overlay.style.cssText = [
+    'position:fixed;top:0;left:0;width:100%;height:100%',
+    'background:rgba(0,0,0,0.6)',
+    'z-index:999999',
+    'display:flex;align-items:center;justify-content:center',
+    'backdrop-filter:blur(4px)'
+  ].join(';');
 
-  modal.innerHTML = 
-    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">' +
-      '<h2 style="margin:0;font-size:20px;color:#ef4444">🛑 SELBs Estagnados (> 3 dias)</h2>' +
+  var modal = document.createElement('div');
+  modal.style.cssText = [
+    'background:var(--bg1,#1e293b)',
+    'border:1px solid var(--border,#334155)',
+    'border-radius:12px',
+    'padding:24px',
+    'width:1150px;max-width:95vw;max-height:90vh',
+    'display:flex;flex-direction:column',
+    'box-shadow:0 10px 30px rgba(0,0,0,0.5)',
+    'color:var(--text,#f8fafc)',
+    'gap:16px;overflow-y:auto'
+  ].join(';');
+
+  function secaoHtml(titleTxt, titleColor, btnId, btnLabel, btnBg, rows) {
+    return [
+      '<div style="border:1px solid ' + titleColor + ';border-radius:8px;padding:12px">',
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">',
+          '<span style="font-size:14px;font-weight:700;color:' + titleColor + '">' + titleTxt + '</span>',
+          '<button id="' + btnId + '" style="background:' + btnBg + ';color:#fff;border:none;border-radius:6px;padding:6px 14px;font-weight:bold;cursor:pointer;font-size:13px">' + btnLabel + '</button>',
+        '</div>',
+        '<div style="overflow-y:auto;max-height:35vh;border:1px solid var(--border,#334155);border-radius:6px">',
+          '<table style="width:100%;border-collapse:collapse;text-align:left;font-size:13px">',
+            theadHtml,
+            '<tbody>' + rows + '</tbody>',
+          '</table>',
+        '</div>',
+      '</div>'
+    ].join('');
+  }
+
+  modal.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:center">' +
+      '<h2 style="margin:0;font-size:20px;color:#ef4444">🛑 SELBs Estagnados e Relacionados</h2>' +
       '<button id="btn-close-estagnados" style="background:none;border:none;font-size:24px;color:var(--muted);cursor:pointer;line-height:1">&times;</button>' +
     '</div>' +
-    '<div style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center">' +
-      '<span style="font-size:14px;color:var(--muted)">Total: ' + estagnados.length + ' SELB(s) parados.</span>' +
-      '<button id="btn-copy-estagnados" style="background:var(--accent, #3b82f6);color:#fff;border:none;border-radius:6px;padding:8px 16px;font-weight:bold;cursor:pointer">📋 Copiar SELBs</button>' +
-    '</div>' +
-    '<div style="overflow-y:auto;flex:1;border:1px solid var(--border, #334155);border-radius:6px">' +
-      '<table style="width:100%;border-collapse:collapse;text-align:left;font-size:13px">' +
-        '<thead style="background:var(--bg3, #0f172a);position:sticky;top:0">' +
-          '<tr><th style="padding:8px">SELB</th><th style="padding:8px">Tempo Parado</th><th style="padding:8px">Bolsão</th><th style="padding:8px">Modelo</th></tr>' +
-        '</thead>' +
-        '<tbody>' + rows + '</tbody>' +
-      '</table>' +
-    '</div>';
+    secaoHtml(
+      '🔴 Parados há +4 dias — ' + acima.length + ' SELB(s)',
+      '#ef4444', 'btn-copy-acima', '📋 Copiar +4 dias', '#ef4444',
+      buildRows(acima, false)
+    ) +
+    secaoHtml(
+      '🟡 Em andamento -3 dias (mesmo modelo/bolção) — ' + abaixo.length + ' SELB(s)',
+      '#94a3b8', 'btn-copy-abaixo', '📋 Copiar -3 dias', '#3b82f6',
+      buildRows(abaixo, true)
+    );
 
   overlay.appendChild(modal);
   document.body.appendChild(overlay);
 
-  document.getElementById('btn-close-estagnados').onclick = function() {
-    document.body.removeChild(overlay);
-  };
-  
-  overlay.onclick = function(e) {
-    if (e.target === overlay) document.body.removeChild(overlay);
-  };
+  document.getElementById('btn-close-estagnados').onclick = function() { document.body.removeChild(overlay); };
+  overlay.onclick = function(ev) { if (ev.target === overlay) document.body.removeChild(overlay); };
 
-  document.getElementById('btn-copy-estagnados').onclick = function() {
-    navigator.clipboard.writeText(selbListStr).then(function() {
-      var btn = document.getElementById('btn-copy-estagnados');
-      btn.textContent = '✅ Copiado!';
-      btn.style.background = '#10b981';
-      setTimeout(function() {
-        if(document.body.contains(btn)){
-            btn.textContent = '📋 Copiar SELBs';
-            btn.style.background = 'var(--accent, #3b82f6)';
-        }
-      }, 2000);
-    });
-  };
+  function cpBtn(id, text, label) {
+    var btn = modal.querySelector('#' + id);
+    if (!btn) return;
+    btn.onclick = function() {
+      navigator.clipboard.writeText(text).then(function() {
+        btn.textContent = '✅ Copiado!';
+        setTimeout(function() { if (document.body.contains(btn)) btn.textContent = label; }, 2000);
+      });
+    };
+  }
+  cpBtn('btn-copy-acima',  listAcima,  '📋 Copiar +4 dias');
+  cpBtn('btn-copy-abaixo', listAbaixo, '📋 Copiar -3 dias');
 };
+
+

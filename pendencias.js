@@ -498,8 +498,17 @@ function pendApplyViewState(state) {
     } catch(e) {}
   }
 
-  if (changed && typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'pendencias') {
-    fluxolabRenderPendencias();
+  if (changed) {
+    if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'pendencias') {
+      fluxolabRenderPendencias();
+    }
+    // Sempre re-renderiza o modal do operador se estiver visível
+    if (typeof window._pvRenderModalTable === 'function' && window._pvModalEl_ref && window._pvModalEl_ref.style.display === 'flex') {
+      window._pvRenderModalTable();
+    }
+    if (typeof window._pvcRenderModalTable === 'function' && window._pvcModalEl_ref && window._pvcModalEl_ref.style.display === 'flex') {
+      window._pvcRenderModalTable();
+    }
   }
 }
 
@@ -512,6 +521,10 @@ const PEND_VIEW_STATE_LS_KEY = 'fluxolabPendViewState';
 async function pendSaveViewStateNow() {
   try {
     localStorage.setItem(PEND_VIEW_STATE_LS_KEY, JSON.stringify(pendGetViewState()));
+    // Trigger a Supabase save so the new view state is pushed to other clients (like operators)
+    if (typeof fluxolabSavePendenciasDebounced === 'function') {
+      fluxolabSavePendenciasDebounced();
+    }
   } catch(e) { console.warn('[pend-view] save local falhou:', e); }
 }
 
@@ -528,12 +541,20 @@ async function fluxolabLoadPendencias() {
     try {
       const {data, error} = await _supa.from('fluxolab_state').select('data').eq('key', 'pendencias_mistas_complexas').maybeSingle();
       if (!error && data && data.data) {
-        _fluxolabPendenciasState = Object.assign({ mistas: [], complexas: [] }, data.data);
+        // Extrai _viewState antes de atribuir ao estado de dados
+        const raw = Object.assign({ mistas: [], complexas: [] }, data.data);
+        const viewState = raw._viewState || null;
+        delete raw._viewState;
+        _fluxolabPendenciasState = raw;
+        // Aplica o viewState remoto (colunas, lista detalhada, tamanhos)
+        if (viewState) {
+          try { pendApplyViewState(viewState); } catch(e) {}
+        }
       }
       if (error) console.warn('[pend] load erro:', error);
     } catch(e) { console.error('Erro ao carregar pendências:', e); }
 
-    // view state agora e local (sem round-trip nem Realtime)
+    // view state local como fallback se não veio do Supabase
     try {
       const _vsRaw = localStorage.getItem(PEND_VIEW_STATE_LS_KEY);
       if (_vsRaw) pendApplyViewState(JSON.parse(_vsRaw));
@@ -633,8 +654,10 @@ async function fluxolabSavePendenciasNow() {
   if (snap && snap === _fluxolabPendLastSavedJSON) return true;
   _fluxolabPendSaving = true;
   try {
+    // Inclui viewState no payload para que operadores vejam as mesmas colunas/configurações
+    const payload = Object.assign({}, _fluxolabPendenciasState, { _viewState: pendGetViewState() });
     const { error } = await _supa.from('fluxolab_state').upsert(
-      { key: 'pendencias_mistas_complexas', data: _fluxolabPendenciasState },
+      { key: 'pendencias_mistas_complexas', data: payload },
       { onConflict: 'key' }
     );
     if (error) {
@@ -673,10 +696,31 @@ if (typeof window !== 'undefined' && !window._pendFlushBound) {
 function fluxolabApplyRemoteSyncPend(remoteData) {
   if (!_fluxolabPendLoaded || !remoteData) return;
 
+  // Extrai e aplica o viewState remoto antes de processar os dados
+  const viewState = remoteData._viewState || null;
+  if (viewState) {
+    try { pendApplyViewState(viewState); } catch(e) {}
+    delete remoteData._viewState;
+  }
+
+  // Operadores sempre veem o dado remoto mais recente — re-renderiza seus modais
+  // independente do guard de divergência local abaixo.
+  function _pvRefreshOperatorModals() {
+    if (typeof window._pvRenderModalTable === 'function' && window._pvModalEl_ref && window._pvModalEl_ref.style.display === 'flex') {
+      window._pvRenderModalTable();
+    }
+    if (typeof window._pvcRenderModalTable === 'function' && window._pvcModalEl_ref && window._pvcModalEl_ref.style.display === 'flex') {
+      window._pvcRenderModalTable();
+    }
+  }
+
   try {
     const localSnap = JSON.stringify(_fluxolabPendenciasState);
     if (_fluxolabPendLastSavedJSON != null && localSnap !== _fluxolabPendLastSavedJSON) {
       fluxolabSavePendenciasDebounced();
+      // Ainda atualiza os modais dos operadores com o dado remoto
+      _fluxolabPendenciasState = Object.assign({ mistas: [], complexas: [] }, remoteData);
+      _pvRefreshOperatorModals();
       return;
     }
   } catch (e) {}
@@ -721,12 +765,7 @@ function fluxolabApplyRemoteSyncPend(remoteData) {
     const activeId = document.activeElement ? document.activeElement.id : null;
     if (!activeId || activeId.indexOf('pnd-') !== 0) fluxolabRenderPendencias();
   }
-  if (typeof window._pvRenderModalTable === 'function' && window._pvModalEl_ref && window._pvModalEl_ref.style.display === 'flex') {
-    window._pvRenderModalTable();
-  }
-  if (typeof window._pvcRenderModalTable === 'function' && window._pvcModalEl_ref && window._pvcModalEl_ref.style.display === 'flex') {
-    window._pvcRenderModalTable();
-  }
+  _pvRefreshOperatorModals();
   if (typeof updateActiveUsersInTables === 'function') updateActiveUsersInTables();
   try { _fluxolabPendLastSavedJSON = JSON.stringify(_fluxolabPendenciasState); } catch (e) {}
 }

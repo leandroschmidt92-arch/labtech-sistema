@@ -19,9 +19,26 @@
 
   // ───────────────── DADOS ─────────────────
   async function pvLoad(){
+    if (typeof fluxolabStartListener === 'function') fluxolabStartListener();
+    if (typeof fluxolabStartChecklistsListener === 'function') fluxolabStartChecklistsListener();
+
     if (typeof fluxolabLoadPendencias === 'function') {
       await fluxolabLoadPendencias();
     }
+
+    // Aguarda até dados do Firebase chegarem (checklist + grid), máx 3s
+    await new Promise(function(resolve) {
+      var waited = 0;
+      var interval = setInterval(function() {
+        waited += 100;
+        var hasChecklist = typeof _fluxolabChecklistsImported !== 'undefined' && Array.isArray(_fluxolabChecklistsImported) && _fluxolabChecklistsImported.length > 0;
+        var hasData = typeof _fluxolabData !== 'undefined' && _fluxolabData && Object.keys(_fluxolabData).length > 0;
+        if ((hasChecklist && hasData) || waited >= 3000) {
+          clearInterval(interval);
+          resolve();
+        }
+      }, 100);
+    });
   }
 
   // ───────────────── BOTÃO FLUTUANTE (OPERADOR) ─────────────────
@@ -106,7 +123,10 @@
   async function pvOpenModal(){
     pvEnsureModal();
     _pvModalEl.style.display = 'flex';
-    if (!_pvLoaded) await pvLoad();
+    if (!_pvLoaded) {
+      await pvLoad();
+      _pvLoaded = true;
+    }
     pvRenderModalTable();
   }
   function pvCloseModal(){ if (_pvModalEl) _pvModalEl.style.display = 'none'; }
@@ -114,17 +134,28 @@
   function pvRenderModalTable(){
     const body = document.getElementById('pv-modal-body');
     if (!body) return;
-    
     if (typeof fluxolabRenderPendTable === 'function') {
       body.innerHTML = fluxolabRenderPendTable('Pendências Mistas', 'mistas', '#fbbf24', '#fbbf24');
-      // Make the entire table read-only for operators, while allowing scroll on the wrapper
-      const tableWrapper = body.querySelector('div');
-      if (tableWrapper) {
-        tableWrapper.style.pointerEvents = 'none';
-      }
+      pvHideAdminControls(body);
     } else {
       body.innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted)">Erro: fluxolabRenderPendTable não carregado.</div>';
     }
+  }
+  function pvHideAdminControls(body) {
+    if (!body) return;
+    var wrapper = body.querySelector('div');
+    if (wrapper) { wrapper.style.pointerEvents = 'none'; wrapper.style.userSelect = 'text'; }
+    body.querySelectorAll('button').forEach(function(btn) {
+      var txt = (btn.textContent || '').trim().toLowerCase();
+      if (txt.includes('limpar') || txt.includes('colunas')) {
+        var parent = btn.parentElement;
+        if (parent && parent.tagName === 'SPAN') parent.style.display = 'none';
+        else btn.style.display = 'none';
+      }
+    });
+    body.querySelectorAll('label').forEach(function(lbl) {
+      if ((lbl.textContent || '').toLowerCase().includes('lista detalhada')) lbl.style.display = 'none';
+    });
   }
 
   // ───────────────── PAINEL ADMIN — PERMISSÕES ─────────────────
