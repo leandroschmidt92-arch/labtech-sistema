@@ -12145,7 +12145,7 @@ const EQUIP_MANUAL_GRACE_MS = 10 * 24 * 60 * 60 * 1000; // 10 dias
 
 async function loadEquipamentos(){
   const [r1, r2, r3, r4] = await Promise.all([
-    _supa.from('equipamentos').select('id, raw'),
+    _supa.from('equipamentos').select('id, nome:raw->>nome, manual:raw->>manual, criadoEm:raw->>criadoEm'),
     _supa.from('equipamentos_series').select('id, raw'),
     _supa.from('equipamentos_skus').select('id, raw'),
     _supa.from('equipamentos_unitizadores').select('id, raw'),
@@ -12154,8 +12154,9 @@ async function loadEquipamentos(){
   const tmpEq = {};
   const tmpManual = {};
   (r1.data || []).forEach(e => {
-    tmpEq[e.id] = (e.raw && e.raw.nome) ? e.raw.nome : e.id;
-    if(e.raw && e.raw.manual) tmpManual[e.id] = e.raw.criadoEm || Date.now();
+    tmpEq[e.id] = e.nome ? e.nome : e.id;
+    const isManual = (e.manual === 'true' || e.manual === true);
+    if(isManual) tmpManual[e.id] = parseInt(e.criadoEm, 10) || Date.now();
   });
   const tmpSeries = {};
   (r2.data || []).forEach(e => { tmpSeries[e.id] = (e.raw && e.raw.serie) ? e.raw.serie : e.raw; });
@@ -12186,9 +12187,9 @@ let _maquinasAEquip = {}; // { 'SELB-001': 'Impressora HP 1020', ... }
 
 async function loadMaquinasAEquip(){
   try {
-    const { data } = await _supa.from('maquinas_a_equipamentos').select('id, raw');
+    const { data } = await _supa.from('maquinas_a_equipamentos').select('id, nome:raw->>nome');
     const tmp = {};
-    (data || []).forEach(e => { tmp[e.id] = (e.raw && e.raw.nome) ? e.raw.nome : e.id; });
+    (data || []).forEach(e => { tmp[e.id] = e.nome ? e.nome : e.id; });
     _maquinasAEquip = tmp;
   } catch(e) {
     console.warn('[Máquina A] Erro ao carregar planilha exclusiva:', e);
@@ -12488,11 +12489,12 @@ async function importEquipFile(input){
     // que ainda estão dentro do período de carência de 10 dias. Eles só saem
     // do sistema quando completam 10 dias sem terem sido oficializados pela
     // planilha (ou imediatamente, se a própria planilha já trouxer o SELB).
-    const { data: _eqAntesImport } = await _supa.from('equipamentos').select('id, raw');
+    const { data: _eqAntesImport } = await _supa.from('equipamentos').select('id, manual:raw->>manual, criadoEm:raw->>criadoEm');
     const _protegidosImport = new Set();
     (_eqAntesImport || []).forEach(e => {
-      const raw = e.raw || {};
-      if(raw.manual && raw.criadoEm && (Date.now() - raw.criadoEm) < EQUIP_MANUAL_GRACE_MS && !batch[e.id]){
+      const isManual = (e.manual === 'true' || e.manual === true);
+      const criadoEm = parseInt(e.criadoEm, 10);
+      if(isManual && criadoEm && (Date.now() - criadoEm) < EQUIP_MANUAL_GRACE_MS && !batch[e.id]){
         _protegidosImport.add(e.id);
       }
     });
@@ -19032,7 +19034,7 @@ function getSectorTipo(nome){
 
 async function loadSetores() {
   try {
-    const { data: rows } = await _supa.from('setores').select('id, nome, raw');
+    const { data: rows } = await _supa.from('setores').select('id, nome');
     if (rows && rows.length > 0) {
       const nomes = rows.map(r => (r.nome || r.id).toUpperCase());
       _setores = [...new Set([...SETORES_FIXOS, ...nomes])];
