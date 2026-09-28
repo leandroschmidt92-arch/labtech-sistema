@@ -2840,7 +2840,7 @@ function loginAs(u){
       const { count, error } = await _supaAuthed()
         .from('qualidade_registros')
         .select('*', { count: 'exact', head: true })
-        .gte('ts', hoje.toISOString());
+        .gte('ts', hoje.getTime());
       if (!error && count != null) {
         const el = document.getElementById('dash-liberadas-total');
         if (el) el.textContent = count;
