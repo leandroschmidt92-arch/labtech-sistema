@@ -12489,7 +12489,7 @@ async function importEquipFile(input){
     // que ainda estão dentro do período de carência de 10 dias. Eles só saem
     // do sistema quando completam 10 dias sem terem sido oficializados pela
     // planilha (ou imediatamente, se a própria planilha já trouxer o SELB).
-    const { data: _eqAntesImport } = await _supa.from('equipamentos').select('id, manual:raw->>manual, criadoEm:raw->>criadoEm');
+    const { data: _eqAntesImport } = await _supa.from('equipamentos').select('id, nome:raw->>nome, manual:raw->>manual, criadoEm:raw->>criadoEm');
     const _protegidosImport = new Set();
     (_eqAntesImport || []).forEach(e => {
       const isManual = (e.manual === 'true' || e.manual === true);
@@ -12511,8 +12511,8 @@ async function importEquipFile(input){
     _protegidosImport.forEach(id => {
       const found = (_eqAntesImport || []).find(e => e.id === id);
       if(found){
-        equipamentos[id] = (found.raw && found.raw.nome) ? found.raw.nome : id;
-        _equipManualInfo[id] = found.raw.criadoEm;
+        equipamentos[id] = found.nome ? found.nome : id;
+        _equipManualInfo[id] = parseInt(found.criadoEm, 10);
       }
     });
     // Qualquer SELB manual que tenha sido oficializado pela planilha (mesmo
