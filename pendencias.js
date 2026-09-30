@@ -1633,6 +1633,36 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
   return html;
 }
 
+// ── Fundo da tabela: escuro (padrão) ou branco com fontes pretas ────────────
+// Preferência salva no navegador. Só afeta a aparência (classe .pend-light no painel).
+function pendIsLightBg(){
+  try { return localStorage.getItem('pend_light_bg') === '1'; } catch(e){ return false; }
+}
+function _pendInjectLightCss(){
+  if (document.getElementById('pend-light-css')) return;
+  const st = document.createElement('style');
+  st.id = 'pend-light-css';
+  st.textContent = `
+    .pend-light table{background:#fff !important;border-color:#cbd5e1 !important;box-shadow:0 4px 18px rgba(0,0,0,.12) !important}
+    .pend-light table th,.pend-light table td{background:#fff !important;border-color:#cbd5e1 !important}
+    .pend-light table thead tr:first-child th{background:#f1f5f9 !important}
+    .pend-light table thead tr:nth-child(2) th{background:#e2e8f0 !important}
+    .pend-light table tbody tr:hover td{background:#f8fafc !important}
+    .pend-light table,.pend-light table *{color:#000 !important;text-shadow:none !important}
+    .pend-light table textarea,.pend-light table input:not([type=checkbox]),.pend-light table select{background:#fff !important;color:#000 !important}
+    .pend-light table ::placeholder{color:#64748b !important;opacity:1}
+    .pend-light table button,.pend-light table label{background:#f1f5f9 !important;border-color:#94a3b8 !important}
+    .pend-light table button[onclick^="fluxolabClearPendTable"]{background:#dc2626 !important;color:#fff !important;border-color:#dc2626 !important}
+    .pend-light table [id$="-colmenu"]{background:#fff !important;border-color:#94a3b8 !important;box-shadow:0 12px 32px rgba(0,0,0,.25) !important}
+  `;
+  document.head.appendChild(st);
+}
+function pendToggleLightBg(){
+  try { localStorage.setItem('pend_light_bg', pendIsLightBg() ? '0' : '1'); } catch(e){}
+  fluxolabRenderPendencias();
+}
+window.pendToggleLightBg = pendToggleLightBg;
+
 function fluxolabRenderPendencias() {
   if (_pendColDrag) {
     _pendRenderQueued = true;
@@ -1640,6 +1670,8 @@ function fluxolabRenderPendencias() {
   }
   const panel = document.getElementById('fluxolab-tab-pendencias-panel');
   if (!panel) return;
+  _pendInjectLightCss();
+  panel.classList.toggle('pend-light', pendIsLightBg());
 
   // Reaproveita a mesma datalist de modelos usada no Planejamento do Dia,
   // recriando aqui para o caso desta aba ser renderizada primeiro.
@@ -1663,7 +1695,10 @@ function fluxolabRenderPendencias() {
           <p style="font-size:13px;color:var(--muted);margin:4px 0 0">Modo Multiplayer: Qualquer alteração feita por você ou por outros usuários atualiza a tela em tempo real sem conflitos. Arraste a borda direita do cabeçalho para ajustar largura.</p>
         </div>
       </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button type="button" onclick="pendToggleLightBg()" title="Alterna o fundo da tabela entre escuro e branco (fontes pretas)" style="background:var(--bg3);color:var(--muted);border:1px solid var(--border2);border-radius:8px;padding:8px 12px;font-size:11px;font-weight:800;cursor:pointer;font-family:var(--font)">${pendIsLightBg() ? '🌙 Fundo escuro' : '☀️ Fundo branco'}</button>
       <button type="button" onclick="pendResetColWidths()" style="background:var(--bg3);color:var(--muted);border:1px solid var(--border2);border-radius:8px;padding:8px 12px;font-size:11px;font-weight:800;cursor:pointer;font-family:var(--font)">↺ Restaurar larguras</button>
+      </div>
     </div>
   `;
 

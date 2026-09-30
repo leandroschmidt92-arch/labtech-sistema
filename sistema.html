@@ -1369,13 +1369,17 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     <div id="relview-busca-modelo" style="display:none">
       <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:24px;margin-bottom:20px">
         <h2 style="font-size:18px;font-weight:600;margin-bottom:4px">🔍 Análise por Modelo Específico</h2>
-        <p style="font-size:12px;color:var(--muted);margin-bottom:20px">Visualize o rendimento (Aprovados vs Scrap) de um modelo específico, sem duplicar SELBs.</p>
+        <p style="font-size:12px;color:var(--muted);margin-bottom:20px">Visualize o rendimento (Aprovados vs Scrap) e os Liberados da Qualidade de até 2 modelos, sem duplicar SELBs.</p>
         
         <div style="display:flex;gap:12px;align-items:flex-end;margin-bottom:24px">
           <div style="flex:1">
             <label class="flbl">Digite ou Selecione o Modelo</label>
             <input type="text" id="busca-modelo-select" class="sel" list="busca-modelo-datalist" placeholder="Ex: C811..." style="margin:0; text-transform:uppercase;" onchange="renderBuscaModeloRel()">
             <datalist id="busca-modelo-datalist"></datalist>
+          </div>
+          <div style="flex:1">
+            <label class="flbl">Modelo 2 (opcional)</label>
+            <input type="text" id="busca-modelo-select2" class="sel" list="busca-modelo-datalist" placeholder="Comparar com outro modelo..." style="margin:0; text-transform:uppercase;" onchange="renderBuscaModeloRel()">
           </div>
           <button class="btn bp" onclick="renderBuscaModeloRel()" style="height:42px;width:120px">📊 Analisar</button>
         </div>
@@ -1394,6 +1398,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
             <thead>
               <tr>
                 <th>SELB</th>
+                <th id="busca-modelo-th-modelo" style="display:none">Modelo</th>
                 <th>Status Final</th>
                 <th>Última Atualização</th>
                 <th>Profissional</th>
@@ -2038,7 +2043,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
         <div style="display:flex;align-items:center;gap:6px">
           <label style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.02em">Filtrar Data:</label>
-          <input class="sinp" id="qual-reg-date-filter" type="date" onchange="renderQualRegistros()" style="width:145px;color:var(--text);padding:6px 10px;font-size:12px">
+          <input class="sinp" id="qual-reg-date-filter" type="date" onchange="qualOnDateFilterChange()" style="width:145px;color:var(--text);padding:6px 10px;font-size:12px">
         </div>
         <input class="sinp" id="qual-reg-search" placeholder="BUSCAR SELB..." oninput="qualOnBuscaInput()" style="width:160px">
         <button onclick="renderQualRegistros()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--muted);font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">🔄 Atualizar</button>

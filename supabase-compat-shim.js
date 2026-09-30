@@ -330,7 +330,7 @@ function createSupabaseCompatShim(supa) {
   // centenas de requisições por dia em cada aba aberta. 300s + pausa quando a
   // aba está em segundo plano cortam esse tráfego drasticamente, sem
   // perder consistência (o Realtime continua entregando as mudanças na hora).
-  const RECONCILE_MS = 300000;
+  const RECONCILE_MS = 900000; // 15 min (era 5): realtime e o resync ao voltar de background ja cobrem; menos requisicoes = menos log
   const BLOB_BROADCAST_MAX = 12000; // acima disso manda "reload" em vez do JSON
 
   let _bus = null;
