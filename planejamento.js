@@ -772,9 +772,41 @@ function fluxolabRenderPlanTable(title, tableName, titleColor, themeColor) {
   return html;
 }
 
+// ── Fundo da tabela: escuro (padrão) ou branco com fontes pretas ────────────
+// Preferência salva no navegador. Só afeta a aparência (classe .plan-light no painel).
+function planIsLightBg(){
+  try { return localStorage.getItem('plan_light_bg') === '1'; } catch(e){ return false; }
+}
+function _planInjectLightCss(){
+  if (document.getElementById('plan-light-css')) return;
+  const st = document.createElement('style');
+  st.id = 'plan-light-css';
+  st.textContent = `
+    .plan-light table{background:#fff !important;border-color:#cbd5e1 !important;box-shadow:0 4px 18px rgba(0,0,0,.12) !important}
+    .plan-light table th,.plan-light table td{background:#fff !important;border-color:#cbd5e1 !important}
+    .plan-light table thead tr:first-child th{background:#f1f5f9 !important}
+    .plan-light table thead tr:nth-child(2) th{background:#e2e8f0 !important}
+    .plan-light table tbody tr:hover td{background:#f8fafc !important}
+    .plan-light table,.plan-light table *{color:#000 !important;text-shadow:none !important}
+    .plan-light table textarea,.plan-light table input:not([type=checkbox]),.plan-light table select{background:#fff !important;color:#000 !important}
+    .plan-light table ::placeholder{color:#64748b !important;opacity:1}
+    .plan-light table button,.plan-light table label{background:#f1f5f9 !important;border-color:#94a3b8 !important}
+    .plan-light table button[onclick^="fluxolabClearPlanTable"]{background:#dc2626 !important;color:#fff !important;border-color:#dc2626 !important}
+    .plan-light table [id$="-colmenu"]{background:#fff !important;border-color:#94a3b8 !important;box-shadow:0 12px 32px rgba(0,0,0,.25) !important}
+  `;
+  document.head.appendChild(st);
+}
+function planToggleLightBg(){
+  try { localStorage.setItem('plan_light_bg', planIsLightBg() ? '0' : '1'); } catch(e){}
+  fluxolabRenderPlanejamento();
+}
+window.planToggleLightBg = planToggleLightBg;
+
 function fluxolabRenderPlanejamento() {
   const panel = document.getElementById('fluxolab-tab-planejamento-panel');
   if (!panel) return;
+  _planInjectLightCss();
+  panel.classList.toggle('plan-light', planIsLightBg());
   
   let modelosUnicos = Array.from(new Set(Object.values(typeof equipamentos !== 'undefined' ? equipamentos : {}).filter(Boolean)));
   modelosUnicos.sort((a,b) => a.localeCompare(b));
@@ -786,13 +818,18 @@ function fluxolabRenderPlanejamento() {
   let html = dataListHtml;
   
   html += `
-    <div style="margin-bottom:24px;display:flex;align-items:center;gap:14px">
-      <div style="background:var(--bg3);padding:10px;border-radius:12px;border:1px solid var(--border2);display:inline-flex;align-items:center;justify-content:center;box-shadow:inset 0 2px 10px rgba(0,0,0,0.3)">
-        <span style="font-size:24px;line-height:1">🌐</span>
+    <div style="margin-bottom:24px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;justify-content:space-between">
+      <div style="display:flex;align-items:center;gap:14px">
+        <div style="background:var(--bg3);padding:10px;border-radius:12px;border:1px solid var(--border2);display:inline-flex;align-items:center;justify-content:center;box-shadow:inset 0 2px 10px rgba(0,0,0,0.3)">
+          <span style="font-size:24px;line-height:1">🌐</span>
+        </div>
+        <div>
+          <h2 style="font-size:22px;font-weight:900;color:var(--text);margin:0;letter-spacing:-0.02em">Planejamento do Dia <span style="font-size:10px;background:#4ade8022;color:#4ade80;padding:2px 6px;border-radius:4px;margin-left:6px;vertical-align:middle;text-transform:uppercase">Online</span></h2>
+          <p style="font-size:13px;color:var(--muted);margin:4px 0 0">Modo Multiplayer: Qualquer alteração feita por você ou por outros usuários atualiza a tela em tempo real sem conflitos.</p>
+        </div>
       </div>
-      <div>
-        <h2 style="font-size:22px;font-weight:900;color:var(--text);margin:0;letter-spacing:-0.02em">Planejamento do Dia <span style="font-size:10px;background:#4ade8022;color:#4ade80;padding:2px 6px;border-radius:4px;margin-left:6px;vertical-align:middle;text-transform:uppercase">Online</span></h2>
-        <p style="font-size:13px;color:var(--muted);margin:4px 0 0">Modo Multiplayer: Qualquer alteração feita por você ou por outros usuários atualiza a tela em tempo real sem conflitos.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" onclick="planToggleLightBg()" title="Alterna o fundo da tabela entre escuro e branco (fontes pretas)" style="background:var(--bg3);color:var(--muted);border:1px solid var(--border2);border-radius:8px;padding:8px 12px;font-size:11px;font-weight:800;cursor:pointer;font-family:var(--font)">${planIsLightBg() ? '🌙 Fundo escuro' : '☀️ Fundo branco'}</button>
       </div>
     </div>
   `;
@@ -806,3 +843,4 @@ function fluxolabRenderPlanejamento() {
 }
 
 setTimeout(fluxolabLoadPlanejamento, 1500);
+

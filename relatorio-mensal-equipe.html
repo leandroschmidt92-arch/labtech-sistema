@@ -172,7 +172,7 @@
     /* ── Print ── */
     @media print {
       body { background: #fff; color: #111; padding: 12px; }
-      .controls, button, #status-bar { display: none !important; }
+      .controls, button, #status-bar, .x-excl { display: none !important; }
       .header { border: 1px solid #ddd; background: #f8f8f8; }
       .setor-card, .kpi-card { border: 1px solid #ddd; background: #fff; }
       th { background: #f0f0f0; color: #333; }
@@ -265,6 +265,7 @@
               <th class="text-center">Total Equipe</th>
               <th class="text-center">Saúde %</th>
               <th class="text-center">Liberações</th>
+              <th style="width:32%">Quem faltou</th>
             </tr>
           </thead>
           <tbody id="tabela-dias-body"></tbody>
@@ -274,9 +275,11 @@
     </div>
   </div>
 
+  <div class="section" id="auditoria"></div>
+
   <!-- Observações -->
   <div class="note" style="margin-top:8px">
-    ⚠️ Saúde da equipe: setor <strong>Eletrônica</strong> aparece nos cards mas <strong>não entra</strong> no cálculo da saúde geral. Dias sem nenhum check-in são marcados como "Feriado/sem dados". Dias com menos de 50% de presença são ocultados por padrão.
+    ⚠️ Saúde da equipe: setor <strong>Eletrônica</strong> aparece nos cards mas <strong>não entra</strong> no cálculo da saúde geral. Dias sem nenhum check-in são marcados como "Feriado/sem dados". Dias com menos de 50% de presença são ocultados por padrão. A equipe é reconstruída dia a dia: a pessoa conta a partir do 1º check-in e, se hoje estiver inativa, até o último check-in. Quem nunca fez check-in (ex.: ocultos) conta em todos os dias, como no painel.
   </div>
 </div>
 
@@ -298,12 +301,41 @@ const SETORES = [
 ];
 const SETORES_FORA_SAUDE = new Set(['ELETRÔNICA','ELETRONICA']);
 
+// ── Ajustes manuais de entrada/saída (opcional) ───────────────────────────
+// Use quando o histórico de check-ins não reflete a data real de entrada/saída
+// (ex.: pessoa oculta que nunca bate PIN). Chave = nome exato ou id do operador.
+// Exemplo:
+//   'Hélio Venturi': { entrada: '2026-08-15' },
+//   'Fulano':        { entrada: '2026-03-01', saida: '2026-07-31' },
+const AJUSTES_EQUIPE = {
+};
+function isoParaData(iso) { const [y,m,d] = iso.split('-').map(Number); return new Date(y, m-1, d); }
+
 // ── Dias da semana PT-BR ───────────────────────────────────────────────────
 const DIAS_SEMANA = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
 const MESES_PT = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
                   'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+function esc(t) { return String(t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+// 'Mon_Oct_05_2026' -> Date local (meia-noite)
+function parseDateKey(k) {
+  const d = new Date(String(k).replace(/_/g, ' '));
+  if (isNaN(d)) return null;
+  d.setHours(0,0,0,0);
+  return d;
+}
+// Busca TODAS as linhas de uma consulta (o Supabase corta em 1000 por requisição)
+async function buscarTudo(montarQuery) {
+  const PAGE = 1000, out = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await montarQuery().range(from, from + PAGE - 1);
+    if (error) throw error;
+    out.push(...(data || []));
+    if (!data || data.length < PAGE) break;
+  }
+  return out;
+}
 function dateKey(d) { return new Date(d).toDateString().replace(/ /g,'_'); }
 function isoDate(d) { return d.toISOString().slice(0,10); }
 function healthColor(pct) {
@@ -337,6 +369,93 @@ function mudarZoom(delta) {
 
 // ── Dados globais do relatório ─────────────────────────────────────────────
 let _dadosRelatorio = null;
+let _cache = null; // dados brutos buscados (permite recalcular sem nova consulta)
+
+// ── Exclusões manuais (salvas neste navegador) ─────────────────────────────
+// uid -> { nome, lista: [{ de: 'AAAA-MM-DD'|null, ate: 'AAAA-MM-DD'|null }] }
+const EXCL_KEY = 'relatorioEquipe.exclusoes.v1';
+let EXCL = {};
+try { EXCL = JSON.parse(localStorage.getItem(EXCL_KEY) || '{}') || {}; } catch (e) { EXCL = {}; }
+function salvarExcl() {
+  try { localStorage.setItem(EXCL_KEY, JSON.stringify(EXCL)); }
+  catch (e) { console.warn('Não foi possível salvar as exclusões neste navegador.', e); }
+}
+function isoLocal(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function excluidoNoDia(uid, d) {
+  const e = EXCL[uid];
+  if (!e) return false;
+  const iso = isoLocal(d);
+  return e.lista.some(r => (!r.de || iso >= r.de) && (!r.ate || iso <= r.ate));
+}
+function adicionarExcl(uid, nome, de, ate) {
+  if (!EXCL[uid]) EXCL[uid] = { nome, lista: [] };
+  EXCL[uid].lista.push({ de: de || null, ate: ate || null });
+  salvarExcl();
+  if (_cache) recalcularRelatorio();
+}
+function removerExclRange(uid, idx) {
+  if (!EXCL[uid]) return;
+  EXCL[uid].lista.splice(idx, 1);
+  if (!EXCL[uid].lista.length) delete EXCL[uid];
+  salvarExcl();
+  if (_cache) recalcularRelatorio();
+}
+function limparTodasExcl() {
+  if (!confirm('Restaurar todas as pessoas e dias excluídos?')) return;
+  EXCL = {};
+  salvarExcl();
+  if (_cache) recalcularRelatorio();
+}
+function fecharDialogExcl() {
+  const o = document.getElementById('dlg-excl');
+  if (o) o.remove();
+}
+function abrirDialogExcl(uid, nome, ini, fim) {
+  fecharDialogExcl();
+  const ov = document.createElement('div');
+  ov.id = 'dlg-excl';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px';
+  const inp = 'background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 8px;font-size:12px;font-family:var(--font)';
+  ov.innerHTML = `
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px;width:min(440px,100%)">
+      <div style="font-size:14px;font-weight:800;margin-bottom:4px">Não contar ${esc(nome)}</div>
+      <div class="note" style="margin-bottom:14px">Escolha o período em que esta pessoa não deve entrar na equipe (ex.: férias, folga, desligamento).</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;font-size:12px;flex-wrap:wrap">
+        De <input type="date" id="excl-de" value="${ini}" style="${inp}">
+        até <input type="date" id="excl-ate" value="${fim}" style="${inp}">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <button class="primary" id="excl-b1">Não contar neste período</button>
+        <button id="excl-b2">Remover a partir da data inicial (sem data final)</button>
+        <button id="excl-b3">Remover da equipe em todos os dias</button>
+        <button id="excl-b4" style="color:var(--muted)">Cancelar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+  ov.addEventListener('click', e => { if (e.target === ov) fecharDialogExcl(); });
+  const val = id => document.getElementById(id).value;
+  document.getElementById('excl-b1').onclick = () => {
+    const de = val('excl-de'), ate = val('excl-ate');
+    if (!de || !ate || de > ate) { alert('Informe uma data inicial e final válidas (inicial ≤ final).'); return; }
+    fecharDialogExcl(); adicionarExcl(uid, nome, de, ate);
+  };
+  document.getElementById('excl-b2').onclick = () => {
+    const de = val('excl-de');
+    if (!de) { alert('Informe a data inicial.'); return; }
+    fecharDialogExcl(); adicionarExcl(uid, nome, de, null);
+  };
+  document.getElementById('excl-b3').onclick = () => { fecharDialogExcl(); adicionarExcl(uid, nome, null, null); };
+  document.getElementById('excl-b4').onclick = fecharDialogExcl;
+}
+document.addEventListener('click', ev => {
+  const b = ev.target.closest('[data-excl-uid]');
+  if (b) abrirDialogExcl(b.dataset.exclUid, b.dataset.exclNome, b.dataset.exclIni, b.dataset.exclFim);
+  const r = ev.target.closest('[data-excl-rest]');
+  if (r) removerExclRange(r.dataset.exclRest, Number(r.dataset.exclIdx));
+});
+document.addEventListener('keydown', ev => { if (ev.key === 'Escape') fecharDialogExcl(); });
 
 // ── Popular seletor de mês (últimos 12 meses + mês atual) ─────────────────
 (function popularMeses() {
@@ -395,85 +514,54 @@ async function gerarRelatorio() {
 
     for (let i = 0; i < dateKeys.length; i += BATCH) {
       const chunk = dateKeys.slice(i, i + BATCH);
-      const { data: ciData, error: ciErr } = await supa
+      const ciData = await buscarTudo(() => supa
         .from('operator_checkins').select('uid, date_key')
-        .in('date_key', chunk);
-      if (ciErr) throw ciErr;
-      (ciData || []).forEach(r => {
+        .in('date_key', chunk)
+        .order('date_key').order('uid'));
+      ciData.forEach(r => {
         if (checkinMap[r.date_key]) checkinMap[r.date_key].add(String(r.uid));
       });
     }
 
+    // 2b. Histórico completo: 1º e último check-in de cada operador
+    setStatus('Buscando histórico de check-ins…', true);
+    const hist = {}; // uid -> { first: Date, last: Date }
+    const PAGE = 1000;
+    for (let from = 0; ; from += PAGE) {
+      const { data: hData, error: hErr } = await supa
+        .from('operator_checkins').select('uid, date_key')
+        .order('uid').order('date_key')
+        .range(from, from + PAGE - 1);
+      if (hErr) throw hErr;
+      (hData || []).forEach(r => {
+        const dt = parseDateKey(r.date_key);
+        if (!dt) return;
+        const uid = String(r.uid);
+        const h = hist[uid] || (hist[uid] = { first: dt, last: dt });
+        if (dt < h.first) h.first = dt;
+        if (dt > h.last) h.last = dt;
+      });
+      if (!hData || hData.length < PAGE) break;
+    }
+
     // 3. Liberações do mês
     setStatus('Buscando liberações de qualidade…', true);
-    const { data: prodData, error: prodErr } = await supa
+    // todos os dias do mês (inclui domingos, para não perder liberações feitas neles)
+    const keysMesInteiro = [];
+    for (let d = new Date(primeiroDia); d <= ultimoDia; d.setDate(d.getDate()+1)) keysMesInteiro.push(dateKey(d));
+    const prodData = await buscarTudo(() => supa
       .from('qualidade_registros').select('id, date_key, responsavel, uid')
-      .in('date_key', dateKeys);
+      .in('date_key', keysMesInteiro)
+      .order('id'));
     const prodMap = {}; // dateKey -> count
-    dateKeys.forEach(k => { prodMap[k] = 0; });
-    (prodData || []).forEach(r => {
+    keysMesInteiro.forEach(k => { prodMap[k] = 0; });
+    prodData.forEach(r => {
       if (prodMap[r.date_key] !== undefined) prodMap[r.date_key]++;
     });
 
+    _cache = { users, hist, checkinMap, prodMap, diasDoMes, dateKeys, mesLabel, ano, mes };
     setStatus('Montando relatório…', true);
-
-    // ── Equipe elegível (sem Eletrônica, mesma lógica do painel) ──
-    const elegiveisGeral = users.filter(u => !SETORES_FORA_SAUDE.has(u.sector) && getSetorPorKey(u.sector));
-    const totalEq = elegiveisGeral.length;
-    const idsElegiveis = new Set(elegiveisGeral.map(u => u.id));
-
-    // ── Por setor: membros + stats do mês ──
-    const setoresComStats = SETORES.map(sec => {
-      const membros = users.filter(u => {
-        if (sec.alias) return sec.alias.concat([sec.key]).includes(u.sector);
-        return u.sector === sec.key;
-      });
-      // Dias presentes (set de dias em que PELO MENOS alguém do setor fez check-in)
-      let somaPresentes = 0, diasComDados = 0;
-      const membrosPresencaTotal = {}; // uid -> dias presentes
-      membros.forEach(u => { membrosPresencaTotal[u.id] = 0; });
-
-      dateKeys.forEach(k => {
-        const ci = checkinMap[k];
-        const presentes = membros.filter(u => ci.has(u.id));
-        if (ci.size > 0 || diasComDados > 0) { // dia com algum dado
-          diasComDados++;
-          somaPresentes += presentes.length;
-          presentes.forEach(u => membrosPresencaTotal[u.id]++);
-        }
-      });
-
-      const pctMedio = membros.length > 0 && diasComDados > 0
-        ? Math.round((somaPresentes / diasComDados / membros.length) * 100)
-        : (membros.length === 0 ? 0 : null);
-
-      return { ...sec, membros, pctMedio, somaPresentes, diasComDados, membrosPresencaTotal };
-    });
-
-    // ── Por dia: presença geral ──
-    const diasStats = diasDoMes.map(d => {
-      const k = dateKey(d);
-      const ci = checkinMap[k];
-      const semDados = ci.size === 0;
-      const presentes = semDados ? 0 : [...idsElegiveis].filter(id => ci.has(id)).length;
-      const ausentes = semDados ? 0 : totalEq - presentes;
-      const pct = semDados ? null : (totalEq > 0 ? Math.round((presentes/totalEq)*100) : 0);
-      return { iso: isoDate(d), dayOfWeek: DIAS_SEMANA[d.getDay()], k, presentes, ausentes, pct, prod: prodMap[k] || 0, semDados };
-    });
-
-    // ── KPIs gerais ──
-    const diasComCheckin = diasStats.filter(d => !d.semDados);
-    const totalProd = Object.values(prodMap).reduce((a,b) => a+b, 0);
-    const mediaSaude = diasComCheckin.length
-      ? Math.round(diasComCheckin.reduce((a,d) => a + (d.pct||0), 0) / diasComCheckin.length)
-      : null;
-    const melhorDia = diasComCheckin.reduce((best, d) => (!best || d.pct > best.pct) ? d : best, null);
-    const piorDia = diasComCheckin.reduce((worst, d) => (!worst || d.pct < worst.pct) ? d : worst, null);
-
-    _dadosRelatorio = { mesLabel, ano, mes, diasStats, setoresComStats, totalEq, mediaSaude, totalProd, diasComCheckin };
-
-    renderRelatorio(_dadosRelatorio);
-    setStatus(`✅ Relatório de ${mesLabel} gerado com sucesso — ${diasComCheckin.length} dias úteis com dados, ${totalProd} liberações.`, false);
+    recalcularRelatorio();
     showContent(true);
 
   } catch(e) {
@@ -482,23 +570,207 @@ async function gerarRelatorio() {
   }
 }
 
+// Recalcula tudo a partir dos dados já buscados (usado também ao excluir pessoas/dias)
+function recalcularRelatorio() {
+  const { users, hist, checkinMap, prodMap, diasDoMes, dateKeys, mesLabel, ano, mes } = _cache;
+
+    // ── Equipe DIA A DIA ──
+    // 'operadores' só guarda o quadro ATUAL, então o quadro de cada dia é
+    // reconstruído pelo histórico de check-ins: a pessoa passa a contar a partir
+    // do 1º check-in e, se estiver inativa hoje, deixa de contar após o último.
+    const elegiveis = users.filter(u => !SETORES_FORA_SAUDE.has(u.sector) && getSetorPorKey(u.sector));
+    // Regras (nesta ordem):
+    //  1) ajuste manual (entrada/saída) em AJUSTES_EQUIPE, se existir;
+    //  2) entrada = 1º check-in do histórico; sem histórico (ex.: oculto que nunca
+    //     bate PIN) só conta se for oculto e ativo (aparece como ausente, como no painel);
+    //  3) inativo hoje: sai após o último check-in; inativo sem histórico não conta.
+    const naEquipe = (u, d) => {
+      if (excluidoNoDia(u.id, d)) return false; // exclusão manual
+      const aj = AJUSTES_EQUIPE[u.id] || AJUSTES_EQUIPE[u.name] || {};
+      const h = hist[u.id];
+      // sem histórico e sem ajuste: só conta se for pessoa OCULTA e ativa (como no painel)
+      if (!h && !aj.entrada && !(u.hidden && u.active !== false)) return false;
+      const entrada = aj.entrada ? isoParaData(aj.entrada) : (h ? h.first : null);
+      let saida = null;
+      if (aj.saida) saida = isoParaData(aj.saida);
+      else if (u.active === false) { if (!h) return false; saida = h.last; }
+      if (entrada && d < entrada) return false;
+      if (saida && d > saida) return false;
+      return true;
+    };
+    const semHistorico = elegiveis.filter(u => !hist[u.id] && u.hidden && u.active !== false && !(AJUSTES_EQUIPE[u.id] || AJUSTES_EQUIPE[u.name]));
+
+    // ── Por dia: presença geral + lista de ausentes ──
+    const diasStats = diasDoMes.map(d => {
+      const k = dateKey(d);
+      const ci = checkinMap[k];
+      const semDados = ci.size === 0;
+      const equipeDia = elegiveis.filter(u => naEquipe(u, d));
+      const total = equipeDia.length;
+      const listaAus = semDados ? [] : equipeDia
+        .filter(u => !ci.has(u.id))
+        .map(u => ({ id: u.id, name: u.name, sector: u.sector }))
+        .sort((x, y) => x.name.localeCompare(y.name, 'pt-BR'));
+      const presentes = semDados ? 0 : total - listaAus.length;
+      const ausentes = listaAus.length;
+      const pct = semDados ? null : (total > 0 ? Math.round((presentes/total)*100) : 0);
+      return { iso: isoDate(d), date: d, dayOfWeek: DIAS_SEMANA[d.getDay()], k, presentes, ausentes, total, listaAus, pct, prod: prodMap[k] || 0, semDados };
+    });
+    const ultimoComDados = [...diasStats].reverse().find(d => !d.semDados);
+    const totalEq = ultimoComDados
+      ? ultimoComDados.total
+      : elegiveis.filter(u => naEquipe(u, diasDoMes[diasDoMes.length - 1])).length;
+
+    // ── Por setor: só quem estava na equipe em cada dia ──
+    const setoresComStats = SETORES.map(sec => {
+      const doSetor = users.filter(u => sec.alias
+        ? sec.alias.concat([sec.key]).includes(u.sector)
+        : u.sector === sec.key);
+      let somaPresentes = 0, somaMembros = 0, diasComDados = 0;
+      const membrosPresencaTotal = {}, membrosDiasNaEquipe = {};
+      doSetor.forEach(u => { membrosPresencaTotal[u.id] = 0; membrosDiasNaEquipe[u.id] = 0; });
+
+      diasStats.forEach(dia => {
+        if (dia.semDados) return;
+        const ci = checkinMap[dia.k];
+        const equipe = doSetor.filter(u => naEquipe(u, dia.date));
+        diasComDados++;
+        somaMembros += equipe.length;
+        equipe.forEach(u => {
+          membrosDiasNaEquipe[u.id]++;
+          if (ci.has(u.id)) { somaPresentes++; membrosPresencaTotal[u.id]++; }
+        });
+      });
+
+      const membros = doSetor.filter(u => membrosDiasNaEquipe[u.id] > 0);
+      const pctMedio = somaMembros > 0 ? Math.round((somaPresentes / somaMembros) * 100) : null;
+      const mediaTotal = diasComDados > 0 ? somaMembros / diasComDados : 0;
+      return { ...sec, membros, pctMedio, somaPresentes, diasComDados, mediaTotal, membrosPresencaTotal, membrosDiasNaEquipe };
+    });
+
+    // ── KPIs gerais ──
+    const diasComCheckin = diasStats.filter(d => !d.semDados);
+    const totalProd = Object.values(prodMap).reduce((a,b) => a+b, 0);
+    const chavesTabela = new Set(diasStats.map(d => d.k));
+    const prodForaDaTabela = Object.entries(prodMap).filter(([k]) => !chavesTabela.has(k)).reduce((a,[,v]) => a+v, 0);
+    const mediaSaude = diasComCheckin.length
+      ? Math.round(diasComCheckin.reduce((a,d) => a + (d.pct||0), 0) / diasComCheckin.length)
+      : null;
+    const melhorDia = diasComCheckin.reduce((best, d) => (!best || d.pct > best.pct) ? d : best, null);
+    const piorDia = diasComCheckin.reduce((worst, d) => (!worst || d.pct < worst.pct) ? d : worst, null);
+
+    // ── Auditoria: todos que entraram na conta no mês, com o motivo ──
+    const refFim = new Date(Math.min(Date.now(), diasDoMes[diasDoMes.length - 1].getTime()));
+    const auditoria = users
+      .filter(u => getSetorPorKey(u.sector))
+      .map(u => {
+        let diasEq = 0, diasPres = 0;
+        diasStats.forEach(dia => {
+          if (dia.semDados) return;
+          if (naEquipe(u, dia.date)) { diasEq++; if (checkinMap[dia.k].has(u.id)) diasPres++; }
+        });
+        const h = hist[u.id];
+        const diasParado = (h && u.active !== false) ? Math.floor((refFim - h.last) / 86400000) : 0;
+        return {
+          id: u.id, name: u.name, sector: u.sector, active: u.active !== false, hidden: !!u.hidden,
+          first: h ? h.first : null, last: h ? h.last : null, diasEq, diasPres,
+          semHist: !h, parado: diasParado > 30, diasParado,
+          foraSaude: SETORES_FORA_SAUDE.has(u.sector)
+        };
+      })
+      .filter(a => a.diasEq > 0)
+      .sort((x, y) => x.sector.localeCompare(y.sector, 'pt-BR') || x.name.localeCompare(y.name, 'pt-BR'));
+
+    _dadosRelatorio = { mesLabel, ano, mes, diasStats, setoresComStats, totalEq, mediaSaude, totalProd, prodForaDaTabela, diasComCheckin, auditoria };
+
+    renderRelatorio(_dadosRelatorio);
+    setStatus(`✅ Relatório de ${mesLabel} gerado com sucesso — ${diasComCheckin.length} dias úteis com dados, ${totalProd} liberações.` +
+      (semHistorico.length ? ` · ${semHistorico.length} sem nenhum check-in no histórico (contados em todos os dias): ${semHistorico.map(u => u.name).join(', ')}.` : '') +
+      (Object.keys(EXCL).length ? ` · ${Object.keys(EXCL).length} pessoa(s) com exclusão manual.` : ''), false);
+}
+
 function getSetorPorKey(key) {
   return SETORES.find(s => s.key === key || (s.alias && s.alias.includes(key)));
 }
 
 // ── RENDER ──────────────────────────────────────────────────────────────────
-function renderRelatorio({ mesLabel, diasStats, setoresComStats, totalEq, mediaSaude, totalProd, diasComCheckin }) {
-  renderKPIs({ mesLabel, diasStats, setoresComStats, totalEq, mediaSaude, totalProd, diasComCheckin });
+function renderRelatorio({ mesLabel, diasStats, setoresComStats, totalEq, mediaSaude, totalProd, prodForaDaTabela, diasComCheckin, auditoria }) {
+  renderKPIs({ mesLabel, diasStats, setoresComStats, totalEq, mediaSaude, totalProd, prodForaDaTabela, diasComCheckin });
   renderSetores(setoresComStats, diasStats, diasComCheckin);
   renderTabelaDias(diasStats, totalEq);
+  renderAuditoria(auditoria || []);
 }
 
-function renderKPIs({ mesLabel, diasStats, totalEq, mediaSaude, totalProd, diasComCheckin }) {
+function renderAuditoria(lista) {
+  const fmt = d => d ? d.toLocaleDateString('pt-BR') : '—';
+  const aberto = !!(document.querySelector('#auditoria details') || {}).open;
+  const mm = String(_cache.mes).padStart(2, '0');
+  const ini = `${_cache.ano}-${mm}-01`;
+  const fim = isoLocal(new Date(_cache.ano, _cache.mes, 0));
+  const alertas = lista.filter(a => a.semHist || a.parado || !a.active).length;
+
+  const rows = lista.map(a => {
+    const sec = getSetorPorKey(a.sector);
+    const flags = [];
+    if (a.semHist) flags.push('Sem nenhum check-in no histórico');
+    if (a.parado) flags.push(`Ativo, mas sem check-in há ${a.diasParado} dias`);
+    if (!a.active) flags.push('Inativo (conta até o último check-in)');
+    if (a.foraSaude) flags.push('Fora do cálculo de saúde');
+    const warn = a.semHist || a.parado;
+    return `<tr style="background:${warn ? 'rgba(245,166,35,.07)' : 'transparent'}">
+      <td style="padding:4px 12px;font-weight:700">${esc(a.name)}${a.hidden ? ' <span style="opacity:.6;font-size:9px">(Oculto)</span>' : ''}</td>
+      <td style="padding:4px 12px;color:${sec ? sec.color : 'var(--muted)'}">${sec ? sec.name : esc(a.sector)}</td>
+      <td class="text-center" style="padding:4px 12px;font-family:var(--mono);font-size:11px">${fmt(a.first)}</td>
+      <td class="text-center" style="padding:4px 12px;font-family:var(--mono);font-size:11px">${fmt(a.last)}</td>
+      <td class="text-center" style="padding:4px 12px;font-family:var(--mono)">${a.diasEq}</td>
+      <td class="text-center" style="padding:4px 12px;font-family:var(--mono)">${a.diasPres}</td>
+      <td style="padding:4px 12px;font-size:10px;color:${warn ? '#f5a623' : 'var(--muted)'};white-space:normal">${flags.join(' · ') || '—'}</td>
+      <td class="text-center x-excl" style="padding:4px 12px"><span class="x-excl" data-excl-uid="${esc(a.id)}" data-excl-nome="${esc(a.name)}" data-excl-ini="${ini}" data-excl-fim="${fim}" style="cursor:pointer;color:#f25757;font-size:11px;font-weight:700">Excluir…</span></td>
+    </tr>`;
+  }).join('');
+
+  // Exclusões manuais ativas (com opção de restaurar)
+  const fmtR = r => (!r.de && !r.ate) ? 'em todos os dias'
+    : (r.de && r.ate) ? (r.de === r.ate ? fmtDate(r.de) : `${fmtDate(r.de)} a ${fmtDate(r.ate)}`)
+    : r.de ? `a partir de ${fmtDate(r.de)}` : `até ${fmtDate(r.ate)}`;
+  const ids = Object.keys(EXCL);
+  const exclHtml = ids.length ? `
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:11px;font-weight:800;color:#f5a623">✋ Exclusões manuais ativas (↺ restaura)</span>
+        <button onclick="limparTodasExcl()" style="font-size:10px;padding:3px 10px">Restaurar tudo</button>
+      </div>
+      <div class="member-list">${ids.map(id => EXCL[id].lista.map((r, i) =>
+        `<span class="chip" style="background:rgba(245,166,35,.1);border-color:rgba(245,166,35,.35);color:#fbbf24">${esc(EXCL[id].nome)} — ${fmtR(r)}
+          <span data-excl-rest="${esc(id)}" data-excl-idx="${i}" title="Restaurar" style="cursor:pointer;margin-left:4px;font-size:11px">↺</span></span>`).join('')).join('')}</div>
+    </div>` : '';
+
+  document.getElementById('auditoria').innerHTML = `
+    <details ${aberto ? 'open' : ''} style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;overflow:hidden">
+      <summary style="cursor:pointer;padding:12px 16px;font-size:12px;font-weight:800;color:var(--purple)">
+        🔍 Auditoria da equipe no período — ${lista.length} pessoas contadas
+        ${alertas ? `<span style="color:#f5a623;font-weight:700">(${alertas} com alerta)</span>` : ''}
+        ${ids.length ? `<span style="color:#f5a623;font-weight:700"> · ${ids.length} com exclusão manual</span>` : ''}
+      </summary>
+      ${exclHtml}
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th style="width:18%">Nome</th><th>Setor</th>
+          <th class="text-center">1º check-in</th><th class="text-center">Último check-in</th>
+          <th class="text-center">Dias na equipe</th><th class="text-center">Dias presente</th>
+          <th style="width:30%">Observação</th><th class="text-center x-excl">Ação</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    </details>`;
+}
+
+function renderKPIs({ mesLabel, diasStats, totalEq, mediaSaude, totalProd, prodForaDaTabela, diasComCheckin }) {
   const cor = healthColor(mediaSaude);
   const kpis = [
     { label: 'Saúde Média do Mês', value: mediaSaude !== null ? mediaSaude + '%' : '—', color: cor, sub: 'Presença média diária (sem Eletrônica)' },
-    { label: 'Total da Equipe', value: totalEq, color: '#38bdf8', sub: 'Membros elegíveis (sem Eletrônica)' },
-    { label: 'Liberações no Mês', value: totalProd, color: '#4ade80', sub: 'Registros de qualidade' },
+    { label: 'Total da Equipe', value: totalEq, color: '#38bdf8', sub: 'Quadro no último dia com dados (sem Eletrônica)' },
+    { label: 'Liberações no Mês', value: totalProd, color: '#4ade80', sub: prodForaDaTabela ? `Registros de qualidade (${prodForaDaTabela} em domingos, fora da tabela)` : 'Registros de qualidade' },
     { label: 'Dias com Dados', value: diasComCheckin.length, color: '#a78bfa', sub: `de ${diasStats.length} dias úteis` },
     { label: 'Melhor Dia', value: diasComCheckin.length ? (diasComCheckin.reduce((b,d)=>d.pct>b.pct?d:b).pct + '%') : '—', color: '#4ade80', sub: diasComCheckin.length ? fmtDate(diasComCheckin.reduce((b,d)=>d.pct>b.pct?d:b).iso) : '' },
     { label: 'Pior Dia', value: diasComCheckin.length ? (diasComCheckin.reduce((b,d)=>d.pct<b.pct?d:b).pct + '%') : '—', color: '#f25757', sub: diasComCheckin.length ? fmtDate(diasComCheckin.reduce((b,d)=>d.pct<b.pct?d:b).iso) : '' },
@@ -516,18 +788,19 @@ function renderSetores(setoresComStats, diasStats, diasComCheckin) {
   document.getElementById('setores-grid').innerHTML = setoresComStats.map(sec => {
     const pct = sec.pctMedio;
     const cor = healthColor(pct);
-    const total = sec.membros.length;
+    const total = Number.isInteger(sec.mediaTotal) ? sec.mediaTotal : sec.mediaTotal.toFixed(1);
     const mediaPresentes = sec.diasComDados > 0 ? (sec.somaPresentes / sec.diasComDados).toFixed(1) : '0';
-    const ausMediaMes = total > 0 ? (total - parseFloat(mediaPresentes)).toFixed(1) : '0';
+    const ausMediaMes = sec.mediaTotal > 0 ? Math.max(0, sec.mediaTotal - parseFloat(mediaPresentes)).toFixed(1) : '0';
 
     // Chips dos membros com % de presença no mês
     const chips = sec.membros.map(u => {
       const diasPresente = sec.membrosPresencaTotal[u.id] || 0;
-      const pctPessoa = sec.diasComDados > 0 ? Math.round((diasPresente/sec.diasComDados)*100) : 0;
+      const diasEq = sec.membrosDiasNaEquipe[u.id] || 0;
+      const pctPessoa = diasEq > 0 ? Math.round((diasPresente/diasEq)*100) : 0;
       const chipCor = healthColor(pctPessoa);
       const tag = (!u.active ? ' <span style="opacity:.7;font-size:8px">(Inativo)</span>' : '') + (u.hidden ? ' <span style="opacity:.7;font-size:8px">(Oculto)</span>' : '');
       return `<span class="chip" style="background:${chipCor}18;border-color:${chipCor}55;color:${chipCor}">
-        <span class="chip-dot" style="background:${chipCor}"></span>${u.name}${tag} <span style="opacity:.7">${pctPessoa}%</span>
+        <span class="chip-dot" style="background:${chipCor}"></span>${esc(u.name)}${tag} <span style="opacity:.7">${pctPessoa}%</span>
       </span>`;
     }).join('');
 
@@ -586,11 +859,13 @@ function renderTabelaDias(diasStats, totalEq) {
   const maxProd = Math.max(...diasStats.map(d => d.prod), 1);
 
   // Contabiliza sobre TODOS os dias com dados (para o rodapé)
-  let somaPresentes = 0, somaProd = 0, diasContados = 0;
+  let somaPresentes = 0, somaProd = 0, diasContados = 0, somaTotal = 0, somaPct = 0;
   const diasAbaixo50 = [];
   diasStats.forEach(d => {
     if (!d.semDados) {
       somaPresentes += d.presentes;
+      somaTotal += d.total;
+      somaPct += d.pct || 0;
       somaProd += d.prod;
       diasContados++;
       if (d.pct !== null && d.pct < 50) diasAbaixo50.push(d);
@@ -639,6 +914,20 @@ function renderTabelaDias(diasStats, totalEq) {
       ? `<span style="display:inline-flex;align-items:center;gap:3px;background:rgba(167,139,250,.12);border:1px solid rgba(167,139,250,.3);color:#a78bfa;font-size:11px;font-weight:800;padding:3px 9px;border-radius:20px;font-family:var(--mono)">📦 ${d.prod}</span>`
       : `<span style="color:var(--muted);font-size:11px">—</span>`;
 
+    // Lista de ausentes do dia
+    let ausCell;
+    if (d.semDados) {
+      ausCell = '<span style="color:var(--muted)">—</span>';
+    } else if (d.listaAus.length === 0) {
+      ausCell = '<span style="color:#4ade80;font-size:10px;font-weight:700">✔ Todos presentes</span>';
+    } else {
+      ausCell = '<div class="member-list">' + d.listaAus.map(a => {
+        const sec = getSetorPorKey(a.sector);
+        const c = sec ? sec.color : '#64748b';
+        return `<span class="chip" title="${esc(sec ? sec.name : a.sector)}" style="background:rgba(242,87,87,.1);border-color:rgba(242,87,87,.3);color:#fca5a5"><span class="chip-dot" style="background:${c}"></span>${esc(a.name)}<span class="x-excl" data-excl-uid="${esc(a.id)}" data-excl-nome="${esc(a.name)}" data-excl-ini="${isoLocal(d.date)}" data-excl-fim="${isoLocal(d.date)}" title="Não contar / remover ${esc(a.name)}" style="cursor:pointer;opacity:.75;margin-left:4px;font-size:10px">✕</span></span>`;
+      }).join('') + '</div>';
+    }
+
     const rowBg  = isHoje ? 'rgba(124,58,237,.08)' : isSab ? 'rgba(148,163,184,.03)' : 'transparent';
     const leftBorder = isHoje ? '3px solid #7c3aed' : isSab ? '3px solid rgba(148,163,184,.2)' : '3px solid transparent';
 
@@ -653,13 +942,13 @@ function renderTabelaDias(diasStats, totalEq) {
       <td class="text-center" style="padding:4px 12px">
         ${d.semDados
           ? '<span style="color:var(--muted)">—</span>'
-          : `<span style="color:#4ade80;font-weight:800;font-family:var(--mono);font-size:14px">${d.presentes}</span><div style="font-size:9px;color:var(--muted)">de ${totalEq}</div>`}
+          : `<span style="color:#4ade80;font-weight:800;font-family:var(--mono);font-size:14px">${d.presentes}</span><div style="font-size:9px;color:var(--muted)">de ${d.total}</div>`}
       </td>
       <td class="text-center" style="padding:4px 12px">
         ${d.semDados ? '<span style="color:var(--muted)">—</span>' : `<span style="color:#f25757;font-weight:700;font-family:var(--mono);font-size:13px">${d.ausentes}</span>`}
       </td>
       <td class="text-center" style="padding:4px 12px;color:var(--muted);font-family:var(--mono);font-size:12px">
-        ${d.semDados ? '—' : totalEq}
+        ${d.semDados ? '—' : d.total}
       </td>
       <td class="text-center" style="padding:4px 12px">
         <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
@@ -667,15 +956,16 @@ function renderTabelaDias(diasStats, totalEq) {
         </div>
       </td>
       <td class="text-center" style="padding:4px 12px">${prod_badge}</td>
+      <td style="padding:4px 12px;white-space:normal">${ausCell}</td>
     </tr>`;
   }).join('');
 
   document.getElementById('tabela-dias-body').innerHTML =
     rows.trim() ||
-    `<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--muted);font-size:12px">Nenhum dia com ≥50% de presença no período.</td></tr>`;
+    `<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--muted);font-size:12px">Nenhum dia com ≥50% de presença no período.</td></tr>`;
 
   // Rodapé — sempre sobre TODOS os dias com dados
-  const mediaSaude = diasContados ? Math.round((somaPresentes / diasContados / totalEq) * 100) : 0;
+  const mediaSaude = diasContados ? Math.round(somaPct / diasContados) : 0;
   const corRod = healthColor(mediaSaude);
   document.getElementById('tabela-dias-foot').innerHTML = `
     <tr>
@@ -687,13 +977,14 @@ function renderTabelaDias(diasStats, totalEq) {
         ${diasContados ? (somaPresentes/diasContados).toFixed(1) : '—'}
       </td>
       <td class="text-center" style="padding:4px 12px;color:#f25757;font-family:var(--mono)">
-        ${diasContados ? (totalEq - somaPresentes/diasContados).toFixed(1) : '—'}
+        ${diasContados ? ((somaTotal - somaPresentes)/diasContados).toFixed(1) : '—'}
       </td>
-      <td class="text-center" style="padding:4px 12px;color:var(--muted);font-family:var(--mono)">${totalEq}</td>
+      <td class="text-center" style="padding:4px 12px;color:var(--muted);font-family:var(--mono)">${diasContados ? (somaTotal/diasContados).toFixed(1) : totalEq}</td>
       <td class="text-center" style="padding:4px 12px">
         <span style="display:inline-flex;align-items:center;gap:4px;background:${corRod}14;border:1px solid ${corRod}45;color:${corRod};font-size:11px;font-weight:800;padding:3px 10px;border-radius:20px;font-family:var(--mono)">${mediaSaude}%</span>
       </td>
       <td class="text-center" style="padding:4px 12px;font-weight:800;color:#a78bfa;font-family:var(--mono)">📦 ${somaProd}</td>
+      <td></td>
     </tr>`;
 }
 
@@ -704,23 +995,24 @@ function exportarExcel() {
 
   // Planilha 1: Evolução Diária
   const diasDados = [
-    ['Data', 'Dia', 'Presentes', 'Ausentes', 'Total Equipe', 'Saúde (%)', 'Liberações'],
+    ['Data', 'Dia', 'Presentes', 'Ausentes', 'Total Equipe', 'Saúde (%)', 'Liberações', 'Quem faltou'],
     ...diasStats.map(d => [
       fmtDate(d.iso), d.dayOfWeek,
       d.semDados ? null : d.presentes,
       d.semDados ? null : d.ausentes,
-      d.semDados ? null : totalEq,
+      d.semDados ? null : d.total,
       d.semDados ? null : (d.pct / 100), // /100 for Excel percentage format
-      d.prod || null
+      d.prod || null,
+      d.semDados ? null : d.listaAus.map(a => a.name).join(', ')
     ])
   ];
 
   // Planilha 2: Por Setor
   const setoresDados = [
-    ['Setor', 'Total Membros', 'Méd. Presentes/dia', 'Saúde Média (%)'],
+    ['Setor', 'Média de Membros/dia', 'Méd. Presentes/dia', 'Saúde Média (%)'],
     ...setoresComStats.map(s => [
       s.name, 
-      s.membros.length,
+      Number(s.mediaTotal.toFixed(1)),
       s.diasComDados > 0 ? Number((s.somaPresentes/s.diasComDados).toFixed(1)) : 0,
       s.pctMedio !== null ? (s.pctMedio / 100) : null
     ])
@@ -743,6 +1035,23 @@ function exportarExcel() {
     if (cell && typeof cell.v === 'number') cell.z = '0%';
   }
   XLSX.utils.book_append_sheet(wb, wsSetores, 'Por Setor');
+
+  const { auditoria } = _dadosRelatorio;
+  const audDados = [
+    ['Nome', 'Setor', 'Ativo', 'Oculto', '1º check-in', 'Último check-in', 'Dias na equipe', 'Dias presente', 'Observação'],
+    ...(auditoria || []).map(a => [
+      a.name, a.sector, a.active ? 'Sim' : 'Não', a.hidden ? 'Sim' : 'Não',
+      a.first ? a.first.toLocaleDateString('pt-BR') : '', a.last ? a.last.toLocaleDateString('pt-BR') : '',
+      a.diasEq, a.diasPres,
+      [a.semHist ? 'Sem check-in no histórico' : '', a.parado ? `Sem check-in há ${a.diasParado} dias` : '', !a.active ? 'Inativo' : ''].filter(Boolean).join(' · ')
+    ])
+  ];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(audDados), 'Auditoria');
+  const exclRows = [];
+  Object.keys(EXCL).forEach(id => EXCL[id].lista.forEach(r => exclRows.push([
+    EXCL[id].nome, r.de ? fmtDate(r.de) : 'sempre', r.ate ? fmtDate(r.ate) : 'sem data final'
+  ])));
+  if (exclRows.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Pessoa', 'Excluída de', 'Até'], ...exclRows]), 'Exclusões');
 
   XLSX.writeFile(wb, `relatorio-equipe-${mesLabel.replace(' ','-')}.xlsx`);
 }

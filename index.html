@@ -1105,6 +1105,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <button id="reltab-busca-modelo" onclick="setRelSubTab('busca-modelo')" style="background:none;color:var(--muted);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">🔍 Busca por Modelo</button>
       <button id="reltab-qual-liberados" onclick="setRelSubTab('qual-liberados')" style="background:none;color:var(--muted);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">✅ Liberados Qualidade</button>
       <button id="reltab-linha" onclick="setRelSubTab('linha')" style="background:none;color:var(--muted);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">🏭 Produção por Linha</button>
+      <button id="reltab-saude-equipe" onclick="setRelSubTab('saude-equipe')" title="Relatório Mensal — Saúde da Equipe" style="background:rgba(124,58,237,0.12);color:#a78bfa;border:1px solid rgba(124,58,237,0.35);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">🩺 Saúde da Equipe</button>
       <button id="rel-refresh-badge" onclick="refreshRelatorios()" style="
         display:none;margin-left:auto;
         background:rgba(61,214,140,.15);border:1px solid rgba(61,214,140,.5);
@@ -1927,7 +1928,104 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 
       <div id="linha-prod-detalhe" style="margin-top:20px"></div>
     </div>
+
+    <!-- ── SUB-VIEW: Saúde da Equipe ── -->
+    <div id="relview-saude-equipe" style="display:none">
+      <style>
+        /* Estilos escopados para o painel de saúde da equipe */
+        #relview-saude-equipe .se-header { display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;background:var(--bg2);border:1px solid var(--border2);border-radius:16px;padding:20px 24px;margin-bottom:20px; }
+        #relview-saude-equipe .se-header h2 { font-size:18px;font-weight:800;display:flex;align-items:center;gap:10px; }
+        #relview-saude-equipe .se-header-sub { font-size:12px;color:var(--muted);margin-top:3px; }
+        #relview-saude-equipe .se-controls { display:flex;align-items:center;gap:10px;flex-wrap:wrap; }
+        #relview-saude-equipe .se-kpi-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:24px; }
+        #relview-saude-equipe .se-kpi-card { background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:16px;position:relative;overflow:hidden; }
+        #relview-saude-equipe .se-kpi-card::before { content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--se-card-color,var(--accent)); }
+        #relview-saude-equipe .se-kpi-label { font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em; }
+        #relview-saude-equipe .se-kpi-value { font-size:28px;font-weight:900;font-family:var(--mono);color:var(--se-card-color,var(--text));margin-top:6px;line-height:1; }
+        #relview-saude-equipe .se-kpi-sub { font-size:10px;color:var(--muted);margin-top:4px; }
+        #relview-saude-equipe .se-section { margin-bottom:28px; }
+        #relview-saude-equipe .se-section-title { font-size:13px;font-weight:800;color:#a78bfa;text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px;display:flex;align-items:center;gap:8px; }
+        #relview-saude-equipe .se-section-title::after { content:'';flex:1;height:1px;background:var(--border2); }
+        #relview-saude-equipe .se-setor-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px; }
+        #relview-saude-equipe .se-setor-card { background:var(--bg2);border-radius:14px;padding:16px;border:1px solid var(--border2); }
+        #relview-saude-equipe .se-setor-head { display:flex;align-items:center;justify-content:space-between;margin-bottom:10px; }
+        #relview-saude-equipe .se-setor-name { font-size:13px;font-weight:800;display:flex;align-items:center;gap:6px; }
+        #relview-saude-equipe .se-setor-pct { font-size:13px;font-weight:900;font-family:var(--mono);padding:2px 10px;border-radius:20px;background:rgba(0,0,0,.3);border-width:1px;border-style:solid; }
+        #relview-saude-equipe .se-bar-track { width:100%;height:6px;background:rgba(255,255,255,.07);border-radius:10px;overflow:hidden;margin:8px 0 12px; }
+        #relview-saude-equipe .se-bar-fill { height:100%;border-radius:10px;transition:width .6s ease; }
+        #relview-saude-equipe .se-stats-row { display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px; }
+        #relview-saude-equipe .se-stat-box { border-radius:8px;padding:6px;text-align:center; }
+        #relview-saude-equipe .se-stat-box .lbl { font-size:8px;font-weight:700;text-transform:uppercase; }
+        #relview-saude-equipe .se-stat-box .val { font-size:14px;font-weight:900;font-family:var(--mono);margin-top:2px; }
+        #relview-saude-equipe .se-member-list { display:flex;flex-wrap:wrap;gap:4px; }
+        #relview-saude-equipe .se-chip { display:inline-flex;align-items:center;gap:3px;font-size:9px;font-weight:700;padding:2px 7px;border-radius:5px;border-width:1px;border-style:solid; }
+        #relview-saude-equipe .se-chip-dot { width:5px;height:5px;border-radius:50%;display:inline-block; }
+        #relview-saude-equipe .se-status-bar { background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:10px 16px;font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px;margin-bottom:20px;min-height:40px; }
+        #relview-saude-equipe .se-spinner { width:14px;height:14px;border:2px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0; }
+        #relview-saude-equipe table { width:100%;border-collapse:collapse;font-size:12px; }
+        #relview-saude-equipe th { background:var(--bg3);padding:4px 12px;text-align:left;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border2);white-space:nowrap; }
+        #relview-saude-equipe td { padding:4px 12px;border-bottom:1px solid var(--border2);vertical-align:middle;overflow:hidden;text-overflow:ellipsis; }
+        #relview-saude-equipe tfoot td { background:var(--bg3);font-weight:800; }
+        #relview-saude-equipe tr:hover td { background:rgba(255,255,255,.025); }
+      </style>
+
+      <!-- Header -->
+      <div class="se-header">
+        <div>
+          <h2>🩺 Relatório Mensal — Saúde da Equipe</h2>
+          <div class="se-header-sub">Saúde da equipe por setor · Presença via check-in PIN · Produção do período</div>
+        </div>
+        <div class="se-controls">
+          <select id="se-sel-mes" title="Mês do relatório" style="font-family:var(--font);font-size:13px;font-weight:600;background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:9px;padding:8px 14px;cursor:pointer;outline:none"></select>
+          <button onclick="seGerarRelatorio()" style="background:rgba(124,58,237,0.18);border:1px solid rgba(124,58,237,0.5);color:#c4b5fd;font-family:var(--font);font-size:13px;font-weight:600;border-radius:9px;padding:8px 14px;cursor:pointer">🔄 Gerar Relatório</button>
+          <button onclick="seExportarExcel()" style="background:rgba(34,211,238,0.1);border:1px solid rgba(34,211,238,0.35);color:#22d3ee;font-family:var(--font);font-size:12px;font-weight:600;border-radius:9px;padding:8px 14px;cursor:pointer">📊 Excel</button>
+        </div>
+      </div>
+
+      <!-- Status -->
+      <div class="se-status-bar" id="se-status-bar">
+        <div class="se-spinner" id="se-spinner" style="display:none"></div>
+        <span id="se-status-text">Selecione o mês e clique em Gerar Relatório.</span>
+      </div>
+
+      <!-- Conteúdo gerado dinamicamente -->
+      <div id="se-conteudo" style="display:none">
+        <div class="se-kpi-grid" id="se-kpis"></div>
+        <div class="se-section">
+          <div class="se-section-title">🏭 Saúde por Setor</div>
+          <div class="se-setor-grid" id="se-setores-grid"></div>
+        </div>
+        <div class="se-section">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+            <div class="se-section-title" style="margin-bottom:0">📅 Evolução Diária</div>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <div id="se-dias-filtro-info" style="font-size:11px;color:var(--muted)"></div>
+              <button id="se-btn-toggle-baixos" onclick="seToggleDiasBaixos()" style="font-size:11px;padding:5px 12px;background:rgba(242,87,87,.1);border:1px solid rgba(242,87,87,.3);color:#f25757;border-radius:9px;font-family:var(--font);font-weight:600;cursor:pointer">👁 Mostrar dias &lt;50%</button>
+            </div>
+          </div>
+          <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;overflow:hidden">
+            <div style="overflow-x:auto">
+              <table>
+                <thead><tr>
+                  <th>Data</th><th>Dia</th>
+                  <th style="text-align:center">Presentes</th><th style="text-align:center">Ausentes</th>
+                  <th style="text-align:center">Total Equipe</th><th style="text-align:center">Saúde %</th>
+                  <th style="text-align:center">Liberações</th><th style="width:32%">Quem faltou</th>
+                </tr></thead>
+                <tbody id="se-tabela-dias-body"></tbody>
+                <tfoot id="se-tabela-dias-foot"></tfoot>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="se-section" id="se-auditoria"></div>
+        <div style="font-size:11px;color:var(--muted);font-style:italic;margin-top:8px">
+          ⚠️ Saúde da equipe: setor <strong>Eletrônica</strong> aparece nos cards mas <strong>não entra</strong> no cálculo da saúde geral. Dias sem nenhum check-in são marcados como "Feriado/sem dados". Dias com menos de 50% de presença são ocultados por padrão.
+        </div>
+      </div>
+    </div>
   </div>
+
 
 
   <!-- ── EQUIPAMENTOS ── -->

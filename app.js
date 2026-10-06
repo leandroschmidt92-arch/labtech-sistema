@@ -1683,6 +1683,26 @@ function startRealtimeSync(){
           .map(([k,v]) => ({...v, _docId:k, _dateKey:dk}))
           .sort((a,b) => (b.startEpoch||0) - (a.startEpoch||0));
 
+        // --- INJEÇÃO: DETECÇÃO DE STATUS E MOVIMENTAÇÃO PARA IMPRESSÃO ---
+        if (currentUser && currentUser.isAdmin && typeof window._triggerPrintForSelb === 'function') {
+          window._historyStateForPrinting = window._historyStateForPrinting || {};
+          allRecs.forEach(r => {
+            if (r.selb) {
+              const stateStr = r.status + '_' + (r.automatico !== false ? 'auto' : 'manual');
+              if (window._historyStateForPrinting[r._docId] !== stateStr) {
+                const isFirstLoad = !window._historyStateForPrinting[r._docId];
+                window._historyStateForPrinting[r._docId] = stateStr;
+                // Impressão condicional da etiqueta de peça
+                const isRecent = (Date.now() - (r.endEpoch || r.startEpoch || Date.now())) < 15000;
+                if ((!isFirstLoad || isRecent) && (r.status === 'aguardando' || r.automatico === false)) {
+                  window._triggerPrintForSelb(r.selb);
+                }
+              }
+            }
+          });
+        }
+        // ------------------------------------------------------------------
+
         // Preserva registros de dias anteriores ainda relevantes:
         // - 'running'/'paused': operador ainda não finalizou
         // - 'ok' de dia anterior cujo endEpoch é de hoje (SELB que cruzou meia-noite)
@@ -1960,9 +1980,10 @@ async function dbSaveUser(u){
   await dbPatch('/users/'+id, safeData);
 
   // Se o PIN foi alterado pelo admin, sincroniza na tabela segura via RPC
-  // (a função roda como service_role no servidor — nunca expõe o PIN)
+  // (usa _supaAuthed() para enviar o token do admin logado via PIN —
+  //  sem ele auth.uid() seria NULL e is_admin() retornaria false)
   if(safeData.pin !== undefined){
-    const { error } = await _supa.rpc('admin_sync_pin', {
+    const { error } = await _supaAuthed().rpc('admin_sync_pin', {
       p_operator_id: id,
       p_pin:         String(safeData.pin),
     });
@@ -1971,13 +1992,21 @@ async function dbSaveUser(u){
 }
 async function dbAddUser(u){
   const newId = await dbPush('/users', u);
-  // Após criar o operador, cria o auth user + PIN no servidor via RPC
+  // Após criar o operador, cria o auth user + PIN no servidor via RPC.
+  // IMPORTANTE: usa _supaAuthed() (não _supa) para que o token do admin
+  // logado via PIN seja enviado — sem ele auth.uid() = NULL dentro da
+  // função SQL e is_admin() retorna false, bloqueando o cadastro do PIN.
   if(newId && u.pin){
-    const { error } = await _supa.rpc('admin_criar_operador_auth', {
+    const { error } = await _supaAuthed().rpc('admin_criar_operador_auth', {
       p_operator_id: newId,
       p_pin:         String(u.pin),
     });
-    if(error) console.error('[dbAddUser] Erro ao criar auth user:', error);
+    if(error){
+      console.error('[dbAddUser] Erro ao criar auth user:', error);
+      // Lança o erro para que saveUser() mostre na UI — sem isso o admin
+      // não sabe que o PIN NÃO foi registrado e o operador não conseguirá logar.
+      throw new Error('Usuário criado, mas PIN não foi registrado: ' + (error.message || JSON.stringify(error)));
+    }
   }
   return newId;
 }
@@ -2951,7 +2980,7 @@ async function opSyncFromSupabase(uid){
   }, 5000);
 
   try {
-    const { data, error } = await _supa.from('users').select('raw').eq('id', uid).single();
+    const { data, error } = await _supa.from('operadores').select('raw').eq('id', uid).single();
     _syncDone = true;
     clearTimeout(_syncTimeout);
     
@@ -3321,7 +3350,7 @@ function setView(v,btn){
     _relHistoryCache = null;
     window._currentRelSubTab = relSubTab;
     setTimeout(()=>{
-      if(!window._relFilterChosen && relSubTab !== 'pedido'){
+      if(!window._relFilterChosen && relSubTab !== 'pedido' && relSubTab !== 'saude-equipe'){
         _relShowPlaceholder();
         return;
       }
@@ -6079,6 +6108,17 @@ function _enqueueAutoPrintPecaGrupo(itens){
   });
   // Envia TODOS os itens do SELB em um único request → uma única etiqueta
   _enviarPecaParaAgenteImpressao(novos).then(function(ok){
+
+// ── Dispara impressão de peças pendentes sob demanda (por SELB) ──────────────
+window._triggerPrintForSelb = function(selb) {
+  if(!_autoPrintPecasEnabled() || !_solicitacoesPecas || !selb) return;
+  const pecasPendentes = Object.values(_solicitacoesPecas).filter(function(p) {
+    return p.selb === selb && !p.lida;
+  });
+  if(pecasPendentes.length > 0) {
+    _enqueueAutoPrintPecaGrupo(pecasPendentes);
+  }
+};
     const selb = novos[0].selb || '';
     if(ok){
       _mostrarToastMovPrint('🔩 Spool: etiqueta SELB ' + selb + ' (' + novos.length + ' peça(s)) enviada à impressora');
@@ -6094,7 +6134,7 @@ let _pecasIdsConhecidos = null; // null = primeira carga, não toca
 async function startSolicitacoesPecasListener(){
   // Carrega dados iniciais do Supabase
   async function _reloadSolicitacoes(){
-    let q = _supa.from('solicitacoes_pecas').select('*').order('ts', { ascending: false });
+    let q = _supa.from('solicitacoes_pecas').select('*').order('ts', { ascending: false }).limit(200); // OTIMIZAÇÃO LOG QUERY: limite para evitar varredura completa da tabela
     if(currentUser && !currentUser.isAdmin) {
       q = q.eq('uid', currentUser.id);
     }
@@ -6162,21 +6202,20 @@ async function startSolicitacoesPecasListener(){
         if (currentUser && currentUser.isAdmin && _pecasIdsConhecidos !== null && !_pecasIdsConhecidos.has(id)) {
           _tocarAlertaPeca();
           _pecasIdsConhecidos.add(id);
-          // ── Auto-impressão com Debounce: agrupa peças do mesmo SELB que chegam juntas no spool ──
+          // ── Auto-impressão ──
+          // A impressão é prioritariamente controlada pelo _historyListener (quando o SELB for para "Aguardando Peça").
+          // MAS, se o SELB JÁ estiver com status aguardando no momento da solicitação, imprime na hora:
           const _novaPeca = row.raw || row;
-          if (_novaPeca && _novaPeca.selb && !_novaPeca.lida) {
-            _novaPeca.id = id;
-            _pecasPrintBuffer.push(_novaPeca);
-            if (_pecasPrintTimer) clearTimeout(_pecasPrintTimer);
-            _pecasPrintTimer = setTimeout(() => {
-              const itensPorSelb = {};
-              _pecasPrintBuffer.forEach(p => {
-                if(!itensPorSelb[p.selb]) itensPorSelb[p.selb] = [];
-                itensPorSelb[p.selb].push(p);
-              });
-              _pecasPrintBuffer = [];
-              Object.values(itensPorSelb).forEach(grupo => _enqueueAutoPrintPecaGrupo(grupo));
-            }, 800);
+          if (_novaPeca && _novaPeca.selb && !_novaPeca.lida && typeof window._historyStateForPrinting === 'object') {
+             const keys = Object.keys(window._historyStateForPrinting);
+             // Encontra o último estado conhecido para este SELB
+             // (o _historyListener preenche _historyStateForPrinting usando _docId do histórico)
+             let lastStateStr = null;
+             // _history armazena os records globais, podemos checar lá também
+             const selbHist = typeof history !== 'undefined' ? history.find(h => h.selb === _novaPeca.selb && (h.status === 'aguardando' || h.automatico === false)) : null;
+             if (selbHist) {
+               if (typeof window._triggerPrintForSelb === 'function') window._triggerPrintForSelb(_novaPeca.selb);
+             }
           }
         }
         _solicitacoesPecas[id] = row.raw || row;
@@ -7164,7 +7203,7 @@ async function startGarantiaListener(){
   if (!isAdminOrPcp) return;
   _garantiaListener = true;
 
-  const { data } = await _supa.from('garantia').select('*');
+  const { data } = await _supa.from('garantia').select('*').order('id', { ascending: false }).limit(500); // OTIMIZAÇÃO LOG QUERY
   _garantiaCache = {};
   (data || []).forEach(r => { _garantiaCache[r.id] = r.raw || r; });
   if(document.getElementById('view-garantia')?.classList.contains('active')) renderGarantiaView();
@@ -7705,7 +7744,7 @@ let _maquinaPerdidaliberandoUid = null; // uid do usuário que tentou iniciar
 async function startMaquinasPerdidasListener(){
   if (_maquinasPerdidasListener) return;
   _maquinasPerdidasListener = true;
-  const { data } = await _supa.from('maquinas_perdidas').select('*');
+  const { data } = await _supa.from('maquinas_perdidas').select('*').order('id', { ascending: false }).limit(500); // OTIMIZAÇÃO LOG QUERY
   _maquinasPerdidas = {};
   (data || []).forEach(r => { _maquinasPerdidas[r.id] = r.raw || r; });
   if(document.getElementById('view-perdidas')?.classList.contains('active')) renderPerdidasView();
@@ -9952,8 +9991,12 @@ function setRelSubTab(tab){
   if(vql) vql.style.display = tab==='qual-liberados' ? 'block':'none';
   const vln = document.getElementById('relview-linha');
   if(vln) vln.style.display = tab==='linha' ? 'block':'none';
+  const vse = document.getElementById('relview-saude-equipe');
+  if(vse) vse.style.display = tab==='saude-equipe' ? 'block':'none';
+  // Inicializa seletor de mês quando abre pela primeira vez
+  if(tab==='saude-equipe' && typeof seInicializar === 'function') seInicializar();
 
-  const ids = ['reltab-prod','reltab-pedido','reltab-scrap','reltab-modelo','reltab-usuario','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados', 'reltab-linha'];
+  const ids = ['reltab-prod','reltab-pedido','reltab-scrap','reltab-modelo','reltab-usuario','reltab-reprov','reltab-defeitos', 'reltab-duplicados', 'reltab-busca-modelo', 'reltab-qual-liberados', 'reltab-linha', 'reltab-saude-equipe'];
   ids.forEach(id => {
     const b = document.getElementById(id);
     if(b){
@@ -9971,7 +10014,7 @@ function setRelSubTab(tab){
   initGlobalDateFilter();
 
   // Bloqueia exibição até o usuário escolher um filtro (data/preset)
-  if(!window._relFilterChosen && tab !== 'pedido'){
+  if(!window._relFilterChosen && tab !== 'pedido' && tab !== 'saude-equipe'){
     _relShowPlaceholder();
     return;
   }
@@ -9982,6 +10025,9 @@ function setRelSubTab(tab){
   if(tab==='pedido'){
     const b=document.getElementById('reltab-pedido');
     if(b){ b.style.background='var(--warn)'; b.style.color='#000'; b.style.border='none'; }
+  } else if(tab==='saude-equipe'){
+    const b=document.getElementById('reltab-saude-equipe');
+    if(b){ b.style.background='rgba(124,58,237,0.12)'; b.style.color='#a78bfa'; b.style.border='1px solid rgba(124,58,237,0.35)'; }
   } else if(tab==='prod'){
     const b=document.getElementById('reltab-prod');
     if(b){ b.style.background='var(--accent)'; b.style.color='#fff'; b.style.border='none'; }
@@ -15279,7 +15325,7 @@ async function _qualFetchDia(yyyymmdd, silent){
   const ini = new Date(y, m-1, d, 0, 0, 0, 0).getTime();
   const fim = new Date(y, m-1, d+1, 0, 0, 0, 0).getTime();
   const { data, error } = await _supaAuthed().from('qualidade_registros')
-    .select('*').gte('ts', ini).lt('ts', fim).order('ts', { ascending:false }).limit(2000);
+    .select('id, ts, raw, selb, equipamento, serie, sku, contador_pb, contador_color, obs, responsavel, uid, date_key, created_at, etiqueta_impressa, chamado_aberto').gte('ts', ini).lt('ts', fim).order('ts', { ascending:false }).limit(2000);
   if(error){ console.warn('[Qualidade] Erro ao carregar dia', yyyymmdd, error); return false; }
   (data||[]).forEach(_qualIngestRow);
   window._qualDiasExtras.add(yyyymmdd);
@@ -15303,11 +15349,17 @@ window.qualOnDateFilterChange = qualOnDateFilterChange;
 async function _initQualListener(){
   async function _reloadQualReg(){
     // OTIMIZAÇÃO DE EGRESS (PostgREST): Limite reduzido para 500 registros para evitar sobrecarga
-    const { data, error } = await _supaAuthed().from('qualidade_registros').select('*').order('ts', { ascending: false }).limit(500);
+    const { data, error } = await _supaAuthed().from('qualidade_registros').select('id, ts, raw, selb, equipamento, serie, sku, contador_pb, contador_color, obs, responsavel, uid, date_key, created_at, etiqueta_impressa, chamado_aberto').order('ts', { ascending: false }).limit(500);
     if(error) console.warn('[Qualidade] Erro ao carregar qualidade_registros:', error);
     _qualRegistros = {};
     (data||[]).forEach(r => _qualIngestRow(r));
     if (window._qualDiasExtras && window._qualDiasExtras.size) {
+      // OTIMIZAÇÃO LOG QUERY: limita a 3 dias extras para evitar N queries paralelas
+      // de até 2000 linhas cada — cada dia extra era um SELECT * sem limite lateral.
+      if (window._qualDiasExtras.size > 3) {
+        const arr = [...window._qualDiasExtras].sort();
+        window._qualDiasExtras = new Set(arr.slice(-3)); // mantém os 3 mais recentes
+      }
       await Promise.all([...window._qualDiasExtras].map(d => _qualFetchDia(d, true)));
     }
     (function(){ const data = []; data.forEach(r => {
@@ -15349,7 +15401,7 @@ async function _initQualListener(){
   }
   async function _reloadQualLib(){
     // OTIMIZAÇÃO DE EGRESS (PostgREST): Limite reduzido para 500 registros para evitar sobrecarga
-    const { data, error } = await _supaAuthed().from('qualidade_liberadas').select('*').order('ts', { ascending: false }).limit(500);
+    const { data, error } = await _supaAuthed().from('qualidade_liberadas').select('id, ts, raw, created_at').order('ts', { ascending: false }).limit(500);
     if(error) console.warn('[Qualidade] Erro ao carregar qualidade_liberadas:', error);
     window._qualLiberadas = {};
     (data||[]).forEach(r => {
@@ -15383,6 +15435,25 @@ async function _initQualListener(){
   // → SELECT de até 2000 linhas por cliente conectado, por evento.
   // Agora: aplica o delta direto do payload. Fallback para reload completo
   // só em casos edge (payload sem 'raw', eventType inesperado).
+  // OTIMIZAÇÃO LOG QUERY: throttle nos fallbacks dos handlers de delta.
+  // Sem throttle, cada evento Realtime com payload malformado disparava um
+  // SELECT * LIMIT 500 por cliente conectado — em bursts gerava centenas de
+  // queries simultâneas e foi o maior causador do pico de 82 GB em 30/Set.
+  let _qualRegReloadTs = 0;
+  let _qualLibReloadTs = 0;
+  function _throttledReloadQualReg() {
+    const now = Date.now();
+    if (now - _qualRegReloadTs < 10000) return; // no máximo 1 reload completo a cada 10s
+    _qualRegReloadTs = now;
+    _reloadQualReg();
+  }
+  function _throttledReloadQualLib() {
+    const now = Date.now();
+    if (now - _qualLibReloadTs < 10000) return; // no máximo 1 reload completo a cada 10s
+    _qualLibReloadTs = now;
+    _reloadQualLib();
+  }
+
   function _applyQualRegDelta(payload) {
     try {
       if (payload.eventType === 'DELETE') {
@@ -15390,7 +15461,7 @@ async function _initQualListener(){
         if (id) delete _qualRegistros[id];
       } else {
         const r = payload.new || {};
-        if (!r.id) return _reloadQualReg();
+        if (!r.id) return _throttledReloadQualReg();
         let rec = r.raw;
         if (typeof rec === 'string') { try { rec = JSON.parse(rec); } catch(e) { rec = null; } }
         if (!rec || typeof rec !== 'object') rec = { ...r };
@@ -15404,7 +15475,7 @@ async function _initQualListener(){
         if (r.chamado_aberto !== undefined) rec.chamado_aberto = r.chamado_aberto;
         _qualRegistros[r.id] = rec;
       }
-    } catch (e) { return _reloadQualReg(); }
+    } catch (e) { return _throttledReloadQualReg(); }
     _fluxolabScheduleSyncLiberados();
     const view = document.getElementById('view-qualidade') || document.getElementById('view-gaiola-lab');
     if (view && view.classList.contains('active')) renderQualRegistros();
@@ -15418,7 +15489,7 @@ async function _initQualListener(){
         if (id && window._qualLiberadas) delete window._qualLiberadas[id];
       } else {
         const r = payload.new || {};
-        if (!r.id) return _reloadQualLib();
+        if (!r.id) return _throttledReloadQualLib();
         let rec = r.raw;
         if (typeof rec === 'string') { try { rec = JSON.parse(rec); } catch(e) { rec = null; } }
         if (!rec || typeof rec !== 'object') rec = { ...r };
@@ -15431,7 +15502,7 @@ async function _initQualListener(){
         if (!window._qualLiberadas) window._qualLiberadas = {};
         window._qualLiberadas[r.id] = rec;
       }
-    } catch (e) { return _reloadQualLib(); }
+    } catch (e) { return _throttledReloadQualLib(); }
     _fluxolabScheduleSyncLiberados();
     const view = document.getElementById('view-qualidade') || document.getElementById('view-gaiola-lab');
     if (view && view.classList.contains('active')) renderQualRegistros();
@@ -15584,20 +15655,24 @@ async function salvarQualRegistro(){
   }
   const now = new Date();
   const todayStr = now.toLocaleDateString('pt-BR');
-  
-  // Valida duplicidade do SELB no mesmo dia (exceto AUDITORIA, que pode repetir)
-  const isAuditoria = obs.toUpperCase() === 'AUDITORIA';
-  const isDuplicate = !isAuditoria && Object.values(_qualRegistros || {}).some(r =>
-    (r.selb || '').toUpperCase().trim() === selb && r.data === todayStr
-  );
 
-  if(isDuplicate){
-    if(errEl){
-      errEl.textContent = `⚠️ O SELB "${selb}" já foi registrado hoje (${todayStr}).`;
-      errEl.style.display = 'block';
+  // ── Trava de duplicidade: bloqueia o mesmo SELB nos últimos 5 dias ──────────
+  // Verifica apenas no cache local (_qualRegistros, últimos 480 registros).
+  // AUDITORIA pode repetir (é intencional). Todos os outros registros não.
+  const isAuditoria = obs.toUpperCase() === 'AUDITORIA';
+  if (!isAuditoria) {
+    const _5diasAtras = now.getTime() - (5 * 24 * 60 * 60 * 1000);
+    const _recDup = Object.values(_qualRegistros || {}).find(r =>
+      (r.selb || '').toUpperCase().trim() === selb && (r.ts || 0) >= _5diasAtras
+    );
+    if (_recDup) {
+      if (errEl) {
+        errEl.textContent = `⚠️ O SELB "${selb}" já foi registrado em ${_recDup.data || '—'} (últimos 5 dias). Para registrar novamente, use a observação AUDITORIA.`;
+        errEl.style.display = 'block';
+      }
+      document.getElementById('qual-reg-selb')?.focus();
+      return;
     }
-    document.getElementById('qual-reg-selb')?.focus();
-    return;
   }
 
   if(errEl) errEl.style.display = 'none';
@@ -16621,17 +16696,24 @@ function qualRenderTotaisModelo(){
   window.__qualChecklist = window.__qualChecklist || {};
   window.__qualChecklistAcumulado = window.__qualChecklistAcumulado || {};
   // Restaura do Supabase se memória estiver zerada (ex: após recarregar a página)
-  if (Object.keys(window.__qualChecklistAcumulado).length === 0) {
-    const _todayChk = new Date().toISOString().slice(0,10);
-_supa.from('qual_checklist_dia').select('acumulado').eq('date_key', _todayChk).maybeSingle().then(({data}) => {
+  // DEBOUNCED: evita chamadas simultâneas se outra parte do app (ex: qualLoadChecklistCount) já pediu
+  window._syncQualChecklistCache = window._syncQualChecklistCache || function() {
+    if (window.__qualChecklistAcumulado && Object.keys(window.__qualChecklistAcumulado).length > 0) return;
+    if (window._fetchingQualChecklist) return;
+    const _today = new Date().toISOString().slice(0,10);
+    window._fetchingQualChecklist = true;
+    _supa.from('qual_checklist_dia').select('acumulado').eq('date_key', _today).maybeSingle().then(({data}) => {
       const saved = data && data.acumulado;
-      if (saved && typeof saved === 'object') {
+      if (saved && typeof saved === 'object' && Object.keys(saved).length > 0) {
         window.__qualChecklistAcumulado = saved;
         window.__qualChecklist = Object.fromEntries(Object.entries(saved).map(([k,v])=>[k,String(v)]));
         if (typeof _atualizarSomasChecklist === 'function') _atualizarSomasChecklist();
+        if (typeof qualSyncChecklistCardFromTotais === 'function') qualSyncChecklistCardFromTotais();
       }
-    }).catch(()=>{});
-  }
+      window._fetchingQualChecklist = false;
+    }).catch(()=>{ window._fetchingQualChecklist = false; });
+  };
+  window._syncQualChecklistCache();
 
   // Recalcula a soma total do saldo acumulado
   function _recalcSomaAcumulada(){
@@ -17117,19 +17199,9 @@ function qualLoadChecklistCount(){
   if(el) el.textContent = soma;
 
   // Se o cache ainda está vazio (ex: página recarregada sem abrir o painel de checklist),
-  // busca direto do Supabase e atualiza o card quando retornar.
-  if(!window.__qualChecklistAcumulado || Object.keys(window.__qualChecklistAcumulado).length === 0){
-    const _today = new Date().toISOString().slice(0,10);
-_supa.from('qual_checklist_dia').select('acumulado').eq('date_key', _today).maybeSingle().then(({data}) => {
-      const saved = data && data.acumulado;
-      if(saved && typeof saved === 'object' && Object.keys(saved).length > 0){
-        window.__qualChecklistAcumulado = saved;
-        window.__qualChecklist = Object.fromEntries(
-          Object.entries(saved).map(([k,v]) => [k, String(v)])
-        );
-        qualSyncChecklistCardFromTotais();
-      }
-    }).catch(()=>{});
+  // chama a função centralizada que busca do Supabase e atualiza o card sem duplicar requisições.
+  if(typeof window._syncQualChecklistCache === 'function') {
+    window._syncQualChecklistCache();
   }
 }
 
@@ -19076,6 +19148,7 @@ const REL_TAB_DEFS = [
   { key:'busca-modelo', btnId:'reltab-busca-modelo', label:'Busca Modelo' },
   { key:'qual-liberados', btnId:'reltab-qual-liberados', label:'Liberados Qualidade' },
   { key:'linha',        btnId:'reltab-linha',        label:'Produção por Linha' },
+  { key:'saude-equipe', btnId:'reltab-saude-equipe', label:'Saúde Equipe' },
 ];
 
 function defaultRelPermsForSector(_sector){
@@ -26317,8 +26390,8 @@ async function testarSpoolEtiquetaMovimentacao(){
   } else {
     _wireBipeInputs();
   }
-  // Reaplica a cada 1.5s como rede de segurança (renders fora do hook)
-  setInterval(_wireBipeInputs, 1500);
+  // Reaplica a cada 3.5s como rede de segurança (renders fora do hook - otimizado para poupar CPU)
+  setInterval(_wireBipeInputs, 3500);
 
   console.log('[LabTech] patch-bipagem-peca v3 ativo: scan mobile robusto, anti-blur, anti-duplicado, foco preservado.');
 })();
@@ -26574,7 +26647,7 @@ async function testarSpoolEtiquetaMovimentacao(){
     _wireBipeInputs();
   }
 
-  setInterval(_wireBipeInputs, 1500);
+  setInterval(_wireBipeInputs, 3500);
   console.log('[LabTech] patch-bipagem-peca v4 ativo: HID por code, validação e anti-layout-errado.');
 })();
 /* ════════════════════════════════════════════════════════════════════════
@@ -28689,7 +28762,8 @@ function exportLinhaProdCSV(){
     } catch(e){}
   };
   // Reavalia periodicamente (após loginAs/logout/troca de user)
-  setInterval(_syncBodyClass, 800);
+  // Espaçado para poupar CPU, já que troca de user é rara.
+  setInterval(_syncBodyClass, 4000);
 
   // Navegação permitida: abas principais, sub-abas, sub-sub-abas (FluxoLAB usa
   // botões com id="fluxolab-tab-*" e onclick="fluxolabSwitchTab(...)"), além
@@ -28754,7 +28828,8 @@ function exportLinhaProdCSV(){
       } catch(_){}
     });
   };
-  setInterval(_hardenInputs, 700);
+  // Espaçado de 700ms para 4000ms: consome muito menos bateria em celulares
+  setInterval(_hardenInputs, 4000);
 })();
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -29918,6 +29993,595 @@ window.fluxolabAbrirEstagnados = function() {
     PANELS.forEach(function(p){ enhance(p[0], p[1], p[2]); });
     return true;
   }
+
+
+// ── RELATÓRIO MENSAL — SAÚDE DA EQUIPE ─────────────────────────────────────
+let _seInitDone = false;
+let _seZoomLevel = 100;
+let _seDadosRelatorio = null;
+let _seCache = null;
+
+const SE_SETORES = [
+  { key: 'DESMEMBRAMENTO', name: 'Desmembramento', icon: '📦', color: '#38bdf8' },
+  { key: 'MONTAGEM',       name: 'Montagem',       icon: '🛠️', color: '#4ade80' },
+  { key: 'LIMPEZA',        name: 'Limpeza',        icon: '🧹', color: '#a78bfa' },
+  { key: 'COMPLEXA',       name: 'Complexas',      icon: '🧩', color: '#f5a623', alias: ['COMPLEXAS'] },
+  { key: 'QUALIDADE',      name: 'Qualidade',      icon: '✅', color: '#22d3ee' },
+  { key: 'ELETRÔNICA',     name: 'Eletrônica',     icon: '🔌', color: '#fb923c', foraDaSaude: true },
+];
+const SE_SETORES_FORA_SAUDE = new Set(['ELETRÔNICA','ELETRONICA']);
+const SE_AJUSTES_EQUIPE = {};
+const SE_DIAS_SEMANA = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+const SE_MESES_PT = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+
+const SE_EXCL_KEY = 'relatorioEquipe.exclusoes.v1';
+let SE_EXCL = {};
+try { SE_EXCL = JSON.parse(localStorage.getItem(SE_EXCL_KEY) || '{}') || {}; } catch (e) { SE_EXCL = {}; }
+
+function seSalvarExcl() {
+  try { localStorage.setItem(SE_EXCL_KEY, JSON.stringify(SE_EXCL)); } catch (e) { console.warn(e); }
+}
+
+function window_seMudarZoom(delta) {
+  _seZoomLevel += delta;
+  if (_seZoomLevel < 50) _seZoomLevel = 50;
+  if (_seZoomLevel > 150) _seZoomLevel = 150;
+  document.getElementById('zoom-atual').textContent = _seZoomLevel + '%';
+  document.getElementById('relview-saude-equipe').style.zoom = (_seZoomLevel / 100);
+}
+window.mudarZoom = window_seMudarZoom; 
+
+window.seInicializar = function() {
+  if (_seInitDone) return;
+  _seInitDone = true;
+  
+  const sel = document.getElementById('se-sel-mes');
+  if(sel) {
+    const hoje = new Date();
+    for (let i = 0; i <= 11; i++) {
+      const d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
+      const val = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+      const lbl = `${SE_MESES_PT[d.getMonth()]} ${d.getFullYear()}`;
+      const opt = document.createElement('option');
+      opt.value = val; opt.textContent = lbl;
+      if (i === 0) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  }
+
+  document.addEventListener('click', ev => {
+    const v = document.getElementById('relview-saude-equipe');
+    if(v && v.style.display === 'none') return;
+    const b = ev.target.closest('[data-excl-uid]');
+    if (b) seAbrirDialogExcl(b.dataset.exclUid, b.dataset.exclNome, b.dataset.exclIni, b.dataset.exclFim);
+    const r = ev.target.closest('[data-excl-rest]');
+    if (r) seRemoverExclRange(r.dataset.exclRest, Number(r.dataset.exclIdx));
+  });
+  document.addEventListener('keydown', ev => { if (ev.key === 'Escape') seFecharDialogExcl(); });
+};
+
+function seSetStatus(msg, loading = false) {
+  const st = document.getElementById('se-status-text');
+  const sp = document.getElementById('se-spinner');
+  if(st) st.textContent = msg;
+  if(sp) sp.style.display = loading ? 'block' : 'none';
+}
+function seShowContent(show) {
+  const c = document.getElementById('se-conteudo');
+  if(c) c.style.display = show ? 'block' : 'none';
+}
+
+function seEsc(t) { return String(t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function seParseDateKey(k) {
+  const d = new Date(String(k).replace(/_/g, ' '));
+  if (isNaN(d)) return null;
+  d.setHours(0,0,0,0);
+  return d;
+}
+async function seBuscarTudo(montarQuery) {
+  const PAGE = 1000, out = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await montarQuery().range(from, from + PAGE - 1);
+    if (error) throw error;
+    out.push(...(data || []));
+    if (!data || data.length < PAGE) break;
+  }
+  return out;
+}
+function seDateKey(d) { return new Date(d).toDateString().replace(/ /g,'_'); }
+function seIsoDate(d) { return d.toISOString().slice(0,10); }
+function seIsoLocal(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function seHealthColor(pct) {
+  if (pct === null || pct === undefined) return '#64748b';
+  if (pct < 50) return '#f25757';
+  if (pct < 80) return '#f5a623';
+  return '#4ade80';
+}
+function seFmtDate(isoStr) { const [y,m,d] = isoStr.split('-'); return `${d}/${m}/${y}`; }
+
+function seExcluidoNoDia(uid, d) {
+  const e = SE_EXCL[uid];
+  if (!e) return false;
+  const iso = seIsoLocal(d);
+  return e.lista.some(r => (!r.de || iso >= r.de) && (!r.ate || iso <= r.ate));
+}
+function seAdicionarExcl(uid, nome, de, ate) {
+  if (!SE_EXCL[uid]) SE_EXCL[uid] = { nome, lista: [] };
+  SE_EXCL[uid].lista.push({ de: de || null, ate: ate || null });
+  seSalvarExcl();
+  if (_seCache) seRecalcularRelatorio();
+}
+function seRemoverExclRange(uid, idx) {
+  if (!SE_EXCL[uid]) return;
+  SE_EXCL[uid].lista.splice(idx, 1);
+  if (!SE_EXCL[uid].lista.length) delete SE_EXCL[uid];
+  seSalvarExcl();
+  if (_seCache) seRecalcularRelatorio();
+}
+window.limparTodasExcl = function() {
+  if (!confirm('Restaurar todas as pessoas e dias excluídos?')) return;
+  SE_EXCL = {};
+  seSalvarExcl();
+  if (_seCache) seRecalcularRelatorio();
+};
+function seFecharDialogExcl() {
+  const o = document.getElementById('dlg-excl');
+  if (o) o.remove();
+}
+function seAbrirDialogExcl(uid, nome, ini, fim) {
+  seFecharDialogExcl();
+  const ov = document.createElement('div');
+  ov.id = 'dlg-excl';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;z-index:9999;padding:16px';
+  const inp = 'background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:8px;padding:6px 8px;font-size:12px;font-family:var(--font)';
+  ov.innerHTML = `
+    <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:20px;width:min(440px,100%)">
+      <div style="font-size:14px;font-weight:800;margin-bottom:4px">Não contar ${seEsc(nome)}</div>
+      <div style="margin-bottom:14px;font-size:11px;color:var(--muted)">Escolha o período em que esta pessoa não deve entrar na equipe (ex.: férias, folga, desligamento).</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;font-size:12px;flex-wrap:wrap">
+        De <input type="date" id="excl-de" value="${ini}" style="${inp}">
+        até <input type="date" id="excl-ate" value="${fim}" style="${inp}">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <button id="excl-b1" style="background:rgba(124,58,237,0.18);border:1px solid rgba(124,58,237,0.5);color:#c4b5fd;font-weight:700;font-family:var(--font);border-radius:9px;padding:8px 14px;cursor:pointer">Não contar neste período</button>
+        <button id="excl-b2" style="background:var(--bg3);border:1px solid var(--border2);color:var(--text);font-family:var(--font);border-radius:9px;padding:8px 14px;cursor:pointer">Remover a partir da data inicial</button>
+        <button id="excl-b3" style="background:var(--bg3);border:1px solid var(--border2);color:var(--text);font-family:var(--font);border-radius:9px;padding:8px 14px;cursor:pointer">Remover da equipe em todos os dias</button>
+        <button id="excl-b4" style="background:transparent;border:none;color:var(--muted);font-family:var(--font);cursor:pointer;padding:8px">Cancelar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+  ov.addEventListener('click', e => { if (e.target === ov) seFecharDialogExcl(); });
+  const val = id => document.getElementById(id).value;
+  document.getElementById('excl-b1').onclick = () => {
+    const de = val('excl-de'), ate = val('excl-ate');
+    if (!de || !ate || de > ate) { alert('Informe data inicial e final.'); return; }
+    seFecharDialogExcl(); seAdicionarExcl(uid, nome, de, ate);
+  };
+  document.getElementById('excl-b2').onclick = () => {
+    const de = val('excl-de');
+    if (!de) { alert('Informe a data inicial.'); return; }
+    seFecharDialogExcl(); seAdicionarExcl(uid, nome, de, null);
+  };
+  document.getElementById('excl-b3').onclick = () => { seFecharDialogExcl(); seAdicionarExcl(uid, nome, null, null); };
+  document.getElementById('excl-b4').onclick = seFecharDialogExcl;
+}
+
+window.seGerarRelatorio = async function() {
+  seShowContent(false);
+  seSetStatus('Carregando usuários...', true);
+
+  const selVal = document.getElementById('se-sel-mes').value;
+  const [ano, mes] = selVal.split('-').map(Number);
+  const mesLabel = `${SE_MESES_PT[mes-1]} ${ano}`;
+
+  const diasDoMes = [];
+  const primeiroDia = new Date(ano, mes-1, 1);
+  const ultimoDia = new Date(ano, mes, 0);
+  for (let d = new Date(primeiroDia); d <= ultimoDia; d.setDate(d.getDate()+1)) {
+    if (d.getDay() !== 0) diasDoMes.push(new Date(d));
+  }
+  const dateKeys = diasDoMes.map(d => seDateKey(d));
+
+  try {
+    seSetStatus('Buscando usuários...', true);
+    const { data: usersRaw, error: uErr } = await _supa.from('operadores').select('id, name, sector, active, hidden, raw');
+    if (uErr) throw uErr;
+    const users = (usersRaw || []).map(r => {
+      const raw = (r.raw && typeof r.raw === 'object') ? r.raw : {};
+      const name   = r.name   || raw.name   || raw.nome   || String(r.id);
+      const sector = r.sector || raw.sector  || raw.setor  || '';
+      const active = r.active !== undefined ? r.active : (raw.active !== false);
+      const hidden = r.hidden !== undefined ? !!r.hidden  : !!raw.hidden;
+      return { id: String(r.id), name, sector: String(sector).toUpperCase().trim(), active, hidden };
+    }).filter(u => u.sector);
+
+    seSetStatus(`Buscando check-ins de ${mesLabel}...`, true);
+    const BATCH = 40;
+    const checkinMap = {}; 
+    dateKeys.forEach(k => { checkinMap[k] = new Set(); });
+
+    for (let i = 0; i < dateKeys.length; i += BATCH) {
+      const chunk = dateKeys.slice(i, i + BATCH);
+      const ciData = await seBuscarTudo(() => _supa
+        .from('operator_checkins').select('uid, date_key')
+        .in('date_key', chunk)
+        .order('date_key').order('uid'));
+      ciData.forEach(r => {
+        if (checkinMap[r.date_key]) checkinMap[r.date_key].add(String(r.uid));
+      });
+    }
+
+    seSetStatus('Buscando histórico de check-ins...', true);
+    const hist = {}; 
+    const PAGE = 1000;
+    for (let from = 0; ; from += PAGE) {
+      const { data: hData, error: hErr } = await _supa
+        .from('operator_checkins').select('uid, date_key')
+        .order('uid').order('date_key')
+        .range(from, from + PAGE - 1);
+      if (hErr) throw hErr;
+      (hData || []).forEach(r => {
+        const dt = seParseDateKey(r.date_key);
+        if (!dt) return;
+        const uid = String(r.uid);
+        const h = hist[uid] || (hist[uid] = { first: dt, last: dt });
+        if (dt < h.first) h.first = dt;
+        if (dt > h.last) h.last = dt;
+      });
+      if (!hData || hData.length < PAGE) break;
+    }
+
+    seSetStatus('Buscando liberações de qualidade...', true);
+    const keysMesInteiro = [];
+    for (let d = new Date(primeiroDia); d <= ultimoDia; d.setDate(d.getDate()+1)) keysMesInteiro.push(seDateKey(d));
+    const prodData = await seBuscarTudo(() => _supa
+      .from('qualidade_registros').select('id, date_key, responsavel, uid')
+      .in('date_key', keysMesInteiro)
+      .order('id'));
+    const prodMap = {}; 
+    keysMesInteiro.forEach(k => { prodMap[k] = 0; });
+    prodData.forEach(r => {
+      if (prodMap[r.date_key] !== undefined) prodMap[r.date_key]++;
+    });
+
+    _seCache = { users, hist, checkinMap, prodMap, diasDoMes, dateKeys, mesLabel, ano, mes };
+    seSetStatus('Montando relatório...', true);
+    seRecalcularRelatorio();
+    seShowContent(true);
+
+  } catch(e) {
+    seSetStatus('❌ Erro: ' + e.message, false);
+    console.error(e);
+  }
+};
+
+function seGetSetorPorKey(key) {
+  return SE_SETORES.find(s => s.key === key || (s.alias && s.alias.includes(key)));
+}
+
+function seRecalcularRelatorio() {
+  const { users, hist, checkinMap, prodMap, diasDoMes, dateKeys, mesLabel, ano, mes } = _seCache;
+
+  const elegiveis = users.filter(u => !SE_SETORES_FORA_SAUDE.has(u.sector) && seGetSetorPorKey(u.sector));
+  const naEquipe = (u, d) => {
+    if (seExcluidoNoDia(u.id, d)) return false; 
+    const aj = SE_AJUSTES_EQUIPE[u.id] || SE_AJUSTES_EQUIPE[u.name] || {};
+    const h = hist[u.id];
+    if (!h && !aj.entrada && !(u.hidden && u.active !== false)) return false;
+    const entrada = aj.entrada ? new Date(aj.entrada.split('-')[0], aj.entrada.split('-')[1]-1, aj.entrada.split('-')[2]) : (h ? h.first : null);
+    let saida = null;
+    if (aj.saida) saida = new Date(aj.saida.split('-')[0], aj.saida.split('-')[1]-1, aj.saida.split('-')[2]);
+    else if (u.active === false) { if (!h) return false; saida = h.last; }
+    if (entrada && d < entrada) return false;
+    if (saida && d > saida) return false;
+    return true;
+  };
+  const semHistorico = elegiveis.filter(u => !hist[u.id] && u.hidden && u.active !== false && !(SE_AJUSTES_EQUIPE[u.id] || SE_AJUSTES_EQUIPE[u.name]));
+
+  const diasStats = diasDoMes.map(d => {
+    const k = seDateKey(d);
+    const ci = checkinMap[k];
+    const semDados = ci.size === 0;
+    const equipeDia = elegiveis.filter(u => naEquipe(u, d));
+    const total = equipeDia.length;
+    const listaAus = semDados ? [] : equipeDia
+      .filter(u => !ci.has(u.id))
+      .map(u => ({ id: u.id, name: u.name, sector: u.sector }))
+      .sort((x, y) => x.name.localeCompare(y.name, 'pt-BR'));
+    const presentes = semDados ? 0 : total - listaAus.length;
+    const ausentes = listaAus.length;
+    const pct = semDados ? null : (total > 0 ? Math.round((presentes/total)*100) : 0);
+    return { iso: seIsoDate(d), date: d, dayOfWeek: SE_DIAS_SEMANA[d.getDay()], k, presentes, ausentes, total, listaAus, pct, prod: prodMap[k] || 0, semDados };
+  });
+  const ultimoComDados = [...diasStats].reverse().find(d => !d.semDados);
+  const totalEq = ultimoComDados
+    ? ultimoComDados.total
+    : elegiveis.filter(u => naEquipe(u, diasDoMes[diasDoMes.length - 1])).length;
+
+  const setoresComStats = SE_SETORES.map(sec => {
+    const doSetor = users.filter(u => sec.alias ? sec.alias.concat([sec.key]).includes(u.sector) : u.sector === sec.key);
+    let somaPresentes = 0, somaMembros = 0, diasComDados = 0;
+    const membrosPresencaTotal = {}, membrosDiasNaEquipe = {};
+    doSetor.forEach(u => { membrosPresencaTotal[u.id] = 0; membrosDiasNaEquipe[u.id] = 0; });
+
+    diasStats.forEach(dia => {
+      if (dia.semDados) return;
+      const ci = checkinMap[dia.k];
+      const equipe = doSetor.filter(u => naEquipe(u, dia.date));
+      diasComDados++;
+      somaMembros += equipe.length;
+      equipe.forEach(u => {
+        membrosDiasNaEquipe[u.id]++;
+        if (ci.has(u.id)) { somaPresentes++; membrosPresencaTotal[u.id]++; }
+      });
+    });
+
+    const membros = doSetor.filter(u => membrosDiasNaEquipe[u.id] > 0);
+    const pctMedio = somaMembros > 0 ? Math.round((somaPresentes / somaMembros) * 100) : null;
+    const mediaTotal = diasComDados > 0 ? somaMembros / diasComDados : 0;
+    return { ...sec, membros, pctMedio, somaPresentes, diasComDados, mediaTotal, membrosPresencaTotal, membrosDiasNaEquipe };
+  });
+
+  const diasComCheckin = diasStats.filter(d => !d.semDados);
+  const totalProd = Object.values(prodMap).reduce((a,b) => a+b, 0);
+  const chavesTabela = new Set(diasStats.map(d => d.k));
+  const prodForaDaTabela = Object.entries(prodMap).filter(([k]) => !chavesTabela.has(k)).reduce((a,[,v]) => a+v, 0);
+  const mediaSaude = diasComCheckin.length ? Math.round(diasComCheckin.reduce((a,d) => a + (d.pct||0), 0) / diasComCheckin.length) : null;
+
+  const refFim = new Date(Math.min(Date.now(), diasDoMes[diasDoMes.length - 1].getTime()));
+  const auditoria = users.filter(u => seGetSetorPorKey(u.sector)).map(u => {
+      let diasEq = 0, diasPres = 0;
+      diasStats.forEach(dia => {
+        if (dia.semDados) return;
+        if (naEquipe(u, dia.date)) { diasEq++; if (checkinMap[dia.k].has(u.id)) diasPres++; }
+      });
+      const h = hist[u.id];
+      const diasParado = (h && u.active !== false) ? Math.floor((refFim - h.last) / 86400000) : 0;
+      return {
+        id: u.id, name: u.name, sector: u.sector, active: u.active !== false, hidden: !!u.hidden,
+        first: h ? h.first : null, last: h ? h.last : null, diasEq, diasPres,
+        semHist: !h, parado: diasParado > 30, diasParado,
+        foraSaude: SE_SETORES_FORA_SAUDE.has(u.sector)
+      };
+    })
+    .filter(a => a.diasEq > 0)
+    .sort((x, y) => x.sector.localeCompare(y.sector, 'pt-BR') || x.name.localeCompare(y.name, 'pt-BR'));
+
+  _seDadosRelatorio = { mesLabel, ano, mes, diasStats, setoresComStats, totalEq, mediaSaude, totalProd, prodForaDaTabela, diasComCheckin, auditoria };
+
+  seRenderRelatorio(_seDadosRelatorio);
+  seSetStatus(`✅ Relatório gerado — ${diasComCheckin.length} dias úteis com dados.` +
+    (Object.keys(SE_EXCL).length ? ` · ${Object.keys(SE_EXCL).length} exclusão(ões) manual(is).` : ''), false);
+}
+
+function seRenderRelatorio(d) {
+  seRenderKPIs(d);
+  seRenderSetores(d.setoresComStats);
+  seRenderTabelaDias(d.diasStats, d.totalEq);
+  seRenderAuditoria(d.auditoria || []);
+}
+
+function seRenderKPIs({ mediaSaude, totalEq, totalProd, prodForaDaTabela, diasComCheckin, diasStats }) {
+  const cor = seHealthColor(mediaSaude);
+  const kpis = [
+    { label: 'Saúde Média do Mês', value: mediaSaude !== null ? mediaSaude + '%' : '—', color: cor, sub: 'Presença média diária' },
+    { label: 'Total da Equipe', value: totalEq, color: '#38bdf8', sub: 'Quadro no último dia com dados' },
+    { label: 'Liberações no Mês', value: totalProd, color: '#4ade80', sub: 'Registros de qualidade' },
+    { label: 'Dias com Dados', value: diasComCheckin.length, color: '#a78bfa', sub: `de ${diasStats.length} dias úteis` },
+    { label: 'Melhor Dia', value: diasComCheckin.length ? (diasComCheckin.reduce((b,d)=>d.pct>b.pct?d:b).pct + '%') : '—', color: '#4ade80', sub: diasComCheckin.length ? seFmtDate(diasComCheckin.reduce((b,d)=>d.pct>b.pct?d:b).iso) : '' },
+    { label: 'Pior Dia', value: diasComCheckin.length ? (diasComCheckin.reduce((b,d)=>d.pct<b.pct?d:b).pct + '%') : '—', color: '#f25757', sub: diasComCheckin.length ? seFmtDate(diasComCheckin.reduce((b,d)=>d.pct<b.pct?d:b).iso) : '' },
+  ];
+  document.getElementById('se-kpis').innerHTML = kpis.map(k => `
+    <div class="se-kpi-card" style="--se-card-color:${k.color}">
+      <div class="se-kpi-label">${k.label}</div>
+      <div class="se-kpi-value">${k.value}</div>
+      <div class="se-kpi-sub">${k.sub}</div>
+    </div>
+  `).join('');
+}
+
+function seRenderSetores(setoresComStats) {
+  document.getElementById('se-setores-grid').innerHTML = setoresComStats.map(sec => {
+    const pct = sec.pctMedio;
+    const cor = seHealthColor(pct);
+    const total = Number.isInteger(sec.mediaTotal) ? sec.mediaTotal : sec.mediaTotal.toFixed(1);
+    const mediaPresentes = sec.diasComDados > 0 ? (sec.somaPresentes / sec.diasComDados).toFixed(1) : '0';
+    const ausMediaMes = sec.mediaTotal > 0 ? Math.max(0, sec.mediaTotal - parseFloat(mediaPresentes)).toFixed(1) : '0';
+
+    const chips = sec.membros.map(u => {
+      const diasPresente = sec.membrosPresencaTotal[u.id] || 0;
+      const diasEq = sec.membrosDiasNaEquipe[u.id] || 0;
+      const pctPessoa = diasEq > 0 ? Math.round((diasPresente/diasEq)*100) : 0;
+      const chipCor = seHealthColor(pctPessoa);
+      const tag = (!u.active ? ' <span style="opacity:.7;font-size:8px">(Inat.)</span>' : '') + (u.hidden ? ' <span style="opacity:.7;font-size:8px">(Ocult.)</span>' : '');
+      return `<span class="se-chip" style="background:${chipCor}18;border-color:${chipCor}55;color:${chipCor}"><span class="se-chip-dot" style="background:${chipCor}"></span>${seEsc(u.name)}${tag} <span style="opacity:.7">${pctPessoa}%</span></span>`;
+    }).join('');
+
+    return `
+    <div class="se-setor-card" style="border-color:${sec.color}44">
+      <div class="se-setor-head">
+        <div class="se-setor-name" style="color:${sec.color}">${sec.icon} ${sec.name}${sec.foraDaSaude ? ' <span style="font-size:9px;color:var(--muted);font-weight:600">(fora)</span>' : ''}</div>
+        <span class="se-setor-pct" style="color:${cor};border-color:${cor}55">${pct !== null ? pct + '%' : '—'}</span>
+      </div>
+      <div class="se-bar-track"><div class="se-bar-fill" style="width:${pct||0}%;background:${cor}"></div></div>
+      <div class="se-stats-row">
+        <div class="se-stat-box" style="background:rgba(74,222,128,.08);border:1px solid rgba(74,222,128,.2)">
+          <div class="lbl" style="color:#4ade80">Méd. Presentes</div>
+          <div class="val" style="color:#4ade80">${mediaPresentes}</div>
+        </div>
+        <div class="se-stat-box" style="background:rgba(242,87,87,.08);border:1px solid rgba(242,87,87,.2)">
+          <div class="lbl" style="color:#f25757">Méd. Ausentes</div>
+          <div class="val" style="color:#f25757">${ausMediaMes}</div>
+        </div>
+        <div class="se-stat-box" style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1)">
+          <div class="lbl" style="color:var(--muted)">Total</div>
+          <div class="val" style="color:var(--text)">${total}</div>
+        </div>
+      </div>
+      <div style="font-size:9px;font-weight:700;color:var(--muted);margin-bottom:6px">Membros (presença média no mês):</div>
+      <div class="se-member-list">${chips || '<span style="font-size:9px;color:var(--muted);font-style:italic">Nenhum membro</span>'}</div>
+    </div>`;
+  }).join('');
+}
+
+let _seMostrarDiasBaixos = false;
+let _seDiasStatsGlobal = null;
+let _seTotalEqGlobal = 0;
+
+window.seToggleDiasBaixos = function() {
+  _seMostrarDiasBaixos = !_seMostrarDiasBaixos;
+  const btn = document.getElementById('se-btn-toggle-baixos');
+  if (_seMostrarDiasBaixos) {
+    btn.innerHTML = '🙈 Ocultar dias &lt;50%';
+    btn.style.background = 'rgba(74,222,128,.1)';
+    btn.style.borderColor = 'rgba(74,222,128,.3)';
+    btn.style.color = '#4ade80';
+  } else {
+    btn.innerHTML = '👁 Mostrar dias &lt;50%';
+    btn.style.background = 'rgba(242,87,87,.1)';
+    btn.style.borderColor = 'rgba(242,87,87,.3)';
+    btn.style.color = '#f25757';
+  }
+  if (_seDiasStatsGlobal) seRenderTabelaDias(_seDiasStatsGlobal, _seTotalEqGlobal);
+};
+
+function seRenderTabelaDias(diasStats, totalEq) {
+  _seDiasStatsGlobal = diasStats;
+  _seTotalEqGlobal = totalEq;
+  const maxProd = Math.max(...diasStats.map(d => d.prod), 1);
+  let somaPresentes = 0, somaProd = 0, diasContados = 0, somaTotal = 0, somaPct = 0;
+  const diasAbaixo50 = [];
+  
+  diasStats.forEach(d => {
+    if (!d.semDados) {
+      somaPresentes += d.presentes; somaTotal += d.total; somaPct += d.pct || 0; somaProd += d.prod;
+      diasContados++;
+      if (d.pct !== null && d.pct < 50) diasAbaixo50.push(d);
+    }
+  });
+
+  const ocultados = _seMostrarDiasBaixos ? 0 : diasAbaixo50.length;
+  const infoEl = document.getElementById('se-dias-filtro-info');
+  if (infoEl) {
+    if (ocultados > 0) infoEl.innerHTML = `<span style="background:rgba(242,87,87,.1);border:1px solid rgba(242,87,87,.25);color:#f25757;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:700">${ocultados} dia(s) &lt;50% ocultado(s)</span>`;
+    else if (_seMostrarDiasBaixos && diasAbaixo50.length > 0) infoEl.innerHTML = `<span style="background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.25);color:#4ade80;padding:3px 9px;border-radius:20px;font-size:10px;font-weight:700">${diasAbaixo50.length} dia(s) &lt;50% visível(is)</span>`;
+    else infoEl.innerHTML = '';
+  }
+
+  const rows = diasStats.map(d => {
+    if (!_seMostrarDiasBaixos && !d.semDados && d.pct !== null && d.pct < 50) return '';
+    const cor = seHealthColor(d.pct);
+    const isHoje = d.iso === new Date().toISOString().slice(0, 10);
+    const isSab = d.dayOfWeek === 'Sáb';
+
+    const saude_badge = d.semDados ? `<span style="display:inline-flex;align-items:center;background:rgba(100,116,139,.1);border:1px solid rgba(100,116,139,.2);color:#64748b;font-size:10px;padding:3px 9px;border-radius:20px;font-family:var(--mono)">— sem dados</span>` : `<span style="display:inline-flex;align-items:center;background:${cor}14;border:1px solid ${cor}45;color:${cor};font-size:11px;font-weight:800;padding:3px 10px;border-radius:20px;font-family:var(--mono)">${d.pct >= 80 ? '✅' : d.pct >= 50 ? '⚠️' : '🔴'} ${d.pct}%</span>`;
+    const saude_bar = d.semDados ? '' : `<div style="width:64px;height:4px;background:rgba(255,255,255,.07);border-radius:10px;overflow:hidden;margin-top:4px"><div style="width:${d.pct}%;height:100%;background:${cor};border-radius:10px"></div></div>`;
+    const prod_badge = d.prod > 0 ? `<span style="display:inline-flex;background:rgba(167,139,250,.12);border:1px solid rgba(167,139,250,.3);color:#a78bfa;font-size:11px;font-weight:800;padding:3px 9px;border-radius:20px;font-family:var(--mono)">📦 ${d.prod}</span>` : `<span style="color:var(--muted);font-size:11px">—</span>`;
+
+    let ausCell;
+    if (d.semDados) ausCell = '<span style="color:var(--muted)">—</span>';
+    else if (d.listaAus.length === 0) ausCell = '<span style="color:#4ade80;font-size:10px;font-weight:700">✔ Todos presentes</span>';
+    else ausCell = '<div class="se-member-list">' + d.listaAus.map(a => {
+      const sec = seGetSetorPorKey(a.sector);
+      return `<span class="se-chip" style="background:rgba(242,87,87,.1);border-color:rgba(242,87,87,.3);color:#fca5a5"><span class="se-chip-dot" style="background:${sec ? sec.color : '#64748b'}"></span>${seEsc(a.name)}<span class="x-excl" data-excl-uid="${seEsc(a.id)}" data-excl-nome="${seEsc(a.name)}" data-excl-ini="${seIsoLocal(d.date)}" data-excl-fim="${seIsoLocal(d.date)}" style="cursor:pointer;opacity:.75;margin-left:4px;font-size:10px">✕</span></span>`;
+    }).join('') + '</div>';
+
+    const rowBg  = isHoje ? 'rgba(124,58,237,.08)' : isSab ? 'rgba(148,163,184,.03)' : 'transparent';
+    const leftBorder = isHoje ? '3px solid #7c3aed' : isSab ? '3px solid rgba(148,163,184,.2)' : '3px solid transparent';
+
+    return `<tr style="border-bottom:1px solid var(--border2);background:${rowBg};border-left:${leftBorder}">
+      <td style="padding:4px 14px"><span style="font-family:var(--mono);font-size:11px;color:var(--muted)">${seFmtDate(d.iso)}</span>${isHoje ? '<br><span style="color:#a78bfa;font-size:9px;font-weight:800">● HOJE</span>' : ''}</td>
+      <td style="padding:4px 12px;font-size:12px;font-weight:700;color:${isSab ? '#94a3b8' : 'var(--text)'}">${d.dayOfWeek}</td>
+      <td style="text-align:center;padding:4px 12px">${d.semDados ? '<span style="color:var(--muted)">—</span>' : `<span style="color:#4ade80;font-weight:800;font-family:var(--mono);font-size:14px">${d.presentes}</span><div style="font-size:9px;color:var(--muted)">de ${d.total}</div>`}</td>
+      <td style="text-align:center;padding:4px 12px">${d.semDados ? '<span style="color:var(--muted)">—</span>' : `<span style="color:#f25757;font-weight:700;font-family:var(--mono);font-size:13px">${d.ausentes}</span>`}</td>
+      <td style="text-align:center;padding:4px 12px;color:var(--muted);font-family:var(--mono);font-size:12px">${d.semDados ? '—' : d.total}</td>
+      <td style="text-align:center;padding:4px 12px"><div style="display:flex;flex-direction:column;align-items:center;gap:2px">${saude_badge}${saude_bar}</div></td>
+      <td style="text-align:center;padding:4px 12px">${prod_badge}</td>
+      <td style="padding:4px 12px;white-space:normal">${ausCell}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('se-tabela-dias-body').innerHTML = rows.trim() || `<tr><td colspan="8" style="padding:24px;text-align:center;color:var(--muted);font-size:12px">Nenhum dia com ≥50% de presença no período.</td></tr>`;
+
+  const mediaSaude = diasContados ? Math.round(somaPct / diasContados) : 0;
+  const corRod = seHealthColor(mediaSaude);
+  document.getElementById('se-tabela-dias-foot').innerHTML = `<tr>
+      <td colspan="2" style="padding:4px 14px;color:#a78bfa;font-weight:800;font-size:11px">MÉDIA GERAL <span style="font-weight:600;color:var(--muted)">(${diasContados} dias com dados)</span></td>
+      <td style="text-align:center;padding:4px 12px;color:#4ade80;font-weight:800;font-family:var(--mono)">${diasContados ? (somaPresentes/diasContados).toFixed(1) : '—'}</td>
+      <td style="text-align:center;padding:4px 12px;color:#f25757;font-family:var(--mono)">${diasContados ? ((somaTotal - somaPresentes)/diasContados).toFixed(1) : '—'}</td>
+      <td style="text-align:center;padding:4px 12px;color:var(--muted);font-family:var(--mono)">${diasContados ? (somaTotal/diasContados).toFixed(1) : totalEq}</td>
+      <td style="text-align:center;padding:4px 12px"><span style="display:inline-flex;background:${corRod}14;border:1px solid ${corRod}45;color:${corRod};font-size:11px;font-weight:800;padding:3px 10px;border-radius:20px;font-family:var(--mono)">${mediaSaude}%</span></td>
+      <td style="text-align:center;padding:4px 12px;font-weight:800;color:#a78bfa;font-family:var(--mono)">📦 ${somaProd}</td>
+      <td></td>
+    </tr>`;
+}
+
+function seRenderAuditoria(lista) {
+  const fmt = d => d ? d.toLocaleDateString('pt-BR') : '—';
+  const mm = String(_seCache.mes).padStart(2, '0');
+  const ini = `${_seCache.ano}-${mm}-01`;
+  const fim = seIsoLocal(new Date(_seCache.ano, _seCache.mes, 0));
+  const alertas = lista.filter(a => a.semHist || a.parado || !a.active).length;
+
+  const rows = lista.map(a => {
+    const sec = seGetSetorPorKey(a.sector);
+    const flags = [];
+    if (a.semHist) flags.push('Sem histórico');
+    if (a.parado) flags.push(`Parado há ${a.diasParado} dias`);
+    if (!a.active) flags.push('Inativo');
+    if (a.foraSaude) flags.push('Fora do cálculo');
+    const warn = a.semHist || a.parado;
+    return `<tr style="background:${warn ? 'rgba(245,166,35,.07)' : 'transparent'}">
+      <td style="padding:4px 12px;font-weight:700">${seEsc(a.name)}${a.hidden ? ' <span style="opacity:.6;font-size:9px">(Oculto)</span>' : ''}</td>
+      <td style="padding:4px 12px;color:${sec ? sec.color : 'var(--muted)'}">${sec ? sec.name : seEsc(a.sector)}</td>
+      <td style="text-align:center;padding:4px 12px;font-family:var(--mono);font-size:11px">${fmt(a.first)}</td>
+      <td style="text-align:center;padding:4px 12px;font-family:var(--mono);font-size:11px">${fmt(a.last)}</td>
+      <td style="text-align:center;padding:4px 12px;font-family:var(--mono)">${a.diasEq}</td>
+      <td style="text-align:center;padding:4px 12px;font-family:var(--mono)">${a.diasPres}</td>
+      <td style="padding:4px 12px;font-size:10px;color:${warn ? '#f5a623' : 'var(--muted)'}">${flags.join(' · ') || '—'}</td>
+      <td style="text-align:center;padding:4px 12px"><span class="x-excl" data-excl-uid="${seEsc(a.id)}" data-excl-nome="${seEsc(a.name)}" data-excl-ini="${ini}" data-excl-fim="${fim}" style="cursor:pointer;color:#f25757;font-size:11px;font-weight:700">Excluir…</span></td>
+    </tr>`;
+  }).join('');
+
+  const fmtR = r => (!r.de && !r.ate) ? 'em todos os dias' : (r.de && r.ate) ? (r.de === r.ate ? seFmtDate(r.de) : `${seFmtDate(r.de)} a ${seFmtDate(r.ate)}`) : r.de ? `a partir de ${seFmtDate(r.de)}` : `até ${seFmtDate(r.ate)}`;
+  const ids = Object.keys(SE_EXCL);
+  const exclHtml = ids.length ? `<div style="padding:12px 16px;border-bottom:1px solid var(--border2)">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:11px;font-weight:800;color:#f5a623">✋ Exclusões ativas</span>
+        <button onclick="limparTodasExcl()" style="font-size:10px;padding:3px 10px;background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:6px;cursor:pointer">Restaurar tudo</button>
+      </div>
+      <div class="se-member-list">${ids.map(id => SE_EXCL[id].lista.map((r, i) => `<span class="se-chip" style="background:rgba(245,166,35,.1);border-color:rgba(245,166,35,.35);color:#fbbf24">${seEsc(SE_EXCL[id].nome)} — ${fmtR(r)} <span data-excl-rest="${seEsc(id)}" data-excl-idx="${i}" style="cursor:pointer;margin-left:4px;font-size:11px">↺</span></span>`).join('')).join('')}</div>
+    </div>` : '';
+
+  document.getElementById('se-auditoria').innerHTML = `<details style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;overflow:hidden"><summary style="cursor:pointer;padding:12px 16px;font-size:12px;font-weight:800;color:#a78bfa;outline:none">🔍 Auditoria da equipe no período — ${lista.length} pessoas</summary>${exclHtml}<div style="overflow-x:auto"><table><thead><tr><th>Nome</th><th>Setor</th><th style="text-align:center">1º check-in</th><th style="text-align:center">Último check-in</th><th style="text-align:center">Dias na equipe</th><th style="text-align:center">Dias presente</th><th>Observação</th><th style="text-align:center">Ação</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
+}
+
+window.seExportarExcel = function() {
+  if (!_seDadosRelatorio) return alert('Gere o relatório primeiro.');
+  if (typeof XLSX === 'undefined') return alert('Biblioteca XLSX não carregada.');
+  const { mesLabel, diasStats, setoresComStats, auditoria } = _seDadosRelatorio;
+
+  const diasDados = [['Data', 'Dia', 'Presentes', 'Ausentes', 'Total Equipe', 'Saúde (%)', 'Liberações', 'Quem faltou'],
+    ...diasStats.map(d => [seFmtDate(d.iso), d.dayOfWeek, d.semDados ? null : d.presentes, d.semDados ? null : d.ausentes, d.semDados ? null : d.total, d.semDados ? null : (d.pct / 100), d.prod || null, d.semDados ? null : d.listaAus.map(a => a.name).join(', ')])];
+  const setoresDados = [['Setor', 'Média de Membros/dia', 'Méd. Presentes/dia', 'Saúde Média (%)'],
+    ...setoresComStats.map(s => [s.name, Number(s.mediaTotal.toFixed(1)), s.diasComDados > 0 ? Number((s.somaPresentes/s.diasComDados).toFixed(1)) : 0, s.pctMedio !== null ? (s.pctMedio / 100) : null])];
+
+  const wb = XLSX.utils.book_new();
+  const wsDias = XLSX.utils.aoa_to_sheet(diasDados);
+  for (let R = 1; R <= diasStats.length; R++) { const cell = wsDias[XLSX.utils.encode_cell({r:R, c:5})]; if (cell && typeof cell.v === 'number') cell.z = '0%'; }
+  XLSX.utils.book_append_sheet(wb, wsDias, 'Evolução Diária');
+
+  const wsSetores = XLSX.utils.aoa_to_sheet(setoresDados);
+  for (let R = 1; R <= setoresComStats.length; R++) { const cell = wsSetores[XLSX.utils.encode_cell({r:R, c:3})]; if (cell && typeof cell.v === 'number') cell.z = '0%'; }
+  XLSX.utils.book_append_sheet(wb, wsSetores, 'Por Setor');
+
+  const audDados = [['Nome', 'Setor', 'Ativo', 'Oculto', '1º check-in', 'Último check-in', 'Dias na equipe', 'Dias presente', 'Observação'],
+    ...(auditoria || []).map(a => [a.name, a.sector, a.active ? 'Sim' : 'Não', a.hidden ? 'Sim' : 'Não', a.first ? a.first.toLocaleDateString('pt-BR') : '', a.last ? a.last.toLocaleDateString('pt-BR') : '', a.diasEq, a.diasPres, [a.semHist ? 'Sem check-in no histórico' : '', a.parado ? `Sem check-in há ${a.diasParado} dias` : '', !a.active ? 'Inativo' : ''].filter(Boolean).join(' · ')])];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(audDados), 'Auditoria');
+  
+  XLSX.writeFile(wb, `relatorio-equipe-${mesLabel.replace(' ','-')}.xlsx`);
+};
+// ──────────────────────────────────────────────────────────────────────────
 
   function boot(){
     var tries = 0;
