@@ -3364,6 +3364,7 @@ function setView(v,btn){
     else if(relSubTab==='duplicados') _loadDuplicadosByGlobalDate().then(()=>renderDuplicados());
   },50); }
   if(v==='equip')     { 
+    _equipLoadImportTs();
     // Garante que os equipamentos estejam carregados antes de renderizar
     const doRender = () => { loadEquipamentos().then(() => renderEquipTable()); };
     if(Object.keys(equipamentos).length === 0){
@@ -12655,6 +12656,11 @@ async function importEquipFile(input){
 
     hideLoader();
     input.value = '';
+    // Salva timestamp da importação no app_config (visível para todos)
+    const _equipImportAt = { ts: Date.now(), user: (currentUser && (currentUser.name || currentUser.email)) || 'admin', count };
+    await _supa.from('app_config').upsert({ key: 'equip_import_at', value: _equipImportAt }, { onConflict: 'key' });
+    window._equipImportAt = _equipImportAt;
+    _equipUpdateImportBadge();
     renderEquipTable();
     const serieMsg = serieColOrig ? '\nColuna Série (Atributos): "' + serieColOrig + '" — ' + Object.keys(seriesBatch).length + ' séries importadas' : '\n⚠️ Coluna de série (Atributos) não encontrada';
     const skuMsg = skuColOrig ? '\nCódigo do Produto Externo: "' + skuColOrig + '" — ' + Object.keys(skusBatch).length + ' códigos importados' : '\n⚠️ Coluna Código do Produto Externo não encontrada';
@@ -12726,7 +12732,35 @@ async function parseXLSX(file){
 }
 
 // ── Render equipamentos table ─────────────────────────────────────────────────
+// ── Badge de última importação de equipamentos ────────────────────────────────
+function _equipUpdateImportBadge(){
+  const el = document.getElementById('equip-import-ts');
+  if (!el) return;
+  const at = window._equipImportAt;
+  if (!at || !at.ts) {
+    el.innerHTML = '<span style="font-style:italic;opacity:.6">Nenhuma importação registrada</span>';
+    return;
+  }
+  const d = new Date(at.ts);
+  const data = d.toLocaleDateString('pt-BR');
+  const hora = d.toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' });
+  const user = at.user ? ` por <b style="color:var(--text)">${at.user}</b>` : '';
+  const cnt  = at.count ? ` &nbsp;·&nbsp; <span style="color:var(--text)">${at.count} equipamentos</span>` : '';
+  el.innerHTML = `<span style="display:inline-flex;align-items:center;gap:5px;background:rgba(79,142,247,.10);border:1px solid rgba(79,142,247,.30);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;color:#4f8ef7;white-space:nowrap">📂 Última importação: ${data} às ${hora}${user}${cnt}</span>`;
+}
+
+// Carrega o timestamp do app_config ao abrir a aba de equipamentos (chamado no setView)
+async function _equipLoadImportTs(){
+  if (window._equipImportAt) { _equipUpdateImportBadge(); return; }
+  try {
+    const { data } = await _supa.from('app_config').select('value').eq('key','equip_import_at').single();
+    if (data && data.value) { window._equipImportAt = data.value; }
+  } catch(e) {}
+  _equipUpdateImportBadge();
+}
+
 function renderEquipTable(){
+  _equipUpdateImportBadge();
   const q = (document.getElementById('equip-search')?.value||'').toUpperCase();
   const entries = Object.entries(equipamentos)
     .filter(([k,v]) => !q || k.includes(q) || v.toUpperCase().includes(q) || (getEquipSerie(k) || '').toUpperCase().includes(q) || (getEquipSku(k) || '').toUpperCase().includes(q) || (getEquipUnitizador(k) || '').toUpperCase().includes(q))
@@ -15325,7 +15359,7 @@ async function _qualFetchDia(yyyymmdd, silent){
   const ini = new Date(y, m-1, d, 0, 0, 0, 0).getTime();
   const fim = new Date(y, m-1, d+1, 0, 0, 0, 0).getTime();
   const { data, error } = await _supaAuthed().from('qualidade_registros')
-    .select('id, ts, raw, selb, equipamento, serie, sku, contador_pb, contador_color, obs, responsavel, uid, date_key, created_at, etiqueta_impressa, chamado_aberto').gte('ts', ini).lt('ts', fim).order('ts', { ascending:false }).limit(2000);
+    .select('id, ts, raw, selb, equipamento, serie, sku, contador_pb, contador_color, obs, responsavel, uid, date_key').gte('ts', ini).lt('ts', fim).order('ts', { ascending:false }).limit(2000);
   if(error){ console.warn('[Qualidade] Erro ao carregar dia', yyyymmdd, error); return false; }
   (data||[]).forEach(_qualIngestRow);
   window._qualDiasExtras.add(yyyymmdd);
@@ -15349,7 +15383,7 @@ window.qualOnDateFilterChange = qualOnDateFilterChange;
 async function _initQualListener(){
   async function _reloadQualReg(){
     // OTIMIZAÇÃO DE EGRESS (PostgREST): Limite reduzido para 500 registros para evitar sobrecarga
-    const { data, error } = await _supaAuthed().from('qualidade_registros').select('id, ts, raw, selb, equipamento, serie, sku, contador_pb, contador_color, obs, responsavel, uid, date_key, created_at, etiqueta_impressa, chamado_aberto').order('ts', { ascending: false }).limit(500);
+    const { data, error } = await _supaAuthed().from('qualidade_registros').select('id, ts, raw, selb, equipamento, serie, sku, contador_pb, contador_color, obs, responsavel, uid, date_key').order('ts', { ascending: false }).limit(500);
     if(error) console.warn('[Qualidade] Erro ao carregar qualidade_registros:', error);
     _qualRegistros = {};
     (data||[]).forEach(r => _qualIngestRow(r));
@@ -15401,7 +15435,7 @@ async function _initQualListener(){
   }
   async function _reloadQualLib(){
     // OTIMIZAÇÃO DE EGRESS (PostgREST): Limite reduzido para 500 registros para evitar sobrecarga
-    const { data, error } = await _supaAuthed().from('qualidade_liberadas').select('id, ts, raw, created_at').order('ts', { ascending: false }).limit(500);
+    const { data, error } = await _supaAuthed().from('qualidade_liberadas').select('id, ts, raw').order('ts', { ascending: false }).limit(500);
     if(error) console.warn('[Qualidade] Erro ao carregar qualidade_liberadas:', error);
     window._qualLiberadas = {};
     (data||[]).forEach(r => {
@@ -22295,11 +22329,17 @@ let _fluxolabChecklistsListener = null;
 function fluxolabStartChecklistsListener(){
   if (_fluxolabChecklistsListener) return;
   _fluxolabChecklistsListener = _db.ref('/fluxolab_checklists').on('value', function(snap){
-    if (!snap.exists()){ _fluxolabChecklistsImported = []; }
+    if (!snap.exists()){ _fluxolabChecklistsImported = []; window._fluxolabImportedAt = null; }
     else {
       const val = snap.val();
+      // Extrai e remove o timestamp antes de parsear as linhas
       try {
-        _fluxolabChecklistsImported = Object.entries(val).map(([k, s]) => ({ ...JSON.parse(s), _rowKey: k }));
+        const atEntry = val['_importedAt'];
+        window._fluxolabImportedAt = atEntry ? JSON.parse(atEntry) : null;
+      } catch(e) { window._fluxolabImportedAt = null; }
+      const dataVal = Object.fromEntries(Object.entries(val).filter(([k]) => k !== '_importedAt'));
+      try {
+        _fluxolabChecklistsImported = Object.entries(dataVal).map(([k, s]) => ({ ...JSON.parse(s), _rowKey: k }));
       } catch(e) {
         _fluxolabChecklistsImported = [];
         console.warn('[FluxoLAB] erro ao parsear checklists do Supabase', e);
@@ -22356,6 +22396,8 @@ async function fluxolabImportChecklists(ev){
     await dbDelete('/fluxolab_checklists');
     const batch = {};
     rows.forEach((r, i) => { batch[String(i)] = JSON.stringify(r); });
+    // Salva o timestamp da importação junto com os dados
+    batch['_importedAt'] = JSON.stringify({ ts: Date.now(), user: (currentUser && (currentUser.name || currentUser.email)) || 'admin' });
     await dbPatch('/fluxolab_checklists', batch);
 
     hideLoader();
@@ -22391,6 +22433,21 @@ function fluxolabRenderChecklistsImported(){
   const grid  = document.getElementById('fluxolab-checklists-grid');
   const stats = document.getElementById('fluxolab-checklists-stats');
   if (!grid) return;
+
+  // Atualiza badge de última importação se o header já foi montado
+  const tsEl = document.getElementById('flcl-import-ts');
+  if (tsEl) {
+    const at = window._fluxolabImportedAt;
+    if (!at || !at.ts) {
+      tsEl.innerHTML = '<span style="font-style:italic;opacity:.6">Nenhuma importação registrada</span>';
+    } else {
+      const d = new Date(at.ts);
+      const data = d.toLocaleDateString('pt-BR');
+      const hora = d.toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' });
+      const user = at.user ? ` por <b style="color:var(--text)">${at.user}</b>` : '';
+      tsEl.innerHTML = `<span style="display:inline-flex;align-items:center;gap:5px;background:rgba(34,211,238,.10);border:1px solid rgba(34,211,238,.30);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;color:#22d3ee;white-space:nowrap">🕐 Última importação: ${data} às ${hora}${user}</span>`;
+    }
+  }
 
   const esc = s => String(s==null?'':s).replace(/[&<>"']/g,
     c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -23891,6 +23948,17 @@ async function fluxolabVerificarPedidosRegistrados(btn) {
           </div>
           <div style="font-size:12px;color:var(--muted);margin-top:4px">
             Lista dos equipamentos importados.
+          </div>
+          <div id="flcl-import-ts" style="margin-top:6px;font-size:11px;display:flex;align-items:center;gap:6px;color:var(--muted)">
+            ${(function(){
+              const at = window._fluxolabImportedAt;
+              if (!at || !at.ts) return '<span style="font-style:italic;opacity:.6">Nenhuma importação registrada</span>';
+              const d = new Date(at.ts);
+              const data = d.toLocaleDateString('pt-BR');
+              const hora = d.toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' });
+              const user = at.user ? ` por <b style="color:var(--text)">${at.user}</b>` : '';
+              return `<span style="display:inline-flex;align-items:center;gap:5px;background:rgba(34,211,238,.10);border:1px solid rgba(34,211,238,.30);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;color:#22d3ee;white-space:nowrap">🕐 Última importação: ${data} às ${hora}${user}</span>`;
+            })()}
           </div>
         </div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
