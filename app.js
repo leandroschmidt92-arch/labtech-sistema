@@ -2864,6 +2864,8 @@ function loginAs(u){
   // Badge "Liberadas no Dia": COUNT leve (HEAD, zero linhas) + canal realtime leve
   // que so escuta INSERT/DELETE e ajusta o contador (ver _dashLibStart).
   _dashLibRecount().then(() => _dashLibStart());
+  // Badge "Checklists": contagem leve (HEAD ou app_config) para o Dashboard
+  if(typeof _dashChecklistsRecount === 'function') _dashChecklistsRecount();
 
   scheduleCheck();
   const admCred = document.getElementById('admin-cred');
@@ -3198,12 +3200,17 @@ async function opFinalizarAguardando(){
     hAtivo.duracao = null;
   }
 
-  // Remove solicitações de peças pendentes no Supabase
+  // Marca solicitações de peças pendentes como concluídas no Supabase (mantém no histórico)
   if(typeof _solicitacoesPecas !== 'undefined'){
-    const promises = Object.entries(_solicitacoesPecas)
-      .filter(([,p]) => p.uid === uid && (p.selb||'').toUpperCase() === selb.toUpperCase() && !p.lida)
-      .map(([id]) => _supa.from('solicitacoes_pecas').delete().eq('id', id).catch(()=>{}));
-    await Promise.all(promises);
+    const pendentesTimer = Object.entries(_solicitacoesPecas)
+      .filter(([,p]) => p.uid === uid && (p.selb||'').toUpperCase() === selb.toUpperCase() && !p.lida);
+    for(const [id, pData] of pendentesTimer){
+      await _supa.from('solicitacoes_pecas').update({
+        lida: true,
+        raw: { ...(pData || {}), lida: true, retomadoEm: Date.now() }
+      }).eq('id', id).catch(()=>{});
+      if(_solicitacoesPecas[id]) _solicitacoesPecas[id].lida = true;
+    }
   }
 
   // Reinicia o timer no Admin
@@ -3276,6 +3283,7 @@ function setView(v,btn){
   if(v !== 'perdidas' && typeof stopMaquinasPerdidasListener === 'function') stopMaquinasPerdidasListener();
   if(v !== 'maquinas-a' && typeof stopMaquinasAListener === 'function') stopMaquinasAListener();
   if(v !== 'gaiola-lab' && v !== 'qualidade' && typeof stopQualListener === 'function') stopQualListener();
+  if(v==='dashboard')   { if(typeof _dashChecklistsRecount === 'function') _dashChecklistsRecount(); }
   if(v==='fluxolab')    { renderFluxoLAB(); }
   if(v==='bip-mobile')  {
     // Reaproveita o painel "Movimentação de SELB" do FluxoLAB — garante que
@@ -3673,11 +3681,11 @@ function renderCard(uid){
       </div>
     </div>
 
-    ${isRun && u.sector === 'COMPLEXA' ? `
+    ${(isRun || isAg) && u.sector === 'COMPLEXA' ? `
     <div class="card-followup">
       <div class="mlbl" style="margin-bottom:6px">Acompanhamento</div>
       <div class="followup-log" id="flog-${uid}">${(hRun?.followup || 'Nenhum registro...').replace(/\[(\d{2}:\d{2})\]/g, '<b>[$1]</b>').replace(/\n/g, '<br>')}</div>
-      ${(!isDisplay && !isAdmin) ? `<div style="display:flex;gap:6px">
+      ${!isDisplay ? `<div style="display:flex;gap:6px">
         <input type="text" class="followup-inp" id="finp-${uid}" placeholder="O que está sendo feito?" onkeydown="if(event.key==='Enter') addFollowupEntry('${uid}')">
         <button class="btn-save-followup" onclick="addFollowupEntry('${uid}')">Salvar</button>
       </div>` : ''}
@@ -5016,11 +5024,22 @@ async function confirmarFin(){
 }
 async function addFollowupEntry(uid){
   const inp = document.getElementById('finp-'+uid);
+  if(!inp) return;
   const text = inp.value.trim();
   if(!text) return;
 
-  const h = history.find(x => x.uid === uid && x.status === 'running');
-  if(!h) return;
+  // Aceita tanto 'running' quanto 'aguardando' (Aguardando Peça)
+  const h = history.find(x => x.uid === uid && (x.status === 'running' || x.status === 'aguardando'));
+  if(!h){
+    console.warn('[Acompanhamento] Registro running/aguardando não encontrado para uid:', uid);
+    alert('Não foi possível salvar: registro do operador não encontrado. Tente recarregar a página.');
+    return;
+  }
+  if(!h._docId || !h._dateKey){
+    console.warn('[Acompanhamento] _docId/_dateKey ausentes:', h);
+    alert('Não foi possível salvar: informações do registro incompletas (_docId/' + (h._docId||'?') + ', _dateKey/' + (h._dateKey||'?') + ').');
+    return;
+  }
 
   const now = new Date();
   const time = now.getHours().toString().padStart(2, '0') + ':' + now.getMinutes().toString().padStart(2, '0');
@@ -5034,7 +5053,7 @@ async function addFollowupEntry(uid){
 
   try {
     await dbUpdateHistory(h._docId, h._dateKey, { followup: updated });
-    // Opcional: atualizar visualmente o log imediatamente se o Supabase demorar
+    // Atualiza visualmente o log imediatamente
     const logDiv = document.getElementById('flog-'+uid);
     if(logDiv){
       if(logDiv.textContent === 'Nenhum registro...') logDiv.innerHTML = '';
@@ -5042,8 +5061,8 @@ async function addFollowupEntry(uid){
       logDiv.scrollTop = logDiv.scrollHeight;
     }
   } catch(e) {
-    console.error("Erro ao salvar acompanhamento", e);
-    alert("Erro ao salvar acompanhamento. Tente novamente.");
+    console.error('[Acompanhamento] Erro ao salvar:', e);
+    alert('Erro ao salvar acompanhamento. Tente novamente.');
     inp.value = text; // devolve o texto
   }
 }
@@ -5347,6 +5366,72 @@ function _dashLibStop(){
   _dashLibCount = null; _dashLibDia = '';
 }
 
+// ── Badge "Checklists" do Dashboard — contagem leve sem carregar a planilha ──
+window._dashChecklistsCount = null;
+
+function _fluxolabAtualizarBadgeChecklists(total) {
+  if (total == null) return;
+  window._dashChecklistsCount = total;
+  // Badge na aba FluxoLAB
+  const badge = document.getElementById('fluxolab-checklists-count-badge');
+  if (badge) {
+    if (total > 0) {
+      badge.textContent = total;
+      badge.style.display = '';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
+  // Pill na barra de stats do Dashboard principal
+  const dashEl = document.getElementById('dash-checklists-total');
+  if (dashEl) {
+    dashEl.textContent = total > 0 ? total : (total === 0 ? '0' : '—');
+  }
+}
+
+async function _dashChecklistsRecount() {
+  // 1. Se a planilha já estiver na memória (ex: abriu FluxoLAB), usa o total exato
+  if (Array.isArray(window._fluxolabChecklistsImported) && window._fluxolabChecklistsImported.length > 0) {
+    _fluxolabAtualizarBadgeChecklists(window._fluxolabChecklistsImported.length);
+    return;
+  }
+  if (typeof window._dashChecklistsCount === 'number' && window._dashChecklistsCount > 0) {
+    _fluxolabAtualizarBadgeChecklists(window._dashChecklistsCount);
+  }
+
+  // 2. Consulta rápida no app_config (metadado com contagem)
+  try {
+    const { data } = await _supa.from('app_config').select('value').eq('key', 'checklists_import_at').single();
+    if (data && data.value && typeof data.value.count === 'number') {
+      _fluxolabAtualizarBadgeChecklists(data.value.count);
+      return;
+    }
+  } catch(e) {}
+
+  // 3. Fallback: contagem HEAD leve via Supabase (zero linhas de payload baixadas, exclui nó _importedAt)
+  try {
+    const { count, error } = await _supa.from('fluxolab_checklists').select('id', { count: 'exact', head: true }).neq('id', '_importedAt');
+    if (!error && count != null) {
+      _fluxolabAtualizarBadgeChecklists(count);
+      // Salva no app_config para consultas instantâneas futuras
+      _supa.from('app_config').upsert({ key: 'checklists_import_at', value: { ts: Date.now(), count } }, { onConflict: 'key' }).catch(()=>{});
+    }
+  } catch(e) {
+    console.warn('[Dash] contagem de checklists:', e);
+  }
+}
+
+try {
+  _appConfigOn('checklists_import_at', (payload) => {
+    const val = payload && payload.new && payload.new.value;
+    if (val && typeof val.count === 'number') {
+      _fluxolabAtualizarBadgeChecklists(val.count);
+    } else {
+      _dashChecklistsRecount();
+    }
+  });
+} catch(e) {}
+
 // Busca a Saúde da Equipe para o badge no topo do Dashboard
 // Roda uma vez e depois a cada 5 minutos, para não sobrecarregar o DB
 async function fetchDashboardSaudeEquipe() {
@@ -5395,6 +5480,7 @@ async function fetchDashboardSaudeEquipe() {
 }
 setInterval(fetchDashboardSaudeEquipe, 900000); // 15 min (era 5)
 setTimeout(fetchDashboardSaudeEquipe, 3000);
+setTimeout(_dashChecklistsRecount, 1000);
 
 // ════ CONSULTA ════
 let _consultaDateKey = null;   // dateKey currently shown in consulta (kept for compat)
@@ -5671,6 +5757,9 @@ async function renderPecasView(){
         <div style="display:flex;gap:5px;flex-wrap:wrap">
           <button class="btn bp" style="font-size:11px;padding:6px 12px"
             onclick="liberarPeca('${h._docId}','${h._dateKey}')">✅ Aprovar / Liberar</button>
+          <button style="background:rgba(232,121,249,.12);border:1px solid rgba(232,121,249,.4);border-radius:8px;color:#e879f9;font-family:var(--font);font-size:11px;font-weight:700;padding:5px 10px;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:4px"
+            onclick="imprimirEtiquetaAguardandoPecas('${(h.selb||'').replace(/'/g, "\\'")}')"
+            title="Imprimir etiqueta com as peças solicitadas deste SELB">🏷️ Etiqueta</button>
           ${(currentUser && currentUser.isAdmin) ? `
           <button style="background:rgba(79,142,247,.1);border:1px solid rgba(79,142,247,.3);border-radius:8px;color:var(--accent);font-family:var(--font);font-size:11px;font-weight:600;padding:5px 10px;cursor:pointer;white-space:nowrap"
             onclick="admMoverParaMaquinaA('${h._docId}','${h._dateKey}','${h.selb}','${(h.equipamento||'').replace(/\'\'/g,"\\'")}','${(h.sector||'').replace(/\'\'/g,"\\'")}')">🅰️ → Máquinas A</button>
@@ -5919,16 +6008,21 @@ async function liberarPeca(docId, dateKey){
       if(!h.end) h.end = _liberarEndTime;
     }
 
-    // Remove solicitações de peça pendentes vinculadas a este SELB
+    // Marca como lidas as solicitações de peça pendentes vinculadas a este SELB (preserva histórico)
     const selb = h ? h.selb : null;
     if (selb && typeof fluxolabRemoveSelbGlobal === 'function') {
       fluxolabRemoveSelbGlobal(selb).catch(e => console.warn('[FluxoLAB] Erro ao remover SELB liberado:', e));
     }
     if(selb && _solicitacoesPecas){
-      const promises = Object.entries(_solicitacoesPecas)
-        .filter(([,p]) => (p.selb||'').toUpperCase() === selb.toUpperCase())
-        .map(([id]) => _supa.from('solicitacoes_pecas').delete().eq('id', id).catch(()=>{}));
-      await Promise.all(promises);
+      const pendentesSelb = Object.entries(_solicitacoesPecas)
+        .filter(([,p]) => (p.selb||'').toUpperCase() === selb.toUpperCase() && !p.lida);
+      for(const [id, pData] of pendentesSelb){
+        await _supa.from('solicitacoes_pecas').update({
+          lida: true,
+          raw: { ...(pData || {}), lida: true, liberadoComSelb: true, liberadoEm: Date.now() }
+        }).eq('id', id).catch(()=>{});
+        if(_solicitacoesPecas[id]) _solicitacoesPecas[id].lida = true;
+      }
     }
     
     // Recarrega vista e sumário
@@ -6996,12 +7090,41 @@ async function entregarPeca(id, selb){
   }
 }
 async function removerSolicitacaoPeca(id, selb){
-  if(!confirm('Tem certeza que deseja EXCLUIR permanentemente esta solicitação do SELB ' + selb + '?\n\nEsta ação não pode ser desfeita e removerá o registro do histórico.')) return;
+  if(!confirm('Deseja remover esta solicitação de peça do SELB ' + (selb || '') + ' dos bolsões pendentes?\n\nO item sairá da fila pendente, mas será mantido salvo no histórico e nos relatórios de peças solicitadas.')) return;
   try {
-    const { error } = await _supa.from('solicitacoes_pecas').delete().eq('id', id);
+    const atual = _solicitacoesPecas[id] || {};
+    const patch = {
+      lida: true,
+      cancelada: true,
+      removida: true,
+      removidaEm: Date.now(),
+      removidaPor: (currentUser && currentUser.name) || 'Admin'
+    };
+    const rawAtualizado = { ...(atual || {}), ...patch };
+    const { error } = await _supa.from('solicitacoes_pecas').update({
+      lida: true,
+      raw: rawAtualizado
+    }).eq('id', id);
     if(error) throw error;
+
+    // Atualiza cache local imediatamente
+    if (_solicitacoesPecas[id]) {
+      Object.assign(_solicitacoesPecas[id], patch);
+      _solicitacoesPecas[id].raw = rawAtualizado;
+    }
+
+    if (typeof window._renderSolicitacoesPanel === 'function') {
+      window._renderSolicitacoesPanel('pecas-solicitacoes-panel', '');
+      window._renderSolicitacoesPanel('pecas-a-solicitacoes-panel', '');
+    }
+    if (typeof atualizarBadgeTopbarPecas === 'function') atualizarBadgeTopbarPecas();
+    if (typeof renderPecasView === 'function') renderPecasView();
+    if (typeof renderMaquinasAView === 'function') renderMaquinasAView();
+    if (typeof renderSolicitacoesDoDia === 'function') renderSolicitacoesDoDia();
+
+    _mostrarToastMovPrint('🗑️ Peça do SELB ' + (selb || '') + ' removida dos pendentes (preservada no histórico)');
   } catch(e){
-    alert('Erro ao excluir solicitação: ' + (e.message || 'sem permissão (verifique a policy RLS de DELETE na tabela solicitacoes_pecas)'));
+    alert('Erro ao remover solicitação: ' + (e.message || 'sem permissão'));
     console.error('removerSolicitacaoPeca error:', e);
   }
 }
@@ -8015,6 +8138,21 @@ function setCFilter(f,btn){
   renderConsulta();
 }
 
+window.imprimirPecasConsulta = function(selb, equip, setor, nome, startEpoch, endEpoch) {
+  if(!selb) return;
+  const start = parseInt(startEpoch) || 0;
+  const end = parseInt(endEpoch) || (Date.now() + 86400000);
+  const pcs = Object.values(_solicitacoesPecas || {}).filter(p => p.selb === selb && p.ts >= start && p.ts <= end);
+  if(!pcs.length){
+    alert('Nenhuma peça vinculada a este registro foi encontrada na memória.');
+    return;
+  }
+  _enviarPecaParaAgenteImpressao(pcs).then(function(ok){
+    if(ok) _mostrarToastMovPrint('🖨️ Spool: etiqueta de peças do SELB ' + selb + ' (' + pcs.length + ' item(ns)) enviada à impressora');
+    else _mostrarToastMovPrint('⚠️ Spool offline - etiqueta de peças não impressa.');
+  });
+};
+
 function renderConsulta(){
   const q = (document.getElementById('search-q').value||'').toUpperCase().trim();
   const selbMode = _consultaIsSelbQuery(q);
@@ -8042,7 +8180,9 @@ function renderConsulta(){
   const thEdit = document.getElementById('consulta-th-edit');
   const thReprovador = document.getElementById('consulta-th-reprovador');
   const temReprovados = src.some(h => h.status === 'rep' && h._reprovadoPor);
-  if(thAcao) thAcao.style.display = podeReprovar ? '' : 'none';
+  const temAguardando = src.some(h => h.status === 'aguardando');
+  const mostrarAcaoCol = podeReprovar || temAguardando;
+  if(thAcao) thAcao.style.display = mostrarAcaoCol ? '' : 'none';
   if(thEdit) thEdit.style.display = isAdmin ? '' : 'none';
   if(thReprovador) thReprovador.style.display = (temReprovados || isAdmin) ? '' : 'none';
 
@@ -8092,18 +8232,24 @@ function renderConsulta(){
   tbody.innerHTML=[...fl].map(h=>{
     // Coluna Ação (reprovar) — admin e qualidade
     let acaoTd = '';
-    if(podeReprovar){
-      // Qualidade pode reprovar qualquer registro independente de status ou setor
-      const jaReprovado = src.some(r => r.status==='rep' && r._reprovadoDe===h._docId);
-      if(jaReprovado){
-        acaoTd = `<td><span style="font-size:11px;color:var(--danger);font-weight:600">&#x2715; Reprovado</span></td>`;
-      } else if(h.status==='rep'){
-        acaoTd = `<td style="color:var(--muted);font-size:11px">—</td>`;
-      } else {
-        acaoTd = `<td><button class="btn bd" style="font-size:11px;padding:5px 10px;white-space:nowrap"
-             onclick="abrirReprovacao('${h._docId}','${h._dateKey||_consultaDateKey}','${h.selb}','${h.name}','${h.sector}')">
-             &#x26A0;&#xFE0F; Reprovar</button></td>`;
+    if(mostrarAcaoCol){
+      let innerBtn = '';
+      if(h.status === 'aguardando') {
+        innerBtn += `<button class="btn bd" style="font-size:11px;padding:5px 10px;white-space:nowrap;margin-right:4px;color:#22d3ee;border-color:rgba(34,211,238,0.3)" onclick="window.imprimirPecasConsulta('${h.selb}', '${(h.equipamento||'').replace(/'/g,"\\'")}', '${h.sector}', '${(h.name||'').replace(/'/g,"\\'")}', ${h.startEpoch||0}, ${h.endEpoch||0})">🖨️ Etiqueta</button>`;
       }
+      if(podeReprovar){
+        const jaReprovado = src.some(r => r.status==='rep' && r._reprovadoDe===h._docId);
+        if(jaReprovado){
+          innerBtn += `<span style="font-size:11px;color:var(--danger);font-weight:600">&#x2715; Reprovado</span>`;
+        } else if(h.status==='rep'){
+          innerBtn += `<span style="color:var(--muted);font-size:11px">—</span>`;
+        } else {
+          innerBtn += `<button class="btn bd" style="font-size:11px;padding:5px 10px;white-space:nowrap"
+               onclick="abrirReprovacao('${h._docId}','${h._dateKey||_consultaDateKey}','${h.selb}','${h.name}','${h.sector}')">
+               &#x26A0;&#xFE0F; Reprovar</button>`;
+        }
+      }
+      acaoTd = `<td>${innerBtn}</td>`;
     }
 
     // Coluna Editar — só admin (todos os registros finalizados + em andamento)
@@ -14140,7 +14286,7 @@ async function renderPecasSubView(){
 async function startMaquinasAListener(){
   if (_maquinasAListener) return;
   _maquinasAListener = true;
-  const { data } = await _supa.from('maquinas_a').select('*');
+  const { data } = await _supa.from('maquinas_a').select('*').limit(500); // AUDIT: limit adicionado para conter egress
   _maquinasA = {};
   (data || []).forEach(r => { _maquinasA[r.id] = r.raw || r; });
   if(document.getElementById('view-maquinas-a')?.classList.contains('active')){
@@ -14447,11 +14593,15 @@ function renderMaquinasAView(){
     const dataStr = dt.toLocaleDateString('pt-BR') + ' ' + dt.toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'});
     const selbEsc = (m.selb || '').replace(/'/g, "\\'");
 
+    // Verifica pecas solicitadas para badge no botao
+    const _maPecas = Object.values(_solicitacoesPecas || {}).filter(function(p){
+      return (p.selb||'').toUpperCase().trim() === (m.selb||'').toUpperCase().trim();
+    });
     const btnImprimir = `<button onclick="qualGerarEtiquetaUnica('${selbEsc}')"
       title="Gerar etiqueta (nome, SELB, série, SKU)"
       style="background:rgba(167,139,250,0.12);border:1px solid rgba(167,139,250,0.4);border-radius:7px;color:var(--purple);font-family:var(--font);font-size:11px;font-weight:700;padding:5px 10px;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:5px">
       🏷️ Etiqueta
-    </button>`;
+    </button>${_maPecas.length ? ` <button onclick="imprimirEtiquetaAguardandoPecas('${selbEsc}')" title="Imprimir etiqueta com ${_maPecas.length} peça(s) solicitada(s)" style="background:rgba(232,121,249,.12);border:1px solid rgba(232,121,249,.4);border-radius:8px;color:#e879f9;font-family:var(--font);font-size:11px;font-weight:700;padding:5px 10px;cursor:pointer;white-space:nowrap">🔩 Peças (${_maPecas.length})</button>` : ''}`;
 
     const acoesHtml = isAdmin
       ? `<div style="display:flex;gap:5px;flex-wrap:wrap">
@@ -14506,6 +14656,82 @@ function imprimirEtiquetaMaquinaA(selb) {
   });
 }
 window.imprimirEtiquetaMaquinaA = imprimirEtiquetaMaquinaA;
+
+// -- Imprime etiqueta de pecas para um SELB em Aguardando Pecas / Maquinas A ---
+async function imprimirEtiquetaAguardandoPecas(selb) {
+  if (!selb) return;
+  var selbUp = selb.toUpperCase().trim();
+  var pcs = Object.values(_solicitacoesPecas || {}).filter(function(p) {
+    return (p.selb || '').toUpperCase().trim() === selbUp;
+  });
+
+  // Se não encontrou no cache de memória local (ex: peças históricas/antigas), busca direto no banco
+  if (!pcs.length && typeof _supa !== 'undefined') {
+    try {
+      const { data, error } = await _supa.from('solicitacoes_pecas')
+        .select('*')
+        .eq('selb', selbUp)
+        .order('ts', { ascending: false })
+        .limit(50); // AUDIT: limit adicionado para conter egress
+      if (!error && data && data.length) {
+        pcs = data.map(r => r.raw || r);
+      }
+    } catch(eDb) {
+      console.warn('[EtiquetaPecas] Erro ao consultar banco:', eDb);
+    }
+  }
+
+  if (!pcs.length) {
+    var h = (typeof history !== 'undefined' ? history : []).find(function(r){
+      return r && r.selb === selbUp && r.status === 'aguardando';
+    });
+    var mA = (typeof _maquinasA !== 'undefined' ? Object.values(_maquinasA || {}) : []).find(function(r){
+      return r && (r.selb || '').toUpperCase().trim() === selbUp;
+    });
+    var item = {
+      selb: selbUp,
+      equipamento: (h && h.equipamento) || (mA && mA.equipamento) || 'AGUARDANDO PEÇAS',
+      de: (h && h.sector) || (mA && mA.setor) || '',
+      para: 'Estoque',
+      motivo: (mA && mA.observacao) || (h && (h.comentario || h.motivo)) || 'Aguardando Peças',
+      ts: Date.now(),
+      user: (h && h.name) || (mA && mA.registradoPor) || (currentUser && currentUser.name) || 'Sistema',
+    };
+    _imprimirEtiquetaSpoolBackground([item], {
+      onAfterPrint: function(){ _mostrarToastMovPrint('🏷️ Etiqueta enviada: ' + selbUp + ' (sem peças avulsas)'); },
+      onCancel: function(){
+        // Fallback no navegador se spool local estiver offline
+        _imprimirEtiquetaIframeOculto([item], {
+          onAfterPrint: function(){ _mostrarToastMovPrint('🏷️ Etiqueta impressa via navegador: ' + selbUp); }
+        });
+      },
+    });
+    return;
+  }
+
+  _enviarPecaParaAgenteImpressao(pcs).then(function(ok) {
+    if (ok) {
+      _mostrarToastMovPrint('🏷️ Spool: etiqueta de peças do SELB ' + selbUp + ' (' + pcs.length + ' item(ns)) enviada à impressora');
+    } else {
+      _mostrarToastMovPrint('⚠️ Spool offline — abrindo impressão direta da etiqueta de peças...');
+      try {
+        var docHtml = _htmlDocumentoImpressaoPeca(pcs);
+        var win = window.open('', '_blank', 'width=450,height=650');
+        if (win) {
+          win.document.write(docHtml);
+          win.document.close();
+          setTimeout(function(){ win.focus(); win.print(); }, 250);
+        } else {
+          alert('Permita pop-ups no navegador para imprimir a etiqueta quando o spool estiver offline.');
+        }
+      } catch(e) {
+        console.error('Erro ao abrir fallback de impressão:', e);
+      }
+    }
+  });
+}
+window.imprimirEtiquetaAguardandoPecas = imprimirEtiquetaAguardandoPecas;
+
 
 // ── Admin remove (exclui permanentemente) o SELB da lista Máquinas A ─────
 async function admRemoverMaquinaA(id, selb){
@@ -21788,6 +22014,7 @@ function fluxolabSwitchTab(tab) {
     }
 }
 
+
 function fluxolabRenderModelos() {
   window._fluxolabModelosExpanded = window._fluxolabModelosExpanded || new Set();
   const grid = document.getElementById('fluxolab-modelos-grid');
@@ -22272,6 +22499,9 @@ function fluxolabRenderModelos() {
   const _sumFaltantes = Math.max(0, _sumTotalCL - _sumTotalLAB);
   const _sumModelos  = entradas.length;
 
+  // Atualiza badge na aba "📋 Checklists Importados" do dashboard
+  _fluxolabAtualizarBadgeChecklists(_sumTotalCL);
+
   function _sumCard(label, val, color, icon) {
     return `<div style="background:var(--bg2);border:1px solid var(--border2);border-radius:12px;padding:10px 18px;display:flex;flex-direction:column;align-items:center;min-width:110px;gap:2px">
       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);white-space:nowrap">${icon} ${label}</div>
@@ -22348,6 +22578,10 @@ function fluxolabStartChecklistsListener(){
     fluxolabRenderChecklistsImported();
     // Atualiza badge e painel "Caindo Hoje" se estiver ativo
     _fluxolabAtualizarBadgeCaindo();
+    // Atualiza badge de total de checklists na aba
+    if (typeof _fluxolabAtualizarBadgeChecklists === 'function') {
+      _fluxolabAtualizarBadgeChecklists(_fluxolabChecklistsImported.length);
+    }
     if (_fluxolabActiveTab === 'caindo') fluxolabRenderCaindoHoje();
     // Re-renderiza a tabela de Qualidade se estiver visível, para que o badge
     // "📋 Checklist" apareça nos registros assim que os dados chegarem do Firebase
@@ -22396,9 +22630,18 @@ async function fluxolabImportChecklists(ev){
     await dbDelete('/fluxolab_checklists');
     const batch = {};
     rows.forEach((r, i) => { batch[String(i)] = JSON.stringify(r); });
-    // Salva o timestamp da importação junto com os dados
-    batch['_importedAt'] = JSON.stringify({ ts: Date.now(), user: (currentUser && (currentUser.name || currentUser.email)) || 'admin' });
+    // Salva o timestamp e contagem da importação junto com os dados
+    const _importedMeta = { ts: Date.now(), user: (currentUser && (currentUser.name || currentUser.email)) || 'admin', count: rows.length };
+    batch['_importedAt'] = JSON.stringify(_importedMeta);
     await dbPatch('/fluxolab_checklists', batch);
+
+    // Salva também no app_config para acesso instantâneo pelo Dashboard sem carregar a planilha
+    try {
+      await _supa.from('app_config').upsert({ key: 'checklists_import_at', value: _importedMeta }, { onConflict: 'key' });
+    } catch(e) {}
+    if (typeof _fluxolabAtualizarBadgeChecklists === 'function') {
+      _fluxolabAtualizarBadgeChecklists(rows.length);
+    }
 
     hideLoader();
     alert('✅ ' + rows.length + ' checklists importados!');
@@ -22415,6 +22658,12 @@ async function fluxolabClearChecklists(){
   if (!_fluxolabChecklistsImported.length) return;
   if (!confirm('Limpar checklists importados?')) return;
   await dbDelete('/fluxolab_checklists');
+  try {
+    await _supa.from('app_config').upsert({ key: 'checklists_import_at', value: { ts: Date.now(), count: 0 } }, { onConflict: 'key' });
+  } catch(e) {}
+  if (typeof _fluxolabAtualizarBadgeChecklists === 'function') {
+    _fluxolabAtualizarBadgeChecklists(0);
+  }
 }
 
 // Localiza a chave da coluna de modelo de forma tolerante (maiúsculas, acentos, espaços)
@@ -25484,9 +25733,17 @@ window.renderSolicitacoesDoDia = function(){
 
     // Células compartilhadas (mescladas via rowspan)
     const hora = `${new Date(first.ts).toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit'})} ${new Date(first.ts).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}`;
-    const todosLidos  = items.every(it => it.lida);
-    const statusClass = todosLidos ? 'bok' : 'bpec';
-    const statusLabel = todosLidos ? 'Entregue' : 'Pendente';
+    const todosCancelados = items.every(it => it.cancelada || it.removida);
+    const todosLidos      = items.every(it => it.lida);
+    let statusClass = 'bpec';
+    let statusLabel = 'Pendente';
+    if (todosCancelados) {
+      statusClass = 'brep';
+      statusLabel = 'Removida';
+    } else if (todosLidos) {
+      statusClass = 'bok';
+      statusLabel = 'Entregue';
+    }
 
     const sharedCells = `
       <td rowspan="${rowspan}" style="font-family:var(--mono);font-size:12px;color:var(--muted);vertical-align:top;padding-top:10px">${hora}</td>
@@ -26459,7 +26716,7 @@ async function testarSpoolEtiquetaMovimentacao(){
     _wireBipeInputs();
   }
   // Reaplica a cada 3.5s como rede de segurança (renders fora do hook - otimizado para poupar CPU)
-  setInterval(_wireBipeInputs, 3500);
+  setInterval(function(){ if(!document.hidden) _wireBipeInputs(); }, 3500); // AUDIT: guard hidden para poupar CPU
 
   console.log('[LabTech] patch-bipagem-peca v3 ativo: scan mobile robusto, anti-blur, anti-duplicado, foco preservado.');
 })();
@@ -26715,7 +26972,7 @@ async function testarSpoolEtiquetaMovimentacao(){
     _wireBipeInputs();
   }
 
-  setInterval(_wireBipeInputs, 3500);
+  setInterval(function(){ if(!document.hidden) _wireBipeInputs(); }, 3500); // AUDIT: guard hidden para poupar CPU
   console.log('[LabTech] patch-bipagem-peca v4 ativo: HID por code, validação e anti-layout-errado.');
 })();
 /* ════════════════════════════════════════════════════════════════════════
@@ -27333,7 +27590,7 @@ async function testarSpoolEtiquetaMovimentacao(){
   }
 
   _wireAll();
-  setInterval(_wireAll, 1500);
+  setInterval(function(){ if(!document.hidden) _wireAll(); }, 1500); // AUDIT: guard hidden para poupar CPU
   console.log('[LabTech] patch v5 ativo: teclado manual liberado no celular, auto-commit só para scanner HID.');
 })();
 
@@ -27548,7 +27805,7 @@ window._copiarSelb = function (selb, btn) {
   }
 
   // Reaplica periodicamente (cobre inserções tardias / reconexão Supabase)
-  setInterval(_injetarSugestoes, 1800);
+  setInterval(function(){ if(!document.hidden) _injetarSugestoes(); }, 1800); // AUDIT: guard hidden para poupar CPU
   if(document.readyState === 'loading'){
     document.addEventListener('DOMContentLoaded', _injetarSugestoes);
   } else {
@@ -27768,6 +28025,7 @@ window._copiarSelb = function (selb, btn) {
 
   // Fallback: reaplica periodicamente quando a view está ativa
   setInterval(function(){
+    if(document.hidden) return; // AUDIT: não processa em background
     var view = document.getElementById('view-pecas');
     if(view && view.classList.contains('active')) _aplicar();
   }, 2500);

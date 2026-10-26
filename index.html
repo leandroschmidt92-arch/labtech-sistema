@@ -664,6 +664,11 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
             <span style="font-family: var(--mono); font-size: 15px; font-weight: 800;"><span id="exp-comp-atual" style="color: var(--warn);">0</span><span style="color: var(--muted);">/</span><span id="exp-comp-total" style="color: var(--muted);">0</span></span>
           </div>
           <div style="height: 24px; width: 1px; background: var(--border); margin: 0 4px;"></div>
+          <div id="dash-checklists-pill" title="Total de checklists na planilha importada (FluxoLAB)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.15); border-radius: 10px;">
+            <span style="font-size: 10px; font-weight: 800; color: #f59e0b; letter-spacing: 0.05em;">📋 CHECKLISTS</span>
+            <span id="dash-checklists-total" style="font-family: var(--mono); font-size: 15px; font-weight: 800; color: #f59e0b;">—</span>
+          </div>
+          <div style="height: 24px; width: 1px; background: var(--border); margin: 0 4px;"></div>
           <div id="dash-liberadas-pill" title="Total de equipamentos liberados pela Qualidade hoje" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(236, 72, 153, 0.06); border: 1px solid rgba(236, 72, 153, 0.15); border-radius: 10px;">
             <span style="font-size: 10px; font-weight: 800; color: #ec4899; letter-spacing: 0.05em;">LIBERADAS NO DIA</span>
             <span id="dash-liberadas-total" style="font-family: var(--mono); font-size: 15px; font-weight: 800; color: #ec4899;">0</span>
@@ -3009,7 +3014,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
           font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
           letter-spacing:.02em;transition:all .15s;
-        ">📋 Checklists Importados</button>
+        ">📋 Checklists Importados <span id="fluxolab-checklists-count-badge" style="display:none;background:#f59e0b;color:#1a0f00;font-size:10px;font-weight:900;border-radius:10px;padding:1px 7px;margin-left:4px;vertical-align:middle">0</span></button>
       </div>
     </div>
 

@@ -1,0 +1,27 @@
+﻿20|setInterval(check, 1000);
+111|const _hookInterval = setInterval(function(){
+834|_sbUsageTimer = setInterval(() => {
+1785|setInterval(() => {
+4057|_bloqueioTimer = setInterval(() => {
+5149|timers[uid] = setInterval(()=>{
+5356|_dashLibTimer = setInterval(() => {
+5481|setInterval(fetchDashboardSaudeEquipe, 900000); // 15 min (era 5)
+9318|_majTimerInterval = setInterval(_updateLive, 1000);
+13396|overlayCountdownInterval=setInterval(tick,1000);
+18348|scannerBarcodeInterval = setInterval(scannerBarcodeLoop, 150); // Leitura ultra-rápida de código de barras
+18349|scannerOcrInterval = setInterval(scannerOcrLoop, 2500);       // Leitura de texto (OCR) secundária
+19901|const id = setInterval(tick, intervalMs);
+25399|window._bolsoesTick = setInterval(function(){
+25947|_movSpoolPingTimer = setInterval(() => { _pingSpoolInvisivel(); }, 15000);
+26718|setInterval(_wireBipeInputs, 3500);
+26974|setInterval(_wireBipeInputs, 3500);
+27435|const _waitHook = setInterval(function () {
+27592|setInterval(_wireAll, 1500);
+27807|setInterval(_injetarSugestoes, 1800);
+28020|var iv = setInterval(function(){
+28026|setInterval(function(){
+28505|if (!_checkInterval) _checkInterval = setInterval(_checkRecurring, 10000); // checa a cada 10s
+28872|setInterval(function() {
+29090|setInterval(_syncBodyClass, 4000);
+29156|setInterval(_hardenInputs, 4000);
+30912|var t = setInterval(function(){
