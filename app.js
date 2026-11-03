@@ -12398,14 +12398,96 @@ let editingEquipKey = null;
 let _equipManualInfo = {}; // { 'SELB-001': <epoch ms em que foi cadastrado manualmente> }
 const EQUIP_MANUAL_GRACE_MS = 10 * 24 * 60 * 60 * 1000; // 10 dias
 
-async function loadEquipamentos(){
-  const [r1, r2, r3, r4] = await Promise.all([
+// ── OTIMIZAÇÃO EGRESS (Sugestão 1): Cache Inteligente no Navegador ─────────────
+// Armazena catálogo de equipamentos, séries, skus e unitizadores no localStorage.
+// A cada F5 / reload, consulta apenas a chave 'equip_import_at' (~50 bytes).
+// Se a planilha não mudou no banco, NENHUMA tabela é baixada (economia de ~2MB/reload).
+const _EQUIP_CACHE_KEY    = 'sb_equip_cache_v1';
+const _EQUIP_CACHE_TS_KEY = 'sb_equip_cache_ts_v1';
+
+function _equipHydrateFromLocalCache(){
+  try {
+    const raw = localStorage.getItem(_EQUIP_CACHE_KEY);
+    if(!raw) return false;
+    const parsed = JSON.parse(raw);
+    if(parsed && parsed.equipamentos && Object.keys(parsed.equipamentos).length > 0){
+      equipamentos       = parsed.equipamentos || {};
+      _equipManualInfo   = parsed.equipManualInfo || {};
+      _equipSeries       = parsed.equipSeries || {};
+      _equipSkus         = parsed.equipSkus || {};
+      _equipUnitizadores = parsed.equipUnitizadores || {};
+      if(parsed.importAt) window._equipImportAt = parsed.importAt;
+      return true;
+    }
+  } catch(e) {
+    console.warn('[EquipCache] Falha ao hidratar do cache local:', e);
+  }
+  return false;
+}
+
+function _equipSaveToLocalCache(serverTs, importAtObj){
+  try {
+    const payload = {
+      ts: serverTs || Date.now(),
+      importAt: importAtObj || window._equipImportAt || null,
+      equipamentos,
+      equipManualInfo: _equipManualInfo,
+      equipSeries: _equipSeries,
+      equipSkus: _equipSkus,
+      equipUnitizadores: _equipUnitizadores
+    };
+    localStorage.setItem(_EQUIP_CACHE_KEY, JSON.stringify(payload));
+    localStorage.setItem(_EQUIP_CACHE_TS_KEY, String(payload.ts));
+  } catch(e) {
+    console.warn('[EquipCache] Quota de localStorage ou erro ao salvar:', e);
+  }
+}
+
+// Hidratação síncrona imediata na carga do script (zero lag e dados prontos antes de qualquer render)
+_equipHydrateFromLocalCache();
+
+async function loadEquipamentos(force = false){
+  // 1. Garante hidratação local se a memória estiver vazia
+  const hasLocal = (Object.keys(equipamentos).length > 0) || _equipHydrateFromLocalCache();
+  const localTs  = localStorage.getItem(_EQUIP_CACHE_TS_KEY);
+
+  // 2. Se temos cache e não é recarga forçada, checa apenas o timestamp da última importação (apenas ~50 bytes!)
+  if(!force && hasLocal && localTs){
+    try {
+      const { data: cfgData, error: cfgErr } = await _supa
+        .from('app_config')
+        .select('value')
+        .eq('key', 'equip_import_at')
+        .maybeSingle();
+
+      if(!cfgErr && cfgData && cfgData.value){
+        window._equipImportAt = cfgData.value;
+        const serverTs = String(cfgData.value.ts || '');
+        if(serverTs && serverTs === String(localTs)){
+          // Cache 100% atualizado! NENHUM dado de tabela é baixado.
+          // Economiza ~2 MB a cada refresh da página!
+          return;
+        }
+      } else if (!cfgErr && !cfgData) {
+        // Se ainda não existe config gravada, preserva o cache local já existente
+        return;
+      }
+    } catch(e){
+      console.warn('[EquipCache] Falha ao checar timestamp remoto, usando cache local:', e);
+      return; // Em caso de falha de rede temporária, mantém o cache local seguro
+    }
+  }
+
+  // 3. Cache inexistente, desatualizado ou force=true: baixa as 4 tabelas
+  // OTIMIZAÇÃO: extrai apenas o campo necessário para diminuir o payload
+  const [r1, r2, r3, r4, rCfg] = await Promise.all([
     _supa.from('equipamentos').select('id, nome:raw->>nome, manual:raw->>manual, criadoEm:raw->>criadoEm'),
-    _supa.from('equipamentos_series').select('id, raw'),
-    _supa.from('equipamentos_skus').select('id, raw'),
-    _supa.from('equipamentos_unitizadores').select('id, raw'),
+    _supa.from('equipamentos_series').select('id, serie:raw->>serie'),
+    _supa.from('equipamentos_skus').select('id, sku:raw->>sku'),
+    _supa.from('equipamentos_unitizadores').select('id, unitizador:raw->>unitizador'),
+    _supa.from('app_config').select('value').eq('key', 'equip_import_at').maybeSingle()
   ]);
-  // Monta objetos temporários antes de atribuir — evita flicker de tela vazia
+
   const tmpEq = {};
   const tmpManual = {};
   (r1.data || []).forEach(e => {
@@ -12413,18 +12495,33 @@ async function loadEquipamentos(){
     const isManual = (e.manual === 'true' || e.manual === true);
     if(isManual) tmpManual[e.id] = parseInt(e.criadoEm, 10) || Date.now();
   });
+
   const tmpSeries = {};
-  (r2.data || []).forEach(e => { tmpSeries[e.id] = (e.raw && e.raw.serie) ? e.raw.serie : e.raw; });
+  (r2.data || []).forEach(e => {
+    tmpSeries[e.id] = e.serie || (e.raw && e.raw.serie) || e.raw || '';
+  });
+
   const tmpSkus = {};
-  (r3.data || []).forEach(e => { tmpSkus[e.id] = (e.raw && e.raw.sku) ? e.raw.sku : e.raw; });
+  (r3.data || []).forEach(e => {
+    tmpSkus[e.id] = e.sku || (e.raw && e.raw.sku) || e.raw || '';
+  });
+
   const tmpUnit = {};
-  (r4.data || []).forEach(e => { tmpUnit[e.id] = (e.raw && e.raw.unitizador) ? e.raw.unitizador : e.raw; });
-  // Atribui tudo de uma vez (atômico)
+  (r4.data || []).forEach(e => {
+    tmpUnit[e.id] = e.unitizador || (e.raw && e.raw.unitizador) || e.raw || '';
+  });
+
   equipamentos       = tmpEq;
-  _equipManualInfo    = tmpManual;
+  _equipManualInfo   = tmpManual;
   _equipSeries       = tmpSeries;
   _equipSkus         = tmpSkus;
   _equipUnitizadores = tmpUnit;
+
+  const serverCfg = rCfg?.data?.value;
+  const sTs = serverCfg?.ts || Date.now();
+  if(serverCfg) window._equipImportAt = serverCfg;
+
+  _equipSaveToLocalCache(sTs, serverCfg);
 }
 
 // Helper de normalização global para busca tolerante de SELBs
@@ -12806,6 +12903,7 @@ async function importEquipFile(input){
     const _equipImportAt = { ts: Date.now(), user: (currentUser && (currentUser.name || currentUser.email)) || 'admin', count };
     await _supa.from('app_config').upsert({ key: 'equip_import_at', value: _equipImportAt }, { onConflict: 'key' });
     window._equipImportAt = _equipImportAt;
+    _equipSaveToLocalCache(_equipImportAt.ts, _equipImportAt);
     _equipUpdateImportBadge();
     renderEquipTable();
     const serieMsg = serieColOrig ? '\nColuna Série (Atributos): "' + serieColOrig + '" — ' + Object.keys(seriesBatch).length + ' séries importadas' : '\n⚠️ Coluna de série (Atributos) não encontrada';
@@ -13046,6 +13144,14 @@ async function saveEquipamento(){
   }
   
   closeModal('modal-equip');
+  const _saveTs = Date.now();
+  _equipSaveToLocalCache(_saveTs);
+  if(typeof _supa !== 'undefined' && _supa){
+    _supa.from('app_config').upsert({
+      key: 'equip_import_at',
+      value: { ts: _saveTs, user: (currentUser && (currentUser.name || currentUser.email)) || 'admin', count: Object.keys(equipamentos).length }
+    }, { onConflict: 'key' }).catch(()=>{});
+  }
   renderEquipTable();
 }
 
@@ -13060,6 +13166,14 @@ async function deleteEquip(selb){
   delete _equipSkus[selb];
   await _supa.from('equipamentos_unitizadores').delete().eq('id', selb);
   delete _equipUnitizadores[selb];
+  const _delTs = Date.now();
+  _equipSaveToLocalCache(_delTs);
+  if(typeof _supa !== 'undefined' && _supa){
+    _supa.from('app_config').upsert({
+      key: 'equip_import_at',
+      value: { ts: _delTs, user: (currentUser && (currentUser.name || currentUser.email)) || 'admin', count: Object.keys(equipamentos).length }
+    }, { onConflict: 'key' }).catch(()=>{});
+  }
   renderEquipTable();
 }
 
@@ -13074,6 +13188,14 @@ async function clearEquipamentos(){
   _equipSeries = {};
   _equipSkus = {};
   _equipUnitizadores = {};
+  const _clrTs = Date.now();
+  _equipSaveToLocalCache(_clrTs);
+  if(typeof _supa !== 'undefined' && _supa){
+    _supa.from('app_config').upsert({
+      key: 'equip_import_at',
+      value: { ts: _clrTs, user: (currentUser && (currentUser.name || currentUser.email)) || 'admin', count: 0 }
+    }, { onConflict: 'key' }).catch(()=>{});
+  }
   renderEquipTable();
 }
 
@@ -22257,6 +22379,11 @@ function fluxolabRenderModelos() {
       return true;
     })
     .sort((a, b) => {
+      // ── Urgências sempre no topo (qualquer filtro/sort) ───────────────────
+      const urgA = _fluxolabModeloUrgenteQtd(a[0]) > 0 ? 1 : 0;
+      const urgB = _fluxolabModeloUrgenteQtd(b[0]) > 0 ? 1 : 0;
+      if (urgA !== urgB) return urgB - urgA;
+
       if (sortFilter === 'mediaDias') return b[1].mediaDiasUteis - a[1].mediaDiasUteis;
       if (sortFilter === 'maxDias')   return b[1].maxAberto   - a[1].maxAberto;
       if (sortFilter === 'urgencia')  {
@@ -22583,6 +22710,20 @@ function fluxolabStartChecklistsListener(){
       _fluxolabAtualizarBadgeChecklists(_fluxolabChecklistsImported.length);
     }
     if (_fluxolabActiveTab === 'caindo') fluxolabRenderCaindoHoje();
+    // Re-ordena Pendências Mistas/Complexas por urgência agora que os checklists chegaram.
+    // (Na carga inicial, pendGroupStateByPedido roda antes dos checklists estarem disponíveis
+    // no Firebase, então urgências ficavam fora de ordem até o próximo sort manual.)
+    if (typeof _fluxolabPendLoaded !== 'undefined' && _fluxolabPendLoaded
+        && typeof pendGroupStateByPedido === 'function'
+        && typeof _fluxolabPendenciasState !== 'undefined') {
+      try {
+        Object.keys(_fluxolabPendenciasState || {}).forEach(function(t) { pendGroupStateByPedido(t); });
+        if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'pendencias'
+            && typeof fluxolabRenderPendencias === 'function') {
+          fluxolabRenderPendencias();
+        }
+      } catch(_e) { console.warn('[FluxoLAB] Erro ao re-ordenar pendências por urgência:', _e); }
+    }
     // Re-renderiza a tabela de Qualidade se estiver visível, para que o badge
     // "📋 Checklist" apareça nos registros assim que os dados chegarem do Firebase
     // (sem precisar que o usuário visite o FluxoLAB primeiro).
@@ -22851,6 +22992,11 @@ function fluxolabRenderChecklistsImported(){
       );
     })
     .sort((a,b) => {
+      // ── Urgências sempre no topo ─────────────────────────────
+      const urgA = (typeof _fluxolabModeloUrgenteQtd === 'function' && _fluxolabModeloUrgenteQtd(a[0]) > 0) ? 1 : 0;
+      const urgB = (typeof _fluxolabModeloUrgenteQtd === 'function' && _fluxolabModeloUrgenteQtd(b[0]) > 0) ? 1 : 0;
+      if (urgA !== urgB) return urgB - urgA;
+
       const avgA = a[1].total ? a[1].somaUteis/a[1].total : 0;
       const avgB = b[1].total ? b[1].somaUteis/b[1].total : 0;
       return avgB - avgA;

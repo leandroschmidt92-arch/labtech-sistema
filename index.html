@@ -12,6 +12,9 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
+<!-- Etiquetador: JsBarcode Code 128 -->
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+
 <style>
 /* ═══ FLUXOLAB — Layout estável (não quebra ao trocar de aba) ═══ */
 #view-fluxolab {
@@ -347,6 +350,91 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     margin: 0mm;
   }
 }
+/* ═══════════════════════════════════════════════
+   ETIQUETADOR — Etiqueta de Código 150×100 mm   ETIQUETADOR-CSS-INTEGRADO
+   Integrado à aba 🛠️ SELBs Aguardando Peças
+═══════════════════════════════════════════════ */
+#etq-painel {
+  background: rgba(99,179,237,.07);
+  border: 1px solid rgba(99,179,237,.35);
+  border-radius: 14px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+#etq-painel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 0; flex-wrap: wrap; gap: 8px;
+}
+#etq-painel-header h3 {
+  font-size: 14px; font-weight: 700; color: #63b3ed; margin: 0;
+  display: flex; align-items: center; gap: 8px;
+}
+#etq-body { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; margin-top: 16px; }
+#etq-form-col { flex: 1; min-width: 240px; }
+#etq-preview-col { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+
+/* Label física 150×100 mm */
+.etq-label-sheet {
+  width: 150mm; height: 100mm; padding: 6mm 7mm 5mm; box-sizing: border-box;
+  background: #ffffff; color: #000000;
+  display: grid; grid-template-rows: auto 1fr auto; gap: 3mm; overflow: hidden;
+  font-family: 'Arial Black', Arial, sans-serif;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  border-radius: 6px; border: 1px solid #ccc; box-shadow: 0 2px 12px rgba(0,0,0,.18);
+}
+.etq-label-head { display: flex; align-items: baseline; gap: 4mm; padding-bottom: 2.5mm; border-bottom: 0.7mm solid #000; }
+.etq-label-kicker { font-size: 3.4mm; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #000; }
+.etq-label-code { font-family: 'JetBrains Mono','Courier New',monospace; font-weight: 800; font-size: 15mm; line-height: 1; letter-spacing: -0.02em; color: #000; }
+.etq-label-desc {
+  margin: 0; font-weight: 800; text-transform: uppercase; line-height: 1.12;
+  letter-spacing: -0.005em; overflow: hidden; display: -webkit-box;
+  -webkit-box-orient: vertical; -webkit-line-clamp: 3; align-self: center; color: #000;
+}
+.etq-label-desc[data-size="lg"] { font-size: 7.6mm; }
+.etq-label-desc[data-size="md"] { font-size: 6.4mm; }
+.etq-label-desc[data-size="sm"] { font-size: 5.2mm; -webkit-line-clamp: 4; }
+.etq-label-foot { display: flex; flex-direction: column; align-items: center; gap: 1.2mm; }
+.etq-barcode-wrap { width: 110mm; height: 26mm; }
+.etq-barcode-svg { display: block; width: 100%; height: 100%; }
+.etq-label-human {
+  font-family: 'JetBrains Mono','Courier New',monospace;
+  font-size: 5mm; font-weight: 600; letter-spacing: 0.35em; padding-left: 0.35em; color: #000;
+}
+/* Preview escalado */
+#etq-preview-scale-wrap {
+  transform-origin: top center;
+  transform: scale(0.52);
+  margin-bottom: calc((100mm * 0.52) - 100mm);
+  margin-top: 0;
+}
+#etq-print-area { display: none; }
+
+/* ──── IMPRESSÃO da etiqueta de código ──── */
+@media print {
+  body.printing-etiqueta-cod .topbar,
+  body.printing-etiqueta-cod .status-bar,
+  body.printing-etiqueta-cod #layer-login,
+  body.printing-etiqueta-cod #layer-loader,
+  body.printing-etiqueta-cod .modal-overlay,
+  body.printing-etiqueta-cod .modal,
+  body.printing-etiqueta-cod .schedule-overlay,
+  body.printing-etiqueta-cod #layer-app { display: none !important; }
+  body.printing-etiqueta-cod #etq-print-area {
+    display: block !important;
+    position: fixed; inset: 0; background: #fff; z-index: 9999;
+  }
+  body.printing-etiqueta-cod .etq-label-sheet {
+    width: 150mm !important; height: 100mm !important;
+    box-shadow: none !important; border: none !important; border-radius: 0 !important;
+    margin: 0 !important; page-break-after: always !important; break-after: page !important;
+  }
+  body.printing-etiqueta-cod .etq-label-sheet:last-child {
+    page-break-after: auto !important; break-after: auto !important;
+  }
+  body.printing-etiqueta-cod * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  @page { size: 150mm 100mm; margin: 0; }
+}
+
 /* FluxoLAB tag-input: placeholder não vira maiúsculo */
 #fmov-selb-inp::placeholder{text-transform:none;font-weight:400;color:var(--muted);-webkit-text-fill-color:var(--muted);font-family:var(--font);font-size:12px;opacity:.7}
 
@@ -2228,6 +2316,80 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       </div>
     </div>
 
+    <!-- ── ETIQUETADOR DE CÓDIGO (integrado do projeto etiquetador) ── -->
+    <div id="etq-painel">
+      <div id="etq-painel-header">
+        <h3>
+          🏷️ Imprimir Etiqueta de Código
+          <span style="background:#63b3ed;color:#0d1f33;border-radius:99px;padding:2px 8px;font-size:10px;font-weight:800">150×100 mm · Code 128</span>
+        </h3>
+        <button onclick="etqToggle()" id="btn-toggle-etq"
+          style="background:none;border:none;color:#63b3ed;font-size:18px;cursor:pointer;line-height:1;padding:2px 6px"
+          title="Retrair/Expandir">▼</button>
+      </div>
+
+      <div id="etq-body-wrap">
+        <!-- Campo único de cola -->
+        <div style="margin:10px 0 14px">
+          <label style="font-size:10px;font-weight:700;color:#63b3ed;text-transform:uppercase;letter-spacing:.08em;display:block;margin-bottom:6px">
+            📋 Cole o código + descrição (separados por TAB ou espaço)
+          </label>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input id="etq-paste-field"
+              class="sinp"
+              placeholder="Ex.: FA16191   CABECA DE IMPRESSAO EPSON WF6090..."
+              oninput="etqParsePaste(this.value)"
+              onpaste="setTimeout(()=>etqParsePaste(document.getElementById('etq-paste-field').value),10)"
+              style="flex:1;min-width:280px;font-family:var(--mono);font-size:13px;font-weight:600;letter-spacing:.02em">
+            <button onclick="etqImprimir()"
+              style="background:#63b3ed;border:none;border-radius:9px;color:#0d1f33;font-family:var(--font);font-size:13px;font-weight:700;padding:10px 22px;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:6px">
+              🖨️ Imprimir
+            </button>
+            <button onclick="etqLimpar()"
+              style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--muted);font-family:var(--font);font-size:13px;font-weight:600;padding:10px 14px;cursor:pointer">
+              ✕
+            </button>
+          </div>
+          <div id="etq-parsed-info" style="margin-top:6px;font-size:11px;display:none;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="color:var(--muted)">Código:</span>
+            <code id="etq-parsed-code" style="color:#63b3ed;font-weight:700;font-size:12px"></code>
+            <span style="color:var(--muted)">·</span>
+            <span style="color:var(--muted)">Descrição:</span>
+            <span id="etq-parsed-desc-info" style="color:var(--text);font-size:11px"></span>
+          </div>
+          <div id="etq-code-warn" style="display:none;font-size:10px;color:#f97316;margin-top:5px;font-weight:600">
+            ⚠️ Código contém caracteres fora do ASCII imprimível — não gera barras Code 128
+          </div>
+        </div>
+
+        <!-- Preview compacto -->
+        <div style="display:flex;justify-content:center">
+          <div>
+            <div style="font-size:9px;font-weight:700;color:var(--muted);text-align:center;margin-bottom:6px;text-transform:uppercase;letter-spacing:.07em">Pré-visualização (escala ~50% — real: 150×100 mm)</div>
+            <div style="overflow:hidden;width:calc(150mm * 0.50);height:calc(100mm * 0.50);border-radius:4px;box-shadow:0 2px 12px rgba(0,0,0,.4)">
+              <div id="etq-preview-scale-wrap">
+                <div id="etq-preview-label" class="etq-label-sheet">
+                  <div class="etq-label-head">
+                    <span class="etq-label-kicker">Código</span>
+                    <span class="etq-label-code" id="etq-prev-code" style="font-size:12mm">—</span>
+                  </div>
+                  <p class="etq-label-desc" id="etq-prev-desc" data-size="lg">&nbsp;</p>
+                  <div class="etq-label-foot">
+                    <div class="etq-barcode-wrap">
+                      <svg id="etq-prev-barcode" class="etq-barcode-svg" role="img" aria-label="Código de barras"></svg>
+                    </div>
+                    <span class="etq-label-human" id="etq-prev-human">—</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p style="font-size:10px;color:var(--muted);text-align:center;margin:6px 0 0">Ao imprimir: papel <b>15×10 cm</b> · margens <b>nenhuma</b> · escala <b>100%</b></p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- FIM ETIQUETADOR -->
+
   </div>
 
   <!-- ── MÁQUINAS A ── -->
@@ -3974,9 +4136,9 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="supabase-compat-shim.js?v=2"></script>
-<script src="app.js?v=23"></script>
+<script src="app.js?v=25"></script>
 <script src="planejamento.js?v=2"></script>
-<script src="pendencias.js?v=3"></script>
+<script src="pendencias.js?v=4"></script>
 
 
 <!-- ═══ ALERTA FIXO: SELB EM ANDAMENTO (Complexa / Montagem / Limpeza) ═══ -->
@@ -5128,6 +5290,214 @@ function pedPrintLabels() {
       <button onclick="if(typeof _chatEnviar==='function')_chatEnviar()" style="background:var(--accent); color:#fff; border:none; border-radius:8px; width:40px; cursor:pointer; font-size:16px; display:flex; align-items:center; justify-content:center;">➤</button>
     </div>
   </div>
+
+
+<!-- ── ETIQUETADOR DE CÓDIGO — JavaScript & Impressão Confiável ── -->
+<script>
+(function() {
+  function descSize(text) {
+    if (text.length > 90) return 'sm';
+    if (text.length > 55) return 'md';
+    return 'lg';
+  }
+  function isEncodable(code) {
+    return code.length > 0 && /^[\x20-\x7E]+$/.test(code);
+  }
+
+  function parseLine(text) {
+    text = (text || '').replace(/\u00a0/g, ' ').trim();
+    if (!text) return { code: '', desc: '' };
+
+    if (text.includes('\t')) {
+      var parts = text.split('\t');
+      return { code: parts[0].trim(), desc: parts.slice(1).join(' ').trim() };
+    }
+
+    var tokens = text.split(/\s+/);
+    return { code: tokens[0] || '', desc: tokens.slice(1).join(' ') };
+  }
+
+  window.etqParsePaste = function(raw) {
+    var p = parseLine(raw);
+    var code = p.code;
+    var desc = p.desc;
+
+    var info = document.getElementById('etq-parsed-info');
+    var pcEl = document.getElementById('etq-parsed-code');
+    var pdEl = document.getElementById('etq-parsed-desc-info');
+    var warn = document.getElementById('etq-code-warn');
+
+    if (code) {
+      if (info) info.style.display = 'flex';
+      if (pcEl) pcEl.textContent = code;
+      if (pdEl) pdEl.textContent = desc || '(sem descrição)';
+      if (warn) warn.style.display = !isEncodable(code) ? '' : 'none';
+    } else {
+      if (info) info.style.display = 'none';
+      if (warn) warn.style.display = 'none';
+    }
+
+    etqUpdatePreview(code, desc);
+  };
+
+  function etqUpdatePreview(code, desc) {
+    var prevCode  = document.getElementById('etq-prev-code');
+    var prevDesc  = document.getElementById('etq-prev-desc');
+    var prevHuman = document.getElementById('etq-prev-human');
+    var svg       = document.getElementById('etq-prev-barcode');
+
+    if (prevCode)  prevCode.textContent = code || '—';
+    if (prevHuman) prevHuman.textContent = code || '—';
+    if (prevDesc) {
+      prevDesc.textContent = desc || '\u00a0';
+      prevDesc.setAttribute('data-size', descSize(desc));
+    }
+
+    if (svg && code && isEncodable(code) && typeof JsBarcode !== 'undefined') {
+      try {
+        JsBarcode(svg, code, {
+          format: 'CODE128', displayValue: false, margin: 0,
+          width: 2, height: 100, background: 'transparent', lineColor: '#000'
+        });
+        var w = (svg.getAttribute('width') || '200').replace('px','');
+        var h = (svg.getAttribute('height') || '100').replace('px','');
+        svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+        svg.removeAttribute('width'); svg.removeAttribute('height');
+        svg.setAttribute('preserveAspectRatio', 'none');
+        svg.style.removeProperty('transform');
+      } catch(e) {}
+    } else if (svg) {
+      while (svg.firstChild) svg.removeChild(svg.firstChild);
+    }
+  }
+
+  window.etqImprimir = function() {
+    var raw  = (document.getElementById('etq-paste-field') || {}).value || '';
+    var p    = parseLine(raw);
+    var code = p.code;
+    var desc = p.desc;
+
+    if (!code) { alert('Cole o código antes de imprimir.'); return; }
+    if (!isEncodable(code)) {
+      alert('Código contém caracteres inválidos para Code 128.\nUse apenas caracteres ASCII imprimíveis.');
+      return;
+    }
+
+    // Criar SVG temporário para gerar código de barras
+    var tempSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    if (typeof JsBarcode !== 'undefined') {
+      try {
+        JsBarcode(tempSvg, code, {
+          format: 'CODE128', displayValue: false, margin: 0,
+          width: 2, height: 100, background: 'transparent', lineColor: '#000'
+        });
+        var w = (tempSvg.getAttribute('width') || '200').replace('px','');
+        var h = (tempSvg.getAttribute('height') || '100').replace('px','');
+        tempSvg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+        tempSvg.removeAttribute('width'); tempSvg.removeAttribute('height');
+        tempSvg.setAttribute('preserveAspectRatio', 'none');
+      } catch(e) {}
+    }
+
+    var barcodeXml = tempSvg.outerHTML;
+    var dSize = descSize(desc);
+
+    var labelHtml = '' +
+      '<div class="etq-label-sheet">' +
+        '<div class="etq-label-head">' +
+          '<span class="etq-label-kicker">Código</span>' +
+          '<span class="etq-label-code">' + escapeHtml(code) + '</span>' +
+        '</div>' +
+        '<p class="etq-label-desc" data-size="' + dSize + '">' + (desc ? escapeHtml(desc) : '&nbsp;') + '</p>' +
+        '<div class="etq-label-foot">' +
+          '<div class="etq-barcode-wrap">' + barcodeXml + '</div>' +
+          '<span class="etq-label-human">' + escapeHtml(code) + '</span>' +
+        '</div>' +
+      '</div>';
+
+    var printCss = '' +
+      '@page { size: 150mm 100mm; margin: 0; }' +
+      'html, body { margin: 0; padding: 0; background: #fff; width: 150mm; height: 100mm; }' +
+      '.etq-label-sheet { width: 150mm; height: 100mm; padding: 6mm 7mm 5mm; box-sizing: border-box; background: #fff; color: #000; display: grid; grid-template-rows: auto 1fr auto; gap: 3mm; overflow: hidden; font-family: "Arial Black", Arial, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }' +
+      '.etq-label-head { display: flex; align-items: baseline; gap: 4mm; padding-bottom: 2.5mm; border-bottom: 0.7mm solid #000; }' +
+      '.etq-label-kicker { font-size: 3.4mm; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #000; }' +
+      '.etq-label-code { font-family: "JetBrains Mono", monospace; font-weight: 800; font-size: 14mm; line-height: 1; letter-spacing: -0.02em; color: #000; }' +
+      '.etq-label-desc { margin: 0; font-weight: 800; text-transform: uppercase; line-height: 1.12; letter-spacing: -0.005em; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; align-self: center; color: #000; }' +
+      '.etq-label-desc[data-size="lg"] { font-size: 7.6mm; }' +
+      '.etq-label-desc[data-size="md"] { font-size: 6.4mm; }' +
+      '.etq-label-desc[data-size="sm"] { font-size: 5.2mm; -webkit-line-clamp: 4; }' +
+      '.etq-label-foot { display: flex; flex-direction: column; align-items: center; gap: 1.2mm; }' +
+      '.etq-barcode-wrap { width: 110mm; height: 26mm; }' +
+      '.etq-barcode-wrap svg { display: block; width: 100%; height: 100%; }' +
+      '.etq-label-human { font-family: "JetBrains Mono", monospace; font-size: 5mm; font-weight: 600; letter-spacing: 0.35em; padding-left: 0.35em; color: #000; }';
+
+    function escapeHtml(t) {
+      return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    var doc = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Etiqueta ' + escapeHtml(code) + '</title>' +
+              '<style>' + printCss + '</style></head><body>' + labelHtml + '</body></html>';
+
+    var iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+    document.body.appendChild(iframe);
+
+    var idoc = iframe.contentDocument || iframe.contentWindow.document;
+    idoc.open(); idoc.write(doc); idoc.close();
+
+    var win = iframe.contentWindow;
+    setTimeout(function() {
+      try {
+        win.focus();
+        win.print();
+      } catch(e) {
+        console.error('Falha ao imprimir etiqueta:', e);
+      }
+      setTimeout(function() { iframe.remove(); }, 2000);
+    }, 150);
+  };
+
+  window.etqLimpar = function() {
+    var f = document.getElementById('etq-paste-field');
+    if (f) f.value = '';
+    var info = document.getElementById('etq-parsed-info');
+    if (info) info.style.display = 'none';
+    var warn = document.getElementById('etq-code-warn');
+    if (warn) warn.style.display = 'none';
+    etqUpdatePreview('', '');
+  };
+
+  window.etqToggle = function() {
+    var body = document.getElementById('etq-body-wrap');
+    var btn  = document.getElementById('btn-toggle-etq');
+    if (!body) return;
+    var collapsed = body.style.display === 'none';
+    body.style.display = collapsed ? '' : 'none';
+    if (btn) btn.textContent = collapsed ? '▼' : '▶';
+    try { localStorage.setItem('etq-collapsed', collapsed ? '0' : '1'); } catch(e){}
+  };
+
+  document.addEventListener('DOMContentLoaded', function() {
+    try {
+      if (localStorage.getItem('etq-collapsed') === '1') {
+        var body = document.getElementById('etq-body-wrap');
+        var btn  = document.getElementById('btn-toggle-etq');
+        if (body) body.style.display = 'none';
+        if (btn)  btn.textContent = '▶';
+      }
+    } catch(e){}
+
+    var f = document.getElementById('etq-paste-field');
+    if (f) {
+      f.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); etqImprimir(); }
+      });
+      // Se já houver algo digitado/restaurado pelo browser
+      if (f.value) etqParsePaste(f.value);
+    }
+  });
+})();
+</script>
 
 </body>
 </html>

@@ -1,18 +1,19 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-<!-- ── Tema: aplicar antes do render para evitar flash ── -->
-<script>(function(){try{var t=localStorage.getItem('labtech-theme');if(t==='light'){document.documentElement.setAttribute('data-theme','light');}}catch(e){}})()</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Sistema de Controle – LabTech</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css?v=2">
+<link rel="stylesheet" href="style.css?v=8">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+<!-- Etiquetador: JsBarcode Code 128 -->
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
 
 <style>
 /* ═══ FLUXOLAB — Layout estável (não quebra ao trocar de aba) ═══ */
@@ -44,6 +45,62 @@
   top: 16px !important;
   align-self: start !important;
   min-width: 0 !important;
+}
+
+/* ═══ Tempo por Modelo — botões de janela 30/60/90 dias ═══ */
+.modelo-win-btn{
+  background:var(--bg3);
+  border:1px solid var(--border2);
+  border-radius:9px;
+  color:var(--muted);
+  font-family:var(--font);
+  font-size:12px;
+  font-weight:600;
+  padding:6px 14px;
+  cursor:pointer;
+  transition:all .15s;
+}
+.modelo-win-btn:hover{
+  border-color:var(--accent);
+  color:var(--text);
+}
+.modelo-win-btn.active{
+  background:rgba(16,185,129,.15);
+  border-color:var(--accent);
+  color:var(--accent);
+}
+</style>
+
+<script src="pendencias-viewer.js?v=2"></script>
+<script src="pendencias-viewer-complexas.js?v=2"></script>
+
+<style>/* ro-visu-fluxolab */
+/* Deixa visualmente claro que o usuário está em modo somente visualização */
+body.ro-visu-fluxolab button:not(.tab):not(.stab):not(.subtab):not(.logout-btn):not([data-ro-allow]):not([data-ro-allow] *) {
+  cursor: not-allowed !important;
+  opacity: .55 !important;
+}
+body.ro-visu-fluxolab input[type=checkbox],
+body.ro-visu-fluxolab input[type=radio] {
+  cursor: not-allowed !important;
+  opacity: .55 !important;
+}
+body.ro-visu-fluxolab #fluxolab-tab-checklists {
+  display: none !important;
+}
+body.ro-visu-fluxolab #view-fluxolab #busca-selb-box {
+  display: none !important;
+}
+body.ro-visu-fluxolab #fluxolab-tab-planejamento-panel input,
+body.ro-visu-fluxolab #fluxolab-tab-planejamento-panel textarea,
+body.ro-visu-fluxolab #fluxolab-tab-planejamento-panel select,
+body.ro-visu-fluxolab #fluxolab-tab-planejamento-panel button,
+body.ro-visu-fluxolab #fluxolab-tab-pendencias-panel input,
+body.ro-visu-fluxolab #fluxolab-tab-pendencias-panel textarea,
+body.ro-visu-fluxolab #fluxolab-tab-pendencias-panel select,
+body.ro-visu-fluxolab #fluxolab-tab-pendencias-panel button {
+  pointer-events: none !important;
+  opacity: 0.55 !important;
 }
 </style>
 </head>
@@ -133,37 +190,321 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
   body.printing-facilitador [id^="relview-"]:not(#relview-pedido) {
     display: none !important;
   }
-  body.printing-facilitador { background: #fff !important; }
-  body.printing-facilitador #layer-app { background: #fff !important; opacity: 1 !important; display: block !important; min-height: 0 !important; height: auto !important; padding: 0 !important; margin: 0 !important; overflow: visible !important; }
-  body.printing-facilitador, body.printing-facilitador html { margin: 0 !important; padding: 0 !important; min-height: 0 !important; height: auto !important; }
-  body.printing-facilitador .view { padding: 0 !important; margin: 0 !important; min-height: 0 !important; height: auto !important; overflow: visible !important; }
-  body.printing-facilitador #view-relatorios { display: block !important; padding: 0 !important; margin: 0 !important; background: #fff !important; min-height: 0 !important; height: auto !important; overflow: visible !important; }
-  body.printing-facilitador #relview-pedido { display: block !important; padding: 0 !important; margin: 0 !important; background: #fff !important; min-height: 0 !important; height: auto !important; border-radius: 0 !important; overflow: visible !important; }
-  body.printing-facilitador .pedido-wrap { padding: 0 !important; margin: 0 !important; background: #fff !important; min-height: 0 !important; height: auto !important; overflow: visible !important; flex: none !important; }
-  body.printing-facilitador .ped-result { display: block !important; margin: 0 !important; padding: 0 !important; min-height: 0 !important; height: auto !important; overflow: visible !important; }
-  body.printing-facilitador #ped-gallery { display: flex !important; flex-wrap: wrap !important; gap: 0 !important; margin: 0 !important; padding: 0 !important; background: #fff !important; }
-  body.printing-facilitador .ped-label-wrap { display: inline-flex !important; padding: 0 !important; margin: 0 !important; width: 15cm !important; height: 10cm !important; overflow: hidden !important; background: #fff !important; }
-  body.printing-facilitador .ped-unit-pill { display: none !important; }
-  body.printing-facilitador .ped-etiqueta { width: 15cm !important; height: 10cm !important; margin: 0 !important; padding: 0.12cm 0.18cm 0.48cm 0.18cm !important; box-shadow: none !important; border: 0.1cm solid #000 !important; border-radius: 0 !important; background: #fff !important; color: #000 !important; page-break-inside: avoid !important; page-break-after: always !important; break-after: page !important; box-sizing: border-box !important; overflow: hidden !important; display: flex !important; flex-direction: column !important; justify-content: flex-start !important; align-items: center !important; }
-  body.printing-facilitador .ped-etiqueta:last-child { page-break-after: auto !important; break-after: auto !important; }
-  body.printing-facilitador .ped-etiqueta * { color: #000 !important; background: transparent !important; }
-  body.printing-facilitador .ped-etiq-row { width: 14.5cm !important; height: 2.95cm !important; max-height: 2.95cm !important; flex: 0 0 2.95cm !important; }
-  body.printing-facilitador .ped-etiq-row:last-child { height: 2.85cm !important; max-height: 2.85cm !important; flex: 0 0 2.85cm !important; padding-bottom: 0.18cm !important; }
-  body.printing-facilitador .ped-etiq-elem, body.printing-facilitador .ped-etiq-elem1 { height: 100% !important; }
-  body.printing-facilitador .ped-etiq-qr { width: 2.25cm !important; height: 2.25cm !important; }
-  body.printing-facilitador * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-  @page { size: 15cm 10cm; margin: 0mm; }
+
+  body.printing-facilitador {
+    background: #fff !important;
+  }
+
+  body.printing-facilitador #layer-app {
+    background: #fff !important;
+    opacity: 1 !important;
+    display: block !important;
+    min-height: 0 !important;
+    height: auto !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+  }
+
+  body.printing-facilitador,
+  body.printing-facilitador html {
+    margin: 0 !important;
+    padding: 0 !important;
+    min-height: 0 !important;
+    height: auto !important;
+  }
+
+  body.printing-facilitador .view {
+    padding: 0 !important;
+    margin: 0 !important;
+    min-height: 0 !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  body.printing-facilitador #view-relatorios {
+    display: block !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: #fff !important;
+    min-height: 0 !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  body.printing-facilitador #relview-pedido {
+    display: block !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: #fff !important;
+    min-height: 0 !important;
+    height: auto !important;
+    border-radius: 0 !important;
+    overflow: visible !important;
+  }
+
+  body.printing-facilitador .pedido-wrap {
+    padding: 0 !important;
+    margin: 0 !important;
+    background: #fff !important;
+    min-height: 0 !important;
+    height: auto !important;
+    overflow: visible !important;
+    flex: none !important;
+  }
+
+  body.printing-facilitador .ped-result {
+    display: block !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    min-height: 0 !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  body.printing-facilitador #ped-gallery {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+
+  body.printing-facilitador .ped-label-wrap {
+    display: inline-flex !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    width: 15cm !important;
+    height: 10cm !important;
+    overflow: hidden !important;
+    background: #fff !important;
+  }
+
+  body.printing-facilitador .ped-unit-pill {
+    display: none !important;
+  }
+
+  body.printing-facilitador .ped-etiqueta {
+    width: 15cm !important;
+    height: 10cm !important;
+    margin: 0 !important;
+    padding: 0.12cm 0.18cm 0.48cm 0.18cm !important;
+    box-shadow: none !important;
+    border: 0.1cm solid #000 !important;
+    border-radius: 0 !important;
+    background: #fff !important;
+    color: #000 !important;
+    page-break-inside: avoid !important;
+    page-break-after: always !important;
+    break-after: page !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: flex-start !important;
+    align-items: center !important;
+  }
+
+  body.printing-facilitador .ped-etiqueta:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+
+  body.printing-facilitador .ped-etiqueta * {
+    color: #000 !important;
+    background: transparent !important;
+  }
+
+  body.printing-facilitador .ped-etiq-row {
+    width: 14.5cm !important;
+    height: 2.95cm !important;
+    max-height: 2.95cm !important;
+    flex: 0 0 2.95cm !important;
+  }
+
+  body.printing-facilitador .ped-etiq-row:last-child {
+    height: 2.85cm !important;
+    max-height: 2.85cm !important;
+    flex: 0 0 2.85cm !important;
+    padding-bottom: 0.18cm !important;
+  }
+
+  body.printing-facilitador .ped-etiq-elem,
+  body.printing-facilitador .ped-etiq-elem1 {
+    height: 100% !important;
+  }
+
+  body.printing-facilitador .ped-etiq-qr {
+    width: 2.25cm !important;
+    height: 2.25cm !important;
+  }
+
+  body.printing-facilitador * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  @page {
+    size: 15cm 10cm;
+    margin: 0mm;
+  }
 }
+/* ═══════════════════════════════════════════════
+   ETIQUETADOR — Etiqueta de Código 150×100 mm   ETIQUETADOR-CSS-INTEGRADO
+   Integrado à aba 🛠️ SELBs Aguardando Peças
+═══════════════════════════════════════════════ */
+#etq-painel {
+  background: rgba(99,179,237,.07);
+  border: 1px solid rgba(99,179,237,.35);
+  border-radius: 14px;
+  padding: 16px 18px;
+  margin-bottom: 16px;
+}
+#etq-painel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 0; flex-wrap: wrap; gap: 8px;
+}
+#etq-painel-header h3 {
+  font-size: 14px; font-weight: 700; color: #63b3ed; margin: 0;
+  display: flex; align-items: center; gap: 8px;
+}
+#etq-body { display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; margin-top: 16px; }
+#etq-form-col { flex: 1; min-width: 240px; }
+#etq-preview-col { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+
+/* Label física 150×100 mm */
+.etq-label-sheet {
+  width: 150mm; height: 100mm; padding: 6mm 7mm 5mm; box-sizing: border-box;
+  background: #ffffff; color: #000000;
+  display: grid; grid-template-rows: auto 1fr auto; gap: 3mm; overflow: hidden;
+  font-family: 'Arial Black', Arial, sans-serif;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  border-radius: 6px; border: 1px solid #ccc; box-shadow: 0 2px 12px rgba(0,0,0,.18);
+}
+.etq-label-head { display: flex; align-items: baseline; gap: 4mm; padding-bottom: 2.5mm; border-bottom: 0.7mm solid #000; }
+.etq-label-kicker { font-size: 3.4mm; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #000; }
+.etq-label-code { font-family: 'JetBrains Mono','Courier New',monospace; font-weight: 800; font-size: 15mm; line-height: 1; letter-spacing: -0.02em; color: #000; }
+.etq-label-desc {
+  margin: 0; font-weight: 800; text-transform: uppercase; line-height: 1.12;
+  letter-spacing: -0.005em; overflow: hidden; display: -webkit-box;
+  -webkit-box-orient: vertical; -webkit-line-clamp: 3; align-self: center; color: #000;
+}
+.etq-label-desc[data-size="lg"] { font-size: 7.6mm; }
+.etq-label-desc[data-size="md"] { font-size: 6.4mm; }
+.etq-label-desc[data-size="sm"] { font-size: 5.2mm; -webkit-line-clamp: 4; }
+.etq-label-foot { display: flex; flex-direction: column; align-items: center; gap: 1.2mm; }
+.etq-barcode-wrap { width: 110mm; height: 26mm; }
+.etq-barcode-svg { display: block; width: 100%; height: 100%; }
+.etq-label-human {
+  font-family: 'JetBrains Mono','Courier New',monospace;
+  font-size: 5mm; font-weight: 600; letter-spacing: 0.35em; padding-left: 0.35em; color: #000;
+}
+/* Preview escalado */
+#etq-preview-scale-wrap {
+  transform-origin: top center;
+  transform: scale(0.52);
+  margin-bottom: calc((100mm * 0.52) - 100mm);
+  margin-top: 0;
+}
+#etq-print-area { display: none; }
+
+/* ──── IMPRESSÃO da etiqueta de código ──── */
+@media print {
+  body.printing-etiqueta-cod .topbar,
+  body.printing-etiqueta-cod .status-bar,
+  body.printing-etiqueta-cod #layer-login,
+  body.printing-etiqueta-cod #layer-loader,
+  body.printing-etiqueta-cod .modal-overlay,
+  body.printing-etiqueta-cod .modal,
+  body.printing-etiqueta-cod .schedule-overlay,
+  body.printing-etiqueta-cod #layer-app { display: none !important; }
+  body.printing-etiqueta-cod #etq-print-area {
+    display: block !important;
+    position: fixed; inset: 0; background: #fff; z-index: 9999;
+  }
+  body.printing-etiqueta-cod .etq-label-sheet {
+    width: 150mm !important; height: 100mm !important;
+    box-shadow: none !important; border: none !important; border-radius: 0 !important;
+    margin: 0 !important; page-break-after: always !important; break-after: page !important;
+  }
+  body.printing-etiqueta-cod .etq-label-sheet:last-child {
+    page-break-after: auto !important; break-after: auto !important;
+  }
+  body.printing-etiqueta-cod * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+  @page { size: 150mm 100mm; margin: 0; }
+}
+
 /* FluxoLAB tag-input: placeholder não vira maiúsculo */
 #fmov-selb-inp::placeholder{text-transform:none;font-weight:400;color:var(--muted);-webkit-text-fill-color:var(--muted);font-family:var(--font);font-size:12px;opacity:.7}
+
+/* ── Ícone informativo "Como funciona" dos relatórios ── */
+.info-rel-btn{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:20px;height:20px;border-radius:50%;
+  background:rgba(79,142,247,.15);border:1px solid rgba(79,142,247,.4);
+  color:var(--accent);font-size:12px;font-weight:700;
+  cursor:pointer;flex-shrink:0;vertical-align:middle;margin-left:6px;
+  transition:background .15s,transform .1s;line-height:1;user-select:none;
+}
+.info-rel-btn:hover{background:rgba(79,142,247,.3);transform:scale(1.08)}
+.info-rel-overlay{
+  display:none;position:fixed;inset:0;z-index:9999;
+  background:rgba(0,0,0,.55);align-items:center;justify-content:center;padding:20px;
+}
+.info-rel-overlay.open{display:flex}
+.info-rel-modal{
+  background:var(--bg2);border:1px solid var(--border2);border-radius:16px;
+  max-width:560px;width:100%;max-height:80vh;overflow-y:auto;
+  padding:24px 26px;box-shadow:0 20px 60px rgba(0,0,0,.5);
+  animation:infoRelIn .18s ease;
+}
+@keyframes infoRelIn{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
+.info-rel-modal h3{font-size:17px;font-weight:700;color:var(--text);margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.info-rel-modal .info-rel-sub{font-size:12px;color:var(--muted);margin-bottom:18px}
+.info-rel-modal .info-rel-section{margin-bottom:16px}
+.info-rel-modal .info-rel-section:last-child{margin-bottom:0}
+.info-rel-modal .info-rel-label{font-size:11px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;display:flex;align-items:center;gap:6px}
+.info-rel-modal .info-rel-text{font-size:13px;color:var(--text);line-height:1.6}
+.info-rel-modal .info-rel-text ul{margin:6px 0 0 0;padding-left:20px}
+.info-rel-modal .info-rel-text li{margin-bottom:5px}
+.info-rel-modal .info-rel-close{
+  position:absolute;top:16px;right:16px;
+  width:28px;height:28px;border-radius:50%;border:1px solid var(--border2);
+  background:var(--bg3);color:var(--muted);font-size:14px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+}
+.info-rel-modal .info-rel-close:hover{color:var(--text);border-color:var(--accent)}
+.info-rel-modal-wrap{position:relative}
 </style>
 
 <!-- ═══════════════════════════════════════════════
      LOGIN LAYER
 ═══════════════════════════════════════════════ -->
 <div id="layer-login">
+  <!-- Gate view (trava de acesso por e-mail — login do Supabase, sem privilégios, só segurança extra) -->
+  <div id="gate-view" class="lp-wrap hidden" style="text-align:left;">
+    <div class="lp-icon" style="text-align:center;">🔐</div>
+    <div class="lp-title" style="text-align:center;">Acesso Restrito</div>
+    <div class="lp-sub" style="text-align:center;">Entre com seu e-mail para continuar</div>
+    <label class="al-label">E-mail</label>
+    <input class="al-inp" id="gate-user" placeholder="seuemail@exemplo.com" type="email" autocomplete="username">
+    <label class="al-label" style="margin-top:8px;">Senha</label>
+    <input class="al-inp" id="gate-pass" type="password" placeholder="••••••••" autocomplete="current-password"
+      onkeydown="if(event.key==='Enter'){event.preventDefault();gateLogin();}">
+    <div class="lp-error" id="gate-error" style="text-align:center;"></div>
+    <button class="al-btn" id="gate-btn" onclick="gateLogin()" style="width:100%;margin-top:4px;">Entrar</button>
+    <div class="lp-admin-link" onclick="document.getElementById('modal-admin-login').classList.remove('hidden')" style="margin-top:16px;text-align:center;">Acesso administrativo</div>
+  </div>
+
+  <!-- Checando sessão existente (evita "piscar" o PIN antes de saber se há sessão válida) -->
+  <div id="gate-checking" class="lp-wrap" style="text-align:center;">
+    <div style="width:32px;height:32px;border:3px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 14px"></div>
+    <div style="font-size:12px;color:var(--muted)">Verificando acesso...</div>
+  </div>
+
   <!-- PIN view -->
-  <div id="pin-view" class="lp-wrap">
+  <div id="pin-view" class="lp-wrap hidden">
     <!-- Botão de Guia do Sistema -->
     <button onclick="abrirGuiaSistema()" title="Guia do Sistema" style="
       position:absolute;top:20px;right:24px;
@@ -225,7 +566,8 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
   <!-- TOPBAR with tabs -->
   <div class="topbar">
     <div class="logo"><img src="logo-labtech.png" alt="LabTech" style="height:56px;vertical-align:middle;display:block"></div>
-    <button id="mobile-menu-btn" onclick="abrirMenuMobile()" style="display:none;align-items:center;justify-content:center;gap:6px;background:rgba(79, 142, 247, 0.15);border:1px solid rgba(79, 142, 247, 0.4);color:var(--accent);padding:6px 12px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;height:36px;white-space:nowrap;box-sizing:border-box;">☰ Menu</button>
+    <button id="mobile-menu-btn" onclick="abrirMenuMobile()" style="align-items:center;justify-content:center;gap:6px;background:rgba(79, 142, 247, 0.15);border:1px solid rgba(79, 142, 247, 0.4);color:var(--accent);padding:6px 12px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;height:36px;white-space:nowrap;box-sizing:border-box;">☰ Menu</button>
+    <button id="btn-open-sidebar-tabs" onclick="toggleSidebarTabs()" title="Ver mais abas" style="align-items:center;justify-content:center;background:rgba(255,255,255,0.05);border:1px solid var(--border2);border-radius:10px;color:var(--text);padding:0;cursor:pointer;width:40px;height:40px;flex-shrink:0;">☰</button>
     <div class="topbar-tabs" id="topbar-tabs">
       <button class="tab active" id="tab-dashboard"  onclick="setView('dashboard',this)">Dashboard</button>
       <button class="tab" id="tab-consulta"   onclick="setView('consulta',this)">Consulta</button>
@@ -240,7 +582,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <button class="tab" id="tab-scanner"    onclick="setView('scanner',this)">📷 Leitor OCR</button>
       <button class="tab" id="tab-fluxolab"   onclick="setView('fluxolab',this)">🔬 FluxoLAB</button>
       <button class="tab" id="tab-bip-mobile" onclick="setView('bip-mobile',this)" style="display:none">📱 Bip Mobile</button>
-      <button class="tab" id="tab-tempo-selb" onclick="setView('tempo-selb',this)">⏱️ Tempo SELB</button>
+      <button class="tab" id="tab-tempo-selb" onclick="setView('tempo-selb',this)" style="display:none">⏱️ Tempo SELB</button>
       <button class="tab" id="tab-admin"      onclick="setView('admin',this)" style="display:none">Admin</button>
       <button class="tab" id="tab-equip"      onclick="setView('equip',this)" style="display:none">Equipamentos</button>
     </div>
@@ -262,6 +604,28 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       </div>
     </div>
     <div class="topbar-right">
+      <!-- Controle de Escurecimento do Fundo -->
+      <div id="fundo-control" style="display:flex;align-items:center;gap:6px;margin-right:12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.1);padding:4px 10px;border-radius:20px;" title="Ajustar escurecimento da imagem de fundo">
+        <span style="font-size:12px;opacity:0.7">Fundo</span>
+        <input type="range" id="bg-opacity-slider" min="0" max="1" step="0.05" value="0.65" style="width:70px;accent-color:var(--accent);cursor:pointer;" oninput="updateBgOpacity(this.value)">
+      </div>
+      <script>
+        function updateBgOpacity(val) {
+          const center = parseFloat(val);
+          const edge = Math.min(1, center + 0.25);
+          document.documentElement.style.setProperty('--bg-color-center', `rgba(8, 12, 24, ${center})`);
+          document.documentElement.style.setProperty('--bg-color-edge', `rgba(6, 8, 12, ${edge})`);
+          localStorage.setItem('labtech_bg_opacity', val);
+        }
+        (function initBgOpacity(){
+          const saved = localStorage.getItem('labtech_bg_opacity');
+          if(saved !== null) {
+            document.getElementById('bg-opacity-slider').value = saved;
+            updateBgOpacity(saved);
+          }
+        })();
+      </script>
+
       <div class="user-chip">
         <div class="avatar av-mont" id="u-avatar">??</div>
         <span id="u-name">—</span>
@@ -271,10 +635,36 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           <span id="chat-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:var(--danger);color:#fff;font-size:10px;font-weight:bold;border-radius:10px;padding:2px 5px;line-height:1;">0</span>
         </button>
       </div>
-      <button id="theme-toggle-btn" title="Alternar tema claro/escuro" onclick="toggleTheme()" aria-label="Alternar tema">🌙</button>
       <button class="logout-btn" onclick="logout()">Sair</button>
     </div>
   </div>
+
+  <!-- SIDEBAR DE ABAS SECUNDÁRIAS (desktop) -->
+  <div id="sidebar-overlay-tabs" onclick="closeSidebarTabs()"></div>
+  <div id="sidebar-tabs-panel">
+    <div class="sidebar-tabs-header">
+      <span>Mais Abas</span>
+      <button onclick="closeSidebarTabs()" title="Fechar">✕</button>
+    </div>
+    <div id="sidebar-tabs-content"></div>
+    <div id="sidebar-tabs-footer" style="display:none">
+      <button onclick="openTabsConfig()">⚙️ Configurar abas principais</button>
+    </div>
+  </div>
+
+  <!-- MODAL: Configurar abas principais (ADMIN) -->
+  <div id="modal-tabs-config" class="hidden">
+    <div class="tabs-config-box">
+      <h2>Configurar Abas Principais</h2>
+      <p>Escolha de 2 a 6 abas para ficarem fixas no topo. As demais ficam no menu lateral (☰).</p>
+      <div id="tabs-config-list"></div>
+      <div class="tabs-config-actions">
+        <button class="tcfg-cancel" onclick="closeTabsConfig()">Cancelar</button>
+        <button class="tcfg-save" onclick="salvarConfigAbas()">Salvar</button>
+      </div>
+    </div>
+  </div>
+
   <div class="status-bar">
     <div class="pulse" id="status-dot" title="Status da Conexão"></div>
     <span>Sistema ativo — <span id="live-clock"></span></span>
@@ -361,6 +751,20 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
             <span style="font-size: 10px; font-weight: 800; color: var(--purple); letter-spacing: 0.05em;">EXP. CX</span>
             <span style="font-family: var(--mono); font-size: 15px; font-weight: 800;"><span id="exp-comp-atual" style="color: var(--warn);">0</span><span style="color: var(--muted);">/</span><span id="exp-comp-total" style="color: var(--muted);">0</span></span>
           </div>
+          <div style="height: 24px; width: 1px; background: var(--border); margin: 0 4px;"></div>
+          <div id="dash-checklists-pill" title="Total de checklists na planilha importada (FluxoLAB)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.15); border-radius: 10px;">
+            <span style="font-size: 10px; font-weight: 800; color: #f59e0b; letter-spacing: 0.05em;">📋 CHECKLISTS</span>
+            <span id="dash-checklists-total" style="font-family: var(--mono); font-size: 15px; font-weight: 800; color: #f59e0b;">—</span>
+          </div>
+          <div style="height: 24px; width: 1px; background: var(--border); margin: 0 4px;"></div>
+          <div id="dash-liberadas-pill" title="Total de equipamentos liberados pela Qualidade hoje" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(236, 72, 153, 0.06); border: 1px solid rgba(236, 72, 153, 0.15); border-radius: 10px;">
+            <span style="font-size: 10px; font-weight: 800; color: #ec4899; letter-spacing: 0.05em;">LIBERADAS NO DIA</span>
+            <span id="dash-liberadas-total" style="font-family: var(--mono); font-size: 15px; font-weight: 800; color: #ec4899;">0</span>
+          </div>
+          <div id="dash-health-pill" title="Saúde Geral da Equipe (Presença)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(74, 222, 128, 0.06); border: 1px solid rgba(74, 222, 128, 0.15); border-radius: 10px;">
+            <span style="font-size: 10px; font-weight: 800; color: #4ade80; letter-spacing: 0.05em;">SAÚDE EQUIPE</span>
+            <span id="dash-health-total" style="font-family: var(--mono); font-size: 15px; font-weight: 800; color: #4ade80;">0%</span>
+          </div>
         </div>
       </div>
     </div>
@@ -381,9 +785,16 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <!-- Estado: idle -->
       <div id="op-idle" style="display:none">
         <div style="font-size:48px;margin-bottom:12px">⏳</div>
-        <div style="font-size:16px;font-weight:600;margin-bottom:6px">Nenhum SELB em andamento</div>
-        <div style="font-size:13px;color:var(--muted);margin-bottom:24px">Clique no botão abaixo para iniciar</div>
-        <button id="op-btn-start" onclick="opIniciarSelb()" style="
+        <div style="font-size:16px;font-weight:600;margin-bottom:16px">Nenhum SELB em andamento</div>
+        
+        <div style="margin-bottom:24px; text-align: left;">
+          <label class="flbl">Código SELB *</label>
+          <input class="inp" id="op-idle-selb" placeholder="Ex: SELB-0042A" maxlength="20"
+                 oninput="this.value=this.value.toUpperCase();"
+                 style="background:rgba(255,255,255,.05); border-color:rgba(255,255,255,.1);">
+        </div>
+
+        <button id="op-btn-start" onclick="opIdleStartClick()" style="
           width:100%;padding:16px;font-family:var(--font);font-size:15px;font-weight:700;
           background:var(--accent);color:#fff;border:none;border-radius:12px;cursor:pointer;
           letter-spacing:.04em;transition:all .15s;box-shadow:0 4px 20px rgba(79,142,247,.35)">
@@ -391,7 +802,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
         </button>
       </div>
 
-      <!-- Estado: verificando Firebase -->
+      <!-- Estado: verificando Supabase -->
       <div id="op-checking" style="display:none">
         <div style="width:36px;height:36px;border:3px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 16px"></div>
         <div style="font-size:14px;color:var(--muted)">Verificando SELB em andamento...</div>
@@ -441,6 +852,28 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
         </div>
         <div id="op-paused-selb" style="font-family:var(--mono);font-size:24px;font-weight:700;color:var(--accent);margin-bottom:20px"></div>
         <div style="font-size:13px;color:var(--muted)">Aguarde o supervisor retomar o SELB.</div>
+      </div>
+
+      <!-- Estado: aguardando peça -->
+      <div id="op-aguardando" style="display:none">
+        <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:16px">
+          <div class="sdot" style="background:#f5a623;box-shadow:0 0 10px #f5a62388;animation:pulse 1.5s infinite"></div>
+          <span style="font-size:12px;font-weight:600;color:var(--warn);letter-spacing:.06em;text-transform:uppercase">Aguardando Peça</span>
+        </div>
+        <div id="op-ag-selb" style="font-family:var(--mono);font-size:28px;font-weight:700;color:var(--accent);margin-bottom:4px"></div>
+        <div id="op-ag-equip" style="font-size:12px;color:var(--muted);margin-bottom:20px;min-height:18px"></div>
+        <div style="background:rgba(245,166,35,.10);border:1px solid rgba(245,166,35,.3);border-radius:12px;padding:14px 16px;margin-bottom:18px;text-align:left">
+          <div style="font-size:11px;color:var(--warn);font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px">🔩 Peças solicitadas</div>
+          <div id="op-ag-pecas" style="font-size:12px;color:var(--muted)">—</div>
+        </div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:18px">Solicitação enviada ao admin. Aguarde a liberação da peça.</div>
+        <button onclick="opFinalizarAguardando()" style="
+          width:100%;padding:14px;font-family:var(--font);font-size:14px;font-weight:700;
+          background:rgba(61,214,140,.15);color:var(--accent2);
+          border:1px solid rgba(61,214,140,.4);border-radius:12px;cursor:pointer;
+          transition:all .15s;margin-bottom:10px">
+          ✓ Peça recebida — Finalizar / Reiniciar SELB
+        </button>
       </div>
     </div>
 
@@ -595,26 +1028,22 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     </div>
 
     <!-- ══ CONTROLE DE EXPEDIENTE ══ -->
-    <div id="admin-expediente-panel" style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:14px 18px;margin-bottom:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span style="font-size:18px" id="admin-exp-icon">🕐</span>
-          <div>
-            <div style="font-size:13px;font-weight:700;color:var(--text)" id="admin-exp-title">Controle de Expediente</div>
-            <div style="font-size:11px;color:var(--muted);margin-top:2px" id="admin-exp-sub">Verificando estado atual...</div>
-          </div>
+    <div id="admin-sched-override-card" style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+      <div style="display:flex;align-items:center;gap:12px">
+        <span style="font-size:22px">🕐</span>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--text)">Controle de Expediente</div>
+          <div id="admin-sched-status-txt" style="font-size:11px;color:var(--muted);margin-top:2px">Carregando...</div>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button id="btn-retornar-expediente"
-            onclick="adminRetornarExpediente()"
-            style="display:none;background:rgba(61,214,140,.15);border:1px solid rgba(61,214,140,.5);border-radius:9px;font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px;cursor:pointer;color:var(--accent2)">
-            ▶ Retornar Expediente
-          </button>
-          <button id="btn-encerrar-expediente"
-            onclick="adminEncerrarExpediente()"
-            style="display:none;background:rgba(242,87,87,.12);border:1px solid rgba(242,87,87,.4);border-radius:9px;font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px;cursor:pointer;color:var(--danger)">
-            ■ Encerrar Expediente
-          </button>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <span id="admin-sched-badge" style="font-size:11px;font-weight:700;padding:4px 12px;border-radius:20px;display:none"></span>
+        <!-- Toggle Switch -->
+        <div onclick="toggleScheduleOverride()" style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none" title="Libera ou bloqueia o acesso de todos os operadores fora do expediente">
+          <span id="admin-sched-lbl" style="font-size:12px;font-weight:700;color:var(--muted)">BLOQUEADO</span>
+          <div id="admin-sched-toggle-wrap" style="position:relative;width:52px;height:28px;border-radius:14px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.15);transition:background .25s ease;cursor:pointer">
+            <div id="admin-sched-knob" style="position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#ccc;transition:transform .25s ease, background .25s ease;box-shadow:0 2px 6px rgba(0,0,0,.4)"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -716,7 +1145,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     </div>
     <div style="overflow-x:auto">
     <table class="utbl">
-      <thead><tr><th>Nome</th><th>PIN</th><th>Código</th><th>Local</th><th>Setor</th><th>Status</th><th>Total dia</th><th>Ações</th></tr></thead>
+      <thead><tr><th>Nome</th><th>PIN</th><th>Código</th><th>Local</th><th>Setor</th><th>Linha</th><th>Status</th><th>Total dia</th><th>Ações</th></tr></thead>
       <tbody id="users-body"></tbody>
     </table>
     </div>
@@ -769,6 +1198,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <button id="reltab-busca-modelo" onclick="setRelSubTab('busca-modelo')" style="background:none;color:var(--muted);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">🔍 Busca por Modelo</button>
       <button id="reltab-qual-liberados" onclick="setRelSubTab('qual-liberados')" style="background:none;color:var(--muted);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">✅ Liberados Qualidade</button>
       <button id="reltab-linha" onclick="setRelSubTab('linha')" style="background:none;color:var(--muted);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">🏭 Produção por Linha</button>
+      <button id="reltab-saude-equipe" onclick="setRelSubTab('saude-equipe')" title="Relatório Mensal — Saúde da Equipe" style="background:rgba(124,58,237,0.12);color:#a78bfa;border:1px solid rgba(124,58,237,0.35);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 18px;cursor:pointer">🩺 Saúde da Equipe</button>
       <button id="rel-refresh-badge" onclick="refreshRelatorios()" style="
         display:none;margin-left:auto;
         background:rgba(61,214,140,.15);border:1px solid rgba(61,214,140,.5);
@@ -782,7 +1212,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     <div id="relview-prod">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
       <div>
-        <h2 style="font-size:18px;font-weight:600">Relatório de Produtividade</h2>
+        <h2 style="font-size:18px;font-weight:600">Relatório de Produtividade<span class="info-rel-btn" onclick="mostrarInfoRelatorio('prod')" title="Como funciona este relatório">ℹ</span></h2>
         <p style="font-size:12px;color:var(--muted);margin-top:3px" id="rel-period-label">Hoje</p>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -873,7 +1303,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     <div id="relview-scrap" style="display:none">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
         <div>
-          <h2 style="font-size:18px;font-weight:600">Registros SCRAP</h2>
+          <h2 style="font-size:18px;font-weight:600">Registros SCRAP<span class="info-rel-btn" onclick="mostrarInfoRelatorio('scrap')" title="Como funciona este relatório">ℹ</span></h2>
           <p style="font-size:12px;color:var(--muted);margin-top:3px" id="scrap-period-label">Carregando...</p>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -954,7 +1384,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     <div id="relview-modelo" style="display:none">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
         <div>
-          <h2 style="font-size:18px;font-weight:600">Tempo Médio por Modelo</h2>
+          <h2 style="font-size:18px;font-weight:600">Tempo Médio por Modelo<span class="info-rel-btn" onclick="mostrarInfoRelatorio('modelo')" title="Como funciona este relatório">ℹ</span></h2>
           <p style="font-size:12px;color:var(--muted);margin-top:3px" id="modelo-period-label">Carregando todos os períodos...</p>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -989,6 +1419,13 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       </div>
 
       <div id="modelo-loading" style="display:none;text-align:center;padding:20px;color:var(--muted);font-size:13px">Carregando histórico completo...</div>
+
+      <!-- Filtro de janela de tempo -->
+      <div id="modelo-window-tabs" style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
+        <button class="modelo-win-btn" data-days="30" onclick="setModeloWindow(30,this)">30 dias</button>
+        <button class="modelo-win-btn" data-days="60" onclick="setModeloWindow(60,this)">60 dias</button>
+        <button class="modelo-win-btn active" data-days="90" onclick="setModeloWindow(90,this)">90 dias</button>
+      </div>
 
       <!-- Busca de modelo -->
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:18px">
@@ -1102,7 +1539,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     <div id="relview-usuario" style="display:none">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
         <div>
-          <h2 style="font-size:18px;font-weight:600">Tempo Médio por Modelo — Por Usuário</h2>
+          <h2 style="font-size:18px;font-weight:600">Tempo Médio por Modelo — Por Usuário<span class="info-rel-btn" onclick="mostrarInfoRelatorio('usuario')" title="Como funciona este relatório">ℹ</span></h2>
           <p style="font-size:12px;color:var(--muted);margin-top:3px" id="usuario-period-label">Carregando...</p>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -1191,7 +1628,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 <div id="relview-pedido" style="display:none">
     <div class="pedido-wrap">
       <div class="pedido-header">
-        <h2>Facilitador de Pedido</h2>
+        <h2>Facilitador de Pedido<span class="info-rel-btn" onclick="mostrarInfoRelatorio('pedido')" title="Como funciona este relatório">ℹ</span></h2>
         <p>Envie a planilha XLSX, cole os SELBs bipados e gere etiquetas 15×10cm com QR. Marque N etiquetas por modelo como <strong>pedido</strong>.</p>
       </div>
 
@@ -1256,7 +1693,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     <div id="relview-reprov" style="display:none">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
         <div>
-          <h2 style="font-size:18px;font-weight:600">Máquinas Reprovadas</h2>
+          <h2 style="font-size:18px;font-weight:600">Máquinas Reprovadas<span class="info-rel-btn" onclick="mostrarInfoRelatorio('reprov')" title="Como funciona este relatório">ℹ</span></h2>
           <p style="font-size:12px;color:var(--muted);margin-top:3px" id="reprov-period-label">Carregando...</p>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -1308,7 +1745,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     <div id="relview-defeitos" style="display:none">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
         <div>
-          <h2 style="font-size:18px;font-weight:600">🔍 Defeitos Frequentes</h2>
+          <h2 style="font-size:18px;font-weight:600">🔍 Defeitos Frequentes<span class="info-rel-btn" onclick="mostrarInfoRelatorio('defeitos')" title="Como funciona este relatório">ℹ</span></h2>
           <p style="font-size:12px;color:var(--muted);margin-top:3px" id="defeitos-period-label">Carregando...</p>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -1340,7 +1777,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
           <div>
-            <h3 style="font-size:15px;font-weight:600;color:var(--text)">SELBs Duplicados por Usuário</h3>
+            <h3 style="font-size:15px;font-weight:600;color:var(--text)">SELBs Duplicados por Usuário<span class="info-rel-btn" onclick="mostrarInfoRelatorio('duplicados')" title="Como funciona este relatório">ℹ</span></h3>
             <p style="font-size:12px;color:var(--muted);margin-top:4px">Lista SELBs concluídos (aprovados) que foram registrados mais de uma vez pelo mesmo usuário dentro do período selecionado.</p>
           </div>
           <div>
@@ -1368,7 +1805,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     <!-- SUB-VIEW: BUSCA POR MODELO -->
     <div id="relview-busca-modelo" style="display:none">
       <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:24px;margin-bottom:20px">
-        <h2 style="font-size:18px;font-weight:600;margin-bottom:4px">🔍 Análise por Modelo Específico</h2>
+        <h2 style="font-size:18px;font-weight:600;margin-bottom:4px">🔍 Análise por Modelo Específico<span class="info-rel-btn" onclick="mostrarInfoRelatorio('busca-modelo')" title="Como funciona este relatório">ℹ</span></h2>
         <p style="font-size:12px;color:var(--muted);margin-bottom:20px">Visualize o rendimento (Aprovados vs Scrap) e os Liberados da Qualidade de até 2 modelos, sem duplicar SELBs.</p>
         
         <div style="display:flex;gap:12px;align-items:flex-end;margin-bottom:24px">
@@ -1415,7 +1852,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     <div id="relview-qual-liberados" style="display:none">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:12px">
         <div>
-          <h2 style="font-size:18px;font-weight:700;color:#a78bfa;margin:0">📊 Relatório de Registros por Usuário</h2>
+          <h2 style="font-size:18px;font-weight:700;color:#a78bfa;margin:0">📊 Relatório de Registros por Usuário<span class="info-rel-btn" onclick="mostrarInfoRelatorio('qual-liberados')" title="Como funciona este relatório">ℹ</span></h2>
           <p style="font-size:12px;color:var(--muted);margin-top:4px">Quantidade de SELBs liberados na tela de Qualidade, agrupado por responsável</p>
         </div>
         <button onclick="exportarRelatorioUsuariosQual()" style="background:rgba(74,222,128,.12);border:1px solid rgba(74,222,128,.35);border-radius:9px;color:#4ade80;font-family:var(--font);font-size:12px;font-weight:700;padding:8px 16px;cursor:pointer">⬇ Exportar CSV</button>
@@ -1552,7 +1989,6 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <div id="qual-rel-detalhe" style="margin-top:20px"></div>
     </div>
 
-    <!-- SUB-VIEW: PRODUÇÃO POR LINHA -->
     <div id="relview-linha" style="display:none">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:12px">
         <div>
@@ -1585,7 +2021,104 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 
       <div id="linha-prod-detalhe" style="margin-top:20px"></div>
     </div>
+
+    <!-- ── SUB-VIEW: Saúde da Equipe ── -->
+    <div id="relview-saude-equipe" style="display:none">
+      <style>
+        /* Estilos escopados para o painel de saúde da equipe */
+        #relview-saude-equipe .se-header { display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:16px;background:var(--bg2);border:1px solid var(--border2);border-radius:16px;padding:20px 24px;margin-bottom:20px; }
+        #relview-saude-equipe .se-header h2 { font-size:18px;font-weight:800;display:flex;align-items:center;gap:10px; }
+        #relview-saude-equipe .se-header-sub { font-size:12px;color:var(--muted);margin-top:3px; }
+        #relview-saude-equipe .se-controls { display:flex;align-items:center;gap:10px;flex-wrap:wrap; }
+        #relview-saude-equipe .se-kpi-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:24px; }
+        #relview-saude-equipe .se-kpi-card { background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:16px;position:relative;overflow:hidden; }
+        #relview-saude-equipe .se-kpi-card::before { content:'';position:absolute;top:0;left:0;right:0;height:3px;background:var(--se-card-color,var(--accent)); }
+        #relview-saude-equipe .se-kpi-label { font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em; }
+        #relview-saude-equipe .se-kpi-value { font-size:28px;font-weight:900;font-family:var(--mono);color:var(--se-card-color,var(--text));margin-top:6px;line-height:1; }
+        #relview-saude-equipe .se-kpi-sub { font-size:10px;color:var(--muted);margin-top:4px; }
+        #relview-saude-equipe .se-section { margin-bottom:28px; }
+        #relview-saude-equipe .se-section-title { font-size:13px;font-weight:800;color:#a78bfa;text-transform:uppercase;letter-spacing:.08em;margin-bottom:14px;display:flex;align-items:center;gap:8px; }
+        #relview-saude-equipe .se-section-title::after { content:'';flex:1;height:1px;background:var(--border2); }
+        #relview-saude-equipe .se-setor-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px; }
+        #relview-saude-equipe .se-setor-card { background:var(--bg2);border-radius:14px;padding:16px;border:1px solid var(--border2); }
+        #relview-saude-equipe .se-setor-head { display:flex;align-items:center;justify-content:space-between;margin-bottom:10px; }
+        #relview-saude-equipe .se-setor-name { font-size:13px;font-weight:800;display:flex;align-items:center;gap:6px; }
+        #relview-saude-equipe .se-setor-pct { font-size:13px;font-weight:900;font-family:var(--mono);padding:2px 10px;border-radius:20px;background:rgba(0,0,0,.3);border-width:1px;border-style:solid; }
+        #relview-saude-equipe .se-bar-track { width:100%;height:6px;background:rgba(255,255,255,.07);border-radius:10px;overflow:hidden;margin:8px 0 12px; }
+        #relview-saude-equipe .se-bar-fill { height:100%;border-radius:10px;transition:width .6s ease; }
+        #relview-saude-equipe .se-stats-row { display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:10px; }
+        #relview-saude-equipe .se-stat-box { border-radius:8px;padding:6px;text-align:center; }
+        #relview-saude-equipe .se-stat-box .lbl { font-size:8px;font-weight:700;text-transform:uppercase; }
+        #relview-saude-equipe .se-stat-box .val { font-size:14px;font-weight:900;font-family:var(--mono);margin-top:2px; }
+        #relview-saude-equipe .se-member-list { display:flex;flex-wrap:wrap;gap:4px; }
+        #relview-saude-equipe .se-chip { display:inline-flex;align-items:center;gap:3px;font-size:9px;font-weight:700;padding:2px 7px;border-radius:5px;border-width:1px;border-style:solid; }
+        #relview-saude-equipe .se-chip-dot { width:5px;height:5px;border-radius:50%;display:inline-block; }
+        #relview-saude-equipe .se-status-bar { background:var(--bg2);border:1px solid var(--border2);border-radius:10px;padding:10px 16px;font-size:12px;color:var(--muted);display:flex;align-items:center;gap:8px;margin-bottom:20px;min-height:40px; }
+        #relview-saude-equipe .se-spinner { width:14px;height:14px;border:2px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0; }
+        #relview-saude-equipe table { width:100%;border-collapse:collapse;font-size:12px; }
+        #relview-saude-equipe th { background:var(--bg3);padding:4px 12px;text-align:left;font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid var(--border2);white-space:nowrap; }
+        #relview-saude-equipe td { padding:4px 12px;border-bottom:1px solid var(--border2);vertical-align:middle;overflow:hidden;text-overflow:ellipsis; }
+        #relview-saude-equipe tfoot td { background:var(--bg3);font-weight:800; }
+        #relview-saude-equipe tr:hover td { background:rgba(255,255,255,.025); }
+      </style>
+
+      <!-- Header -->
+      <div class="se-header">
+        <div>
+          <h2>🩺 Relatório Mensal — Saúde da Equipe</h2>
+          <div class="se-header-sub">Saúde da equipe por setor · Presença via check-in PIN · Produção do período</div>
+        </div>
+        <div class="se-controls">
+          <select id="se-sel-mes" title="Mês do relatório" style="font-family:var(--font);font-size:13px;font-weight:600;background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:9px;padding:8px 14px;cursor:pointer;outline:none"></select>
+          <button onclick="seGerarRelatorio()" style="background:rgba(124,58,237,0.18);border:1px solid rgba(124,58,237,0.5);color:#c4b5fd;font-family:var(--font);font-size:13px;font-weight:600;border-radius:9px;padding:8px 14px;cursor:pointer">🔄 Gerar Relatório</button>
+          <button onclick="seExportarExcel()" style="background:rgba(34,211,238,0.1);border:1px solid rgba(34,211,238,0.35);color:#22d3ee;font-family:var(--font);font-size:12px;font-weight:600;border-radius:9px;padding:8px 14px;cursor:pointer">📊 Excel</button>
+        </div>
+      </div>
+
+      <!-- Status -->
+      <div class="se-status-bar" id="se-status-bar">
+        <div class="se-spinner" id="se-spinner" style="display:none"></div>
+        <span id="se-status-text">Selecione o mês e clique em Gerar Relatório.</span>
+      </div>
+
+      <!-- Conteúdo gerado dinamicamente -->
+      <div id="se-conteudo" style="display:none">
+        <div class="se-kpi-grid" id="se-kpis"></div>
+        <div class="se-section">
+          <div class="se-section-title">🏭 Saúde por Setor</div>
+          <div class="se-setor-grid" id="se-setores-grid"></div>
+        </div>
+        <div class="se-section">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+            <div class="se-section-title" style="margin-bottom:0">📅 Evolução Diária</div>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <div id="se-dias-filtro-info" style="font-size:11px;color:var(--muted)"></div>
+              <button id="se-btn-toggle-baixos" onclick="seToggleDiasBaixos()" style="font-size:11px;padding:5px 12px;background:rgba(242,87,87,.1);border:1px solid rgba(242,87,87,.3);color:#f25757;border-radius:9px;font-family:var(--font);font-weight:600;cursor:pointer">👁 Mostrar dias &lt;50%</button>
+            </div>
+          </div>
+          <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;overflow:hidden">
+            <div style="overflow-x:auto">
+              <table>
+                <thead><tr>
+                  <th>Data</th><th>Dia</th>
+                  <th style="text-align:center">Presentes</th><th style="text-align:center">Ausentes</th>
+                  <th style="text-align:center">Total Equipe</th><th style="text-align:center">Saúde %</th>
+                  <th style="text-align:center">Liberações</th><th style="width:32%">Quem faltou</th>
+                </tr></thead>
+                <tbody id="se-tabela-dias-body"></tbody>
+                <tfoot id="se-tabela-dias-foot"></tfoot>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="se-section" id="se-auditoria"></div>
+        <div style="font-size:11px;color:var(--muted);font-style:italic;margin-top:8px">
+          ⚠️ Saúde da equipe: setor <strong>Eletrônica</strong> aparece nos cards mas <strong>não entra</strong> no cálculo da saúde geral. Dias sem nenhum check-in são marcados como "Feriado/sem dados". Dias com menos de 50% de presença são ocultados por padrão.
+        </div>
+      </div>
+    </div>
   </div>
+
 
 
   <!-- ── EQUIPAMENTOS ── -->
@@ -1594,14 +2127,17 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <div>
         <h2>Cadastro de Equipamentos (SELBs)</h2>
         <p style="font-size:12px;color:var(--muted);margin-top:4px">Importe a planilha do sistema (.xlsx). As colunas <b>SELB</b> e <b>Produto</b> são detectadas automaticamente. Ao iniciar um SELB, o nome do equipamento aparece no card e no modal.</p>
+        <div id="equip-import-ts" style="margin-top:6px;font-size:11px;display:flex;align-items:center;gap:6px;color:var(--muted)">
+          <span style="font-style:italic;opacity:.6">Nenhuma importação registrada</span>
+        </div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <button id="equip-add-btn" class="btn-add" onclick="openNewEquip()">+ Novo SELB</button>
+        <button class="btn-add" onclick="openNewEquip()">+ Novo SELB</button>
         <label id="equip-import-label" style="background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">
           📂 Importar planilha
           <input type="file" id="equip-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importEquipFile(this)">
         </label>
-        <button id="equip-clear-btn" onclick="clearEquipamentos()" style="background:rgba(242,87,87,.12);border:1px solid rgba(242,87,87,.3);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 14px;cursor:pointer;color:var(--danger)">🗑️ Limpar tudo</button>
+        <button onclick="clearEquipamentos()" style="background:rgba(242,87,87,.12);border:1px solid rgba(242,87,87,.3);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 14px;cursor:pointer;color:var(--danger)">🗑️ Limpar tudo</button>
       </div>
     </div>
 
@@ -1649,24 +2185,12 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     </div>
     
     <!-- Painel de alertas de solicitações pendentes -->
-    <div id="pecas-solicitacoes-panel" style="display:none;background:rgba(245,166,35,.06);border:1px solid rgba(245,166,35,.35);border-radius:14px;padding:16px 18px;margin-bottom:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0;flex-wrap:wrap;gap:8px">
-        <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-size:16px">🔔</span>
-          <span style="font-size:13px;font-weight:700;color:var(--warn)">Solicitações de Peças Pendentes</span>
-          <span id="pecas-sol-badge" style="background:var(--warn);color:#000;border-radius:20px;font-size:10px;font-weight:800;padding:2px 8px">0</span>
-        </div>
-        <button onclick="togglePecasSection('pecas-sol-body')" id="btn-toggle-pecas-sol"
-          style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1;padding:2px 6px"
-          title="Retrair/Expandir">▼</button>
-      </div>
-      <div id="pecas-sol-body" style="margin-top:10px"></div>
-    </div>
+    <div id="pecas-solicitacoes-panel" style="display:none;background:rgba(245,166,35,.06);border:1px solid rgba(245,166,35,.35);border-radius:14px;padding:16px 18px;margin-bottom:16px"></div>
 
     <!-- Lista de etiquetas de movimentação -->
     <div id="pecas-etiquetas-movimentacao-panel" style="background:rgba(232,121,249,.06);border:1px solid rgba(232,121,249,.35);border-radius:14px;padding:16px 18px;margin-bottom:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-        <h3 style="font-size:14px;font-weight:700;color:#e879f9;margin:0;display:flex;align-items:center;gap:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0;flex-wrap:wrap;gap:8px">
+        <h3 style="font-size:14px;font-weight:700;color:#e879f9;margin:0;display:flex;align-items:center;gap:8px;cursor:pointer" onclick="togglePecasSection('pecas-etq-body')">
           🏷️ Imprimir movimentações
           <span id="badge-imprimir-movimentacoes" style="background:#e879f9;color:#17111b;border-radius:99px;min-width:19px;padding:2px 8px;font-size:10px;text-align:center;font-weight:800">0</span>
         </h3>
@@ -1676,12 +2200,10 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
             Impressão automática
           </label>
           <button onclick="imprimirTodasEtiquetasMovimentacao()" style="background:rgba(232,121,249,.18);border:1px solid rgba(232,121,249,.5);border-radius:9px;color:#e879f9;font-family:var(--font);font-size:12px;font-weight:700;padding:7px 14px;cursor:pointer">🖨️ Imprimir todas</button>
-          <button onclick="togglePecasSection('pecas-etq-body')" id="btn-toggle-pecas-etq"
-            style="background:none;border:none;color:#e879f9;font-size:18px;cursor:pointer;line-height:1;padding:2px 6px"
-            title="Retrair/Expandir">▼</button>
+          <button onclick="togglePecasSection('pecas-etq-body')" id="btn-toggle-pecas-etq" style="background:none;border:none;color:#e879f9;font-size:18px;cursor:pointer;line-height:1;padding:2px 6px" title="Retrair/Expandir">▶</button>
         </div>
       </div>
-      <div id="pecas-etq-body">
+      <div id="pecas-etq-body" style="display:none;margin-top:12px">
         <p style="font-size:11px;color:var(--muted);margin:-4px 0 8px">Etiquetas 10 × 15 cm para movimentações que <b>não são Aprovada</b>, só de <b>Montagem, Limpeza, Complexa, Desmembramento e Eletrônica</b>. A lista é o <b>spool do dia</b>. Use <b>print-agent/abrir-com-spool.bat</b> (abre em <code>http://127.0.0.1</code> + spool).</p>
         <div id="mov-spool-status" style="display:inline-block;font-size:11px;font-weight:700;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:4px 10px;margin:-2px 0 10px">Spool invisível:…</div>
         <div id="mov-spool-test-box" style="margin:0 0 12px;padding:10px 12px;border-radius:10px;border:1px dashed rgba(232,121,249,.45);background:rgba(232,121,249,.08)">
@@ -1731,15 +2253,14 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       </div>
     </div>
 
+
     <!-- Card: SELBs sem confirmação de PEDIDO -->
     <div id="pecas-pendentes-pedido" style="display:none;background:rgba(245,166,35,.08);border:2px solid rgba(245,166,35,.5);border-radius:14px;padding:16px 18px;margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-        <h3 style="font-size:14px;font-weight:700;color:var(--warn);margin:0">⚠️ SELBs sem confirmação de pedido <span id="pecas-pendentes-count" style="background:var(--warn);color:#000;border-radius:100px;font-size:11px;padding:2px 10px;margin-left:6px"></span></h3>
+        <h3 style="font-size:14px;font-weight:700;color:var(--warn);margin:0;cursor:pointer" onclick="togglePecasSection('pecas-pend-body')">⚠️ SELBs sem confirmação de pedido <span id="pecas-pendentes-count" style="background:var(--warn);color:#000;border-radius:100px;font-size:11px;padding:2px 10px;margin-left:6px"></span></h3>
         <div style="display:flex;gap:8px;align-items:center">
           <span style="font-size:11px;color:var(--muted)">Marque o checkbox PEDIDO? ao solicitar a peça — o item some daqui</span>
-          <button onclick="togglePecasSection('pecas-pend-body')" id="btn-toggle-pecas-pend"
-            style="background:none;border:none;color:var(--warn);font-size:18px;cursor:pointer;line-height:1;padding:2px 6px"
-            title="Retrair/Expandir">▼</button>
+          <button onclick="togglePecasSection('pecas-pend-body')" id="btn-toggle-pecas-pend" style="background:none;border:none;color:var(--warn);font-size:18px;cursor:pointer;line-height:1;padding:2px 6px" title="Retrair/Expandir">▼</button>
         </div>
       </div>
       <div id="pecas-pend-body">
@@ -1764,16 +2285,13 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       </div>
     </div>
 
-
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:16px">
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-        <span style="font-size:13px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px">
+        <span style="font-size:13px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px;cursor:pointer" onclick="togglePecasSection('pecas-lista-body')">
           📋 SELBs Aguardando Peças
           <span id="pecas-lista-count" style="background:var(--bg3);border:1px solid var(--border2);color:var(--muted);border-radius:20px;font-size:10px;font-weight:700;padding:2px 8px"></span>
         </span>
-        <button onclick="togglePecasSection('pecas-lista-body')" id="btn-toggle-pecas-lista"
-          style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1;padding:2px 6px"
-          title="Retrair/Expandir">▼</button>
+        <button onclick="togglePecasSection('pecas-lista-body')" id="btn-toggle-pecas-lista" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1;padding:2px 6px" title="Retrair/Expandir">▼</button>
       </div>
       <div id="pecas-lista-body">
         <div style="overflow-x:auto">
@@ -1798,43 +2316,80 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       </div>
     </div>
 
-    <script>
-    // ── Retrair/Expandir seções da aba Aguardando Peças ──
-    function togglePecasSection(bodyId) {
-      const body = document.getElementById(bodyId);
-      const btnMap = {
-        'pecas-sol-body':   'btn-toggle-pecas-sol',
-        'pecas-etq-body':   'btn-toggle-pecas-etq',
-        'pecas-pend-body':  'btn-toggle-pecas-pend',
-        'pecas-lista-body': 'btn-toggle-pecas-lista',
-      };
-      const btn = document.getElementById(btnMap[bodyId]);
-      if (!body) return;
-      const collapsed = body.style.display === 'none';
-      body.style.display = collapsed ? '' : 'none';
-      if (btn) btn.textContent = collapsed ? '▼' : '▶';
-      try { localStorage.setItem('pecas-section-' + bodyId, collapsed ? '1' : '0'); } catch(e){}
-    }
-    // Restaura estado salvo ao carregar
-    (function restorePecasSections(){
-      ['pecas-sol-body','pecas-etq-body','pecas-pend-body','pecas-lista-body'].forEach(function(id){
-        const btnMap = {
-          'pecas-sol-body':   'btn-toggle-pecas-sol',
-          'pecas-etq-body':   'btn-toggle-pecas-etq',
-          'pecas-pend-body':  'btn-toggle-pecas-pend',
-          'pecas-lista-body': 'btn-toggle-pecas-lista',
-        };
-        const saved = localStorage.getItem('pecas-section-' + id);
-        if (saved === '0') {
-          const body = document.getElementById(id);
-          const btn  = document.getElementById(btnMap[id]);
-          if (body) body.style.display = 'none';
-          if (btn)  btn.textContent = '▶';
-        }
-      });
-    })();
-    window.togglePecasSection = togglePecasSection;
-    </script>
+    <!-- ── ETIQUETADOR DE CÓDIGO (integrado do projeto etiquetador) ── -->
+    <div id="etq-painel">
+      <div id="etq-painel-header">
+        <h3>
+          🏷️ Imprimir Etiqueta de Código
+          <span style="background:#63b3ed;color:#0d1f33;border-radius:99px;padding:2px 8px;font-size:10px;font-weight:800">150×100 mm · Code 128</span>
+        </h3>
+        <button onclick="etqToggle()" id="btn-toggle-etq"
+          style="background:none;border:none;color:#63b3ed;font-size:18px;cursor:pointer;line-height:1;padding:2px 6px"
+          title="Retrair/Expandir">▼</button>
+      </div>
+
+      <div id="etq-body-wrap">
+        <!-- Campo único de cola -->
+        <div style="margin:10px 0 14px">
+          <label style="font-size:10px;font-weight:700;color:#63b3ed;text-transform:uppercase;letter-spacing:.08em;display:block;margin-bottom:6px">
+            📋 Cole o código + descrição (separados por TAB ou espaço)
+          </label>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input id="etq-paste-field"
+              class="sinp"
+              placeholder="Ex.: FA16191   CABECA DE IMPRESSAO EPSON WF6090..."
+              oninput="etqParsePaste(this.value)"
+              onpaste="setTimeout(()=>etqParsePaste(document.getElementById('etq-paste-field').value),10)"
+              style="flex:1;min-width:280px;font-family:var(--mono);font-size:13px;font-weight:600;letter-spacing:.02em">
+            <button onclick="etqImprimir()"
+              style="background:#63b3ed;border:none;border-radius:9px;color:#0d1f33;font-family:var(--font);font-size:13px;font-weight:700;padding:10px 22px;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:6px">
+              🖨️ Imprimir
+            </button>
+            <button onclick="etqLimpar()"
+              style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--muted);font-family:var(--font);font-size:13px;font-weight:600;padding:10px 14px;cursor:pointer">
+              ✕
+            </button>
+          </div>
+          <div id="etq-parsed-info" style="margin-top:6px;font-size:11px;display:none;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="color:var(--muted)">Código:</span>
+            <code id="etq-parsed-code" style="color:#63b3ed;font-weight:700;font-size:12px"></code>
+            <span style="color:var(--muted)">·</span>
+            <span style="color:var(--muted)">Descrição:</span>
+            <span id="etq-parsed-desc-info" style="color:var(--text);font-size:11px"></span>
+          </div>
+          <div id="etq-code-warn" style="display:none;font-size:10px;color:#f97316;margin-top:5px;font-weight:600">
+            ⚠️ Código contém caracteres fora do ASCII imprimível — não gera barras Code 128
+          </div>
+        </div>
+
+        <!-- Preview compacto -->
+        <div style="display:flex;justify-content:center">
+          <div>
+            <div style="font-size:9px;font-weight:700;color:var(--muted);text-align:center;margin-bottom:6px;text-transform:uppercase;letter-spacing:.07em">Pré-visualização (escala ~50% — real: 150×100 mm)</div>
+            <div style="overflow:hidden;width:calc(150mm * 0.50);height:calc(100mm * 0.50);border-radius:4px;box-shadow:0 2px 12px rgba(0,0,0,.4)">
+              <div id="etq-preview-scale-wrap">
+                <div id="etq-preview-label" class="etq-label-sheet">
+                  <div class="etq-label-head">
+                    <span class="etq-label-kicker">Código</span>
+                    <span class="etq-label-code" id="etq-prev-code" style="font-size:12mm">—</span>
+                  </div>
+                  <p class="etq-label-desc" id="etq-prev-desc" data-size="lg">&nbsp;</p>
+                  <div class="etq-label-foot">
+                    <div class="etq-barcode-wrap">
+                      <svg id="etq-prev-barcode" class="etq-barcode-svg" role="img" aria-label="Código de barras"></svg>
+                    </div>
+                    <span class="etq-label-human" id="etq-prev-human">—</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p style="font-size:10px;color:var(--muted);text-align:center;margin:6px 0 0">Ao imprimir: papel <b>15×10 cm</b> · margens <b>nenhuma</b> · escala <b>100%</b></p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- FIM ETIQUETADOR -->
+
   </div>
 
   <!-- ── MÁQUINAS A ── -->
@@ -1861,8 +2416,14 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <input class="sinp" id="maquinas-a-search" placeholder="BUSCAR SELB OU EQUIPAMENTO..." oninput="renderMaquinasAView()" style="width:260px">
           <button onclick="renderMaquinasAView()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--muted);font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">🔄 Atualizar</button>
+          <button onclick="fluxolabLimparMaquinasA()" style="background:rgba(242,87,87,.15);border:1px solid rgba(242,87,87,.4);color:var(--danger);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer" title="Confere e remove dos bolsões do FluxoLAB os equipamentos enviados para Máquinas A nos últimos 7 dias">🧹 Limpar Bolsões (7d)</button>
           <button onclick="abrirModalLogsPecas()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--text);font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">📝 Logs</button>
           <button id="btn-bipar-maquinas-a" onclick="abrirModalBiparMaquinasA()" style="background:rgba(16,185,129,.18);border:1px solid rgba(16,185,129,.5);border-radius:9px;color:#10b981;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">📥 Bipar SELBs (Pietro)</button>
+          <label id="maquinaa-import-label" title="Planilha usada só para preencher o nome do equipamento ao registrar Máquina A — não altera a aba Equipamentos" style="display:none;background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">
+            📄 Importar Planilha (Máquina A)
+            <input type="file" id="maquinaa-equip-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importMaquinaAEquipFile(this)">
+          </label>
+          <button id="maquinaa-import-clear-btn" onclick="limparMaquinaAEquipImport()" title="Remove a planilha importada exclusiva de Máquina A" style="display:none;background:rgba(242,87,87,.1);border:1px solid rgba(242,87,87,.35);border-radius:9px;color:var(--danger);font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">🗑️ Limpar Planilha</button>
           <button id="btn-add-maquina-a" onclick="abrirModalAdicionarMaquinaA()" style="background:rgba(79,142,247,.15);border:1px solid rgba(79,142,247,.4);border-radius:9px;color:var(--accent);font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer;display:none">+ Registrar Máquina A</button>
         </div>
       </div>
@@ -2118,18 +2679,19 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
         <table class="rtbl">
           <thead>
             <tr>
-              <th>DATA</th>
-              <th>SELB</th>
-              <th>EQUIPAMENTO</th>
-              <th>RESPONSÁVEL</th>
-              <th style="text-align:right">CONTADOR PB / COLOR</th>
-              <th>OBSERVAÇÃO</th>
-              <th style="width:120px;text-align:center">STATUS</th>
-              <th style="width:80px">AÇÃO</th>
+              <th style="width:100px;white-space:nowrap">DATA</th>
+              <th style="min-width:160px">SELB</th>
+              <th style="min-width:200px">EQUIPAMENTO</th>
+              <th style="min-width:120px">RESPONSÁVEL</th>
+              <th style="text-align:right;min-width:140px">CONTADOR PB / COLOR</th>
+              <th style="min-width:120px">PEDIDO</th>
+              <th style="min-width:180px">OBSERVAÇÃO</th>
+              <th style="width:130px;text-align:center">STATUS</th>
+              <th style="min-width:260px">AÇÃO</th>
             </tr>
           </thead>
           <tbody id="qual-reg-body">
-            <tr><td colspan="8" class="empty">Carregando...</td></tr>
+            <tr><td colspan="9" class="empty">Carregando...</td></tr>
           </tbody>
         </table>
       </div>
@@ -2201,6 +2763,23 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
   <div class="view" id="view-garantia">
 
     <!-- Header -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <div>
+        <h2 style="font-size:18px;font-weight:600;color:var(--purple)">🛡️ Garantia</h2>
+        <p style="font-size:12px;color:var(--muted);margin-top:3px">Registro de peças em garantia e devolução de peças ao estoque</p>
+      </div>
+    </div>
+
+    <!-- Sub-abas: Registro de Garantia / Devolução -->
+    <div class="stabs" id="garantia-subtabs" style="margin-bottom:18px">
+      <button class="stab a-all" id="gartab-registro" onclick="setGarantiaSubTab('registro')">🛡️ Registro de Garantia</button>
+      <button class="stab" id="gartab-devolucao" onclick="setGarantiaSubTab('devolucao')">↩️ Devolução</button>
+    </div>
+
+    <!-- ═══ SUB-ABA: REGISTRO DE GARANTIA (conteúdo original) ═══ -->
+    <div id="garview-registro">
+
+    <!-- Header -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
       <div>
         <h2 style="font-size:18px;font-weight:600;color:var(--purple)">🛡️ Registro de Garantia</h2>
@@ -2249,6 +2828,115 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           </thead>
           <tbody id="garantia-body"></tbody>
         </table>
+      </div>
+    </div>
+    </div><!-- /garview-registro -->
+
+    <!-- ═══ SUB-ABA: DEVOLUÇÃO ═══ -->
+    <div id="garview-devolucao" style="display:none">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
+        <div>
+          <h2 style="font-size:18px;font-weight:600;color:#22d3ee">↩️ Devolução de Peças</h2>
+          <p style="font-size:12px;color:var(--muted);margin-top:3px">Bipe o código da peça para consultar o nome automaticamente — registro interno, não altera o estoque do Pietro</p>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <div class="search-bar" style="margin:0">
+            <input class="sinp" id="devolucao-search" placeholder="BUSCAR NOME, CÓDIGO OU SELB..."
+              oninput="renderDevolucaoView()" style="width:300px">
+          </div>
+          <button onclick="renderDevolucaoView()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--muted);font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">🔄 Atualizar</button>
+          <button onclick="abrirModalNovaDevolucao()"
+            style="background:rgba(34,211,238,.15);border:1px solid rgba(34,211,238,.4);border-radius:9px;color:#22d3ee;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">
+            + Registrar Devolução
+          </button>
+        </div>
+      </div>
+
+      <!-- KPI cards -->
+      <div id="devolucao-kpi" style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:20px"></div>
+
+      <!-- Tabela -->
+      <div style="background:var(--bg2);border:1px solid rgba(34,211,238,.25);border-radius:14px;padding:20px">
+        <div style="overflow-x:auto">
+          <table class="rtbl">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Nome da Peça</th>
+                <th>Código</th>
+                <th>Qtd</th>
+                <th>SELB de Origem</th>
+                <th>Motivo</th>
+                <th>Registrado por</th>
+                <th>Data / Hora</th>
+                <th style="width:120px">Ações</th>
+              </tr>
+            </thead>
+            <tbody id="devolucao-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div><!-- /garview-devolucao -->
+
+  </div>
+
+  <!-- ═══ MODAL: REGISTRAR DEVOLUÇÃO ═══ -->
+  <div class="modal-overlay hidden" id="modal-devolucao" onclick="if(event.target===this)closeModal('modal-devolucao')">
+    <div class="modal" style="max-width:480px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
+        <div>
+          <h2 id="md-title" style="font-size:16px;color:#22d3ee">↩️ Registrar Devolução de Peça</h2>
+          <div class="msub" style="margin-bottom:0">Bipe o código — o nome é buscado automaticamente</div>
+        </div>
+        <button onclick="closeModal('modal-devolucao')" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;line-height:1;padding:2px 6px">×</button>
+      </div>
+
+      <div style="height:16px"></div>
+
+      <label class="flbl">Código da Peça *</label>
+      <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:0">
+        <input class="inp" id="md-codigo" placeholder="Bipe ou digite o código..." maxlength="80"
+          oninput="this.value=this.value.toUpperCase()" onkeydown="if(event.key==='Enter'){event.preventDefault();buscarNomePecaDevolucao();}"
+          style="margin-bottom:0;text-transform:uppercase;flex:1">
+        <button type="button" onclick="buscarNomePecaDevolucao()" id="md-btn-buscar"
+          style="background:rgba(34,211,238,.15);border:1px solid rgba(34,211,238,.4);border-radius:8px;color:#22d3ee;font-family:var(--font);font-size:12px;font-weight:600;padding:0 16px;height:38px;cursor:pointer;white-space:nowrap">
+          🔎 Buscar
+        </button>
+      </div>
+      <div id="md-busca-status" style="font-size:11px;margin-top:6px;min-height:14px"></div>
+
+      <div style="height:10px"></div>
+
+      <label class="flbl">Nome da Peça *</label>
+      <input class="inp" id="md-nome" placeholder="Preenchido automaticamente ao buscar o código" maxlength="120">
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div>
+          <label class="flbl">Quantidade *</label>
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:0">
+            <button type="button" onclick="mdAlterarQtd(-1)" style="width:32px;height:38px;background:var(--bg4);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-size:18px;font-weight:700;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:all .1s" onmouseover="this.style.background='#22d3ee';this.style.color='#000'" onmouseout="this.style.background='var(--bg4)';this.style.color='var(--text)'">&#8722;</button>
+            <input class="inp" id="md-quantidade" type="number" min="1" max="999" value="1" style="margin-bottom:0;text-align:center;font-family:var(--mono);font-weight:700;font-size:16px;color:#22d3ee;background:var(--bg3);border:2px solid rgba(34,211,238,.6);-webkit-text-fill-color:#22d3ee;width:70px;min-width:70px;padding-left:6px;padding-right:6px">
+            <button type="button" onclick="mdAlterarQtd(1)" style="width:32px;height:38px;background:var(--bg4);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-size:18px;font-weight:700;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:all .1s" onmouseover="this.style.background='#22d3ee';this.style.color='#000'" onmouseout="this.style.background='var(--bg4)';this.style.color='var(--text)'">+</button>
+          </div>
+        </div>
+        <div>
+          <label class="flbl">SELB de Origem</label>
+          <input class="inp" id="md-selb" placeholder="Ex: A1B2C" maxlength="20"
+            oninput="this.value=this.value.toUpperCase()" style="margin-bottom:0;text-transform:uppercase">
+        </div>
+      </div>
+
+      <div style="height:12px"></div>
+
+      <label class="flbl">Motivo da Devolução</label>
+      <textarea class="inp" id="md-motivo" placeholder="Descreva o motivo da devolução (opcional)..." rows="3"
+        style="resize:vertical;letter-spacing:0;font-family:var(--font);font-size:13px"></textarea>
+
+      <input type="hidden" id="md-id">
+      <div class="merr" id="md-err"></div>
+      <div class="mbtns">
+        <button class="btn bg" style="flex:0.5" onclick="closeModal('modal-devolucao')">Cancelar</button>
+        <button class="btn" style="background:rgba(34,211,238,.2);border:1px solid rgba(34,211,238,.5);color:#22d3ee" onclick="salvarDevolucao()">↩️ Salvar Devolução</button>
       </div>
     </div>
   </div>
@@ -2419,7 +3107,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <div style="padding:16px 18px;border-bottom:1px solid rgba(34,211,238,.2);background:rgba(34,211,238,.05);display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
         <div>
           <div style="font-size:13px;font-weight:800;color:#22d3ee;letter-spacing:.04em">📋 LOG DE MOVIMENTAÇÕES</div>
-          <div style="font-size:10px;color:var(--muted);margin-top:2px">Últimas 100 ações no FluxoLAB</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px">Histórico completo de movimentações</div>
         </div>
         <button onclick="fluxolabToggleLog()" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer;line-height:1;padding:4px 8px" title="Fechar">×</button>
       </div>
@@ -2431,12 +3119,10 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px">
       <div>
         <h1 style="font-size:22px;font-weight:800;margin:0 0 4px;letter-spacing:-.02em">🔬 FluxoLAB</h1>
-        <div style="font-size:12px;color:var(--muted)">Rastreamento em tempo real · atualizado via Firebase</div>
+        <div style="font-size:12px;color:var(--muted)">Rastreamento em tempo real · atualizado via Supabase</div>
       </div>
       <div style="display:flex;align-items:center;gap:10px">
         <div id="fluxolab-last-update" style="font-size:11px;color:var(--muted)"></div>
-        <button onclick="fluxolabLimparMaquinasA()" style="background:rgba(242,87,87,.15);border:1px solid rgba(242,87,87,.4);color:var(--danger);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 14px;cursor:pointer" title="Confere e remove dos bolsões equipamentos que foram para Máquinas A nos últimos 7 dias">🧹 Limpar Máquinas A (7d)</button>
-        <button onclick="fluxolabVarrerDuplicados()" style="background:rgba(245,166,35,.15);border:1px solid rgba(245,166,35,.4);color:#f5a623;border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 14px;cursor:pointer" title="Varre todos os bolsões, encontra SELBs duplicados (presentes em mais de um bolsão) e remove o registro mais antigo, mantendo apenas o mais recente">🔍 Varrer Bolsões</button>
         <button onclick="fluxolabForceRefresh()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--muted);font-family:var(--font);font-size:12px;font-weight:600;padding:7px 14px;cursor:pointer">↺ Atualizar</button>
         <button id="btn-fluxolab-varrer" onclick="fluxolabVarrerBolsoes()" style="background:rgba(16,185,129,.12);border:1px solid rgba(16,185,129,.4);border-radius:9px;color:var(--accent);font-family:var(--font);font-size:12px;font-weight:600;padding:7px 14px;cursor:pointer" title="Procura o mesmo SELB em mais de um bolsão e mantém apenas o registro mais recente">🧹 Varrer bolsões</button>
         <button id="btn-fluxolab-estagnados" onclick="fluxolabAbrirEstagnados()" style="background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.4);border-radius:9px;color:#ef4444;font-family:var(--font);font-size:12px;font-weight:600;padding:7px 14px;cursor:pointer" title="Ver SELBs parados há mais de 3 dias">🛑 Estagnados (<span id="fluxolab-estagnados-count">0</span>)</button>
@@ -2490,7 +3176,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
           font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
           letter-spacing:.02em;transition:all .15s;
-        ">📋 Checklists Importados</button>
+        ">📋 Checklists Importados <span id="fluxolab-checklists-count-badge" style="display:none;background:#f59e0b;color:#1a0f00;font-size:10px;font-weight:900;border-radius:10px;padding:1px 7px;margin-left:4px;vertical-align:middle">0</span></button>
       </div>
     </div>
 
@@ -2608,9 +3294,9 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <button onclick="fluxolabVerificarPedidosRegistrados(this)" title="Verifica se há pedidos do checklist já registrados na Qualidade e remove-os da lista" style="background:rgba(16,185,129,.12);border:1px solid var(--accent);border-radius:9px;color:var(--accent);font-family:var(--font);font-size:12px;font-weight:700;padding:7px 14px;outline:none;cursor:pointer">&#128260; Verificar Pedidos Registrados</button>
           <select id="fluxolab-modelo-sort" onchange="fluxolabRenderModelos()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--text);font-family:var(--font);font-size:12px;padding:7px 12px;outline:none;cursor:pointer">
+            <option value="maxDias" selected>&#9650; Maior dia parado</option>
             <option value="total">&#8597; Ordenar: Total</option>
             <option value="mediaDias">&#128197; Dias médios em aberto</option>
-            <option value="maxDias">&#9650; Maior dia parado</option>
             <option value="urgencia">&#128680; Urgência</option>
             <option value="acima4">&#9888; Acima de 4 dias</option>
             <option value="acima10">&#128992; Acima de 10 dias</option>
@@ -2650,6 +3336,72 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <div id="fluxolab-checklists-grid"></div>
 
     </div>
+
+    <!-- ═══ ABA: CAINDO HOJE ═══ -->
+    <div id="fluxolab-tab-caindo-panel" style="display:none">
+
+      <!-- Toolbar -->
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+        <div>
+          <h2 style="font-size:22px;font-weight:800;color:#ef4444;margin:0;display:flex;align-items:center;gap:8px">🔥 Caindo Hoje</h2>
+          <p style="font-size:12px;color:var(--muted);margin:3px 0 0">Checklists com <b style="color:var(--text)">0 dias úteis</b> — vencem ou já venceram hoje.</p>
+        </div>
+        <div style="flex:1"></div>
+        <button onclick="fluxolabRenderCaindoHoje()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:10px;color:var(--muted);font-family:var(--font);font-size:13px;font-weight:600;padding:9px 16px;cursor:pointer">↺ Atualizar</button>
+        <button onclick="fluxolabRelatorioPorDia()" style="background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.5);border-radius:10px;color:#ef4444;font-family:var(--font);font-size:13px;font-weight:700;padding:9px 18px;cursor:pointer">📊 Relatório por Dia</button>
+      </div>
+
+      <!-- Stats rápidos -->
+      <div id="fluxolab-caindo-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:18px"></div>
+
+      <!-- Grid: lista de checklists caindo hoje -->
+      <div id="fluxolab-caindo-grid"></div>
+
+      <!-- Modal Relatório por Dia -->
+      <div id="modal-fluxolab-relatorio-dia" style="display:none;position:fixed;inset:0;z-index:700;background:rgba(0,0,0,.75);align-items:center;justify-content:center;padding:20px">
+        <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:18px;width:100%;max-width:760px;max-height:88vh;overflow:hidden;display:flex;flex-direction:column">
+          <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+            <div>
+              <div style="font-size:16px;font-weight:800;color:#ef4444">📊 Relatório — Checklists por Dia</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:2px">Quantos checklists caem (0 dias úteis) a cada dia</div>
+            </div>
+            <button onclick="closeModal('modal-fluxolab-relatorio-dia')" style="background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;line-height:1">×</button>
+          </div>
+          <div style="padding:18px 22px;overflow-y:auto;flex:1">
+            <div id="fluxolab-relatorio-dia-content"></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ═══ ABA: PLANEJAMENTO DO DIA ═══ -->
+    <div id="fluxolab-tab-planejamento-panel" style="display:none;padding:12px"></div>
+
+    <!-- ═══ ABA: PENDÊNCIAS MISTAS & COMPLEXAS ═══ -->
+    <div id="fluxolab-tab-pendencias-panel" style="display:none;padding:12px"></div>
+
+    <!-- ═══ ABA: CHECKLISTS LIBERADOS HOJE ═══ -->
+    <div id="fluxolab-tab-liberados-panel" style="display:none">
+
+      <!-- Toolbar -->
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+        <div>
+          <h2 style="font-size:22px;font-weight:800;color:#4ade80;margin:0;display:flex;align-items:center;gap:8px">✅ Checklists Liberados Hoje</h2>
+          <p style="font-size:12px;color:var(--muted);margin:3px 0 0">Checklists consumidos automaticamente quando um SELB é <b style="color:var(--text)">Concluído/Liberado</b> na Qualidade.</p>
+        </div>
+        <div style="flex:1"></div>
+        <button onclick="fluxolabRenderLiberadosHoje()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:10px;color:var(--muted);font-family:var(--font);font-size:13px;font-weight:600;padding:9px 16px;cursor:pointer">↺ Atualizar</button>
+      </div>
+
+      <!-- Stats rápidos -->
+      <div id="fluxolab-liberados-stats" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:18px"></div>
+
+      <!-- Grid: lista de checklists liberados hoje, agrupados por modelo -->
+      <div id="fluxolab-liberados-grid"></div>
+
+    </div>
+
   </div>
 
   <!-- ═══ BIP MOBILE — Movimentação rápida de SELBs, feita pra celular ═══ -->
@@ -2660,6 +3412,93 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <p style="font-size:12px;color:var(--muted);margin:4px 0 0">Movimentação rápida de SELBs entre bolsões.</p>
     </div>
     <div id="bip-mobile-mount"></div>
+  </div>
+
+  <!-- ═══ TEMPO SELB — Tempo entre Gaiola LAB (entrada) → Liberados Qualidade (saída) ═══ -->
+  <div class="view" id="view-tempo-selb" style="padding:20px 24px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px">
+      <div>
+        <h2 style="margin:0;font-size:18px;font-weight:700">⏱️ Tempo SELB<span class="info-rel-btn" onclick="mostrarInfoRelatorio('tempo-selb')" title="Como funciona este relatório">ℹ</span></h2>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">
+          Tempo total que cada SELB leva entre a entrada no bolsão <b style="color:#e879f9">🪣 Gaiola LAB</b> e a chegada em <b style="color:#10b981">✅ Liberados Qualidade</b>
+        </div>
+      </div>
+      <button class="btn bp" onclick="exportTempoSelbCSV()">⬇️ Exportar CSV</button>
+    </div>
+
+    <!-- Sub-abas: Por SELB / Média por Modelo -->
+    <div style="display:flex;gap:8px;margin-bottom:14px;border-bottom:1px solid var(--border2)">
+      <button id="ts-tab-selbs" onclick="setTempoSelbTab('selbs')" style="background:none;border:none;border-bottom:2px solid var(--accent);color:var(--text);padding:8px 16px;font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer">📋 Por SELB</button>
+      <button id="ts-tab-modelos" onclick="setTempoSelbTab('modelos')" style="background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);padding:8px 16px;font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer">📊 Média por Modelo</button>
+    </div>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-bottom:14px;padding:12px;background:var(--panel,#0f131a);border:1px solid var(--border2);border-radius:8px">
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <label style="font-size:11px;color:var(--muted)">Data de</label>
+        <input type="date" id="tempo-selb-de" onchange="['ts-quick-30','ts-quick-90','ts-quick-all'].forEach(id=>document.getElementById(id)?.classList.remove('bp'));renderTempoSelb()" style="padding:6px 10px;background:var(--bg);border:1px solid var(--border2);border-radius:6px;color:var(--text)">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        <label style="font-size:11px;color:var(--muted)">Data até</label>
+        <input type="date" id="tempo-selb-ate" onchange="['ts-quick-30','ts-quick-90','ts-quick-all'].forEach(id=>document.getElementById(id)?.classList.remove('bp'));renderTempoSelb()" style="padding:6px 10px;background:var(--bg);border:1px solid var(--border2);border-radius:6px;color:var(--text)">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:180px">
+        <label style="font-size:11px;color:var(--muted)">Buscar SELB / Modelo</label>
+        <input type="text" id="tempo-selb-busca" placeholder="Digite para filtrar..." oninput="renderTempoSelb()" style="padding:6px 10px;background:var(--bg);border:1px solid var(--border2);border-radius:6px;color:var(--text)">
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);cursor:pointer;user-select:none">
+        <input type="checkbox" id="tempo-selb-incompletos" onchange="renderTempoSelb()"> Incluir SELBs em andamento
+      </label>
+      <button class="btn" onclick="document.getElementById('tempo-selb-de').value='';document.getElementById('tempo-selb-ate').value='';document.getElementById('tempo-selb-busca').value='';['ts-quick-30','ts-quick-90','ts-quick-all'].forEach(id=>document.getElementById(id)?.classList.remove('bp'));document.getElementById('ts-quick-all')?.classList.add('bp');renderTempoSelb()">Limpar</button>
+    </div>
+
+    <!-- Filtros rápidos de período -->
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+      <button id="ts-quick-30" class="btn" onclick="setTempoSelbPeriodo(30,this)" style="padding:6px 14px;font-size:12px">Últimos 30 dias</button>
+      <button id="ts-quick-90" class="btn" onclick="setTempoSelbPeriodo(90,this)" style="padding:6px 14px;font-size:12px">Últimos 90 dias</button>
+      <button id="ts-quick-all" class="btn" onclick="setTempoSelbPeriodo('all',this)" style="padding:6px 14px;font-size:12px">Todos</button>
+    </div>
+
+    <div id="tempo-selb-resumo" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px"></div>
+
+    <!-- Tabela: Por SELB -->
+    <div id="ts-view-selbs" style="overflow:auto;border:1px solid var(--border2);border-radius:8px">
+      <table id="tempo-selb-table" style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead style="background:var(--panel,#0f131a);position:sticky;top:0">
+          <tr>
+            <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--border2)">SELB</th>
+            <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--border2)">Modelo</th>
+            <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--border2)">🪣 Entrada Gaiola LAB</th>
+            <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--border2)">✅ Saída Liberados Qualidade</th>
+            <th style="text-align:right;padding:10px 12px;border-bottom:1px solid var(--border2)">Duração total</th>
+            <th style="text-align:right;padding:10px 12px;border-bottom:1px solid var(--border2);color:#a78bfa">Limp+Mont</th>
+            <th style="text-align:center;padding:10px 12px;border-bottom:1px solid var(--border2)">Status</th>
+          </tr>
+        </thead>
+        <tbody id="tempo-selb-tbody">
+          <tr><td colspan="7" style="padding:24px;text-align:center;color:var(--muted)">Nenhum registro encontrado.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Tabela: Média por Modelo -->
+    <div id="ts-view-modelos" style="display:none;overflow:auto;border:1px solid var(--border2);border-radius:8px">
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead style="background:var(--panel,#0f131a);position:sticky;top:0">
+          <tr>
+            <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--border2)">Modelo</th>
+            <th style="text-align:right;padding:10px 12px;border-bottom:1px solid var(--border2)">SELBs concluídos</th>
+            <th id="ts-th-media" onclick="setTempoSelbModelosSort('media')" style="text-align:right;padding:10px 12px;border-bottom:1px solid var(--border2);cursor:pointer;user-select:none" title="Clique para ordenar">Tempo médio total<span id="ts-sort-arrow-media"></span></th>
+            <th id="ts-th-mediaLM" onclick="setTempoSelbModelosSort('mediaLimpMont')" style="text-align:right;padding:10px 12px;border-bottom:1px solid var(--border2);color:#a78bfa;cursor:pointer;user-select:none" title="Clique para ordenar">Média Limp+Mont<span id="ts-sort-arrow-mediaLimpMont"></span></th>
+            <th style="text-align:right;padding:10px 12px;border-bottom:1px solid var(--border2)">Mínimo</th>
+            <th style="text-align:right;padding:10px 12px;border-bottom:1px solid var(--border2)">Máximo</th>
+            <th style="text-align:right;padding:10px 12px;border-bottom:1px solid var(--border2)">Total acumulado</th>
+          </tr>
+        </thead>
+        <tbody id="tempo-selb-modelos-tbody">
+          <tr><td colspan="7" style="padding:24px;text-align:center;color:var(--muted)">Nenhum modelo concluído no período.</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
 </div><!-- /layer-app -->
@@ -2780,7 +3619,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 <div class="modal-overlay hidden" id="modal-backups">
   <div class="modal" style="max-width:500px">
     <h2 style="margin-bottom:4px">📂 Restaurar backup</h2>
-    <div class="msub" style="margin-bottom:16px">Selecione um backup salvo no Firebase para restaurar, ou importe um arquivo JSON.</div>
+    <div class="msub" style="margin-bottom:16px">Selecione um backup salvo no Supabase para restaurar, ou importe um arquivo JSON.</div>
     <div id="backup-list" style="max-height:260px;overflow-y:auto;margin-bottom:14px"></div>
     <div style="border-top:1px solid var(--border);padding-top:12px;display:flex;gap:8px;align-items:center">
       <span style="font-size:12px;color:var(--muted)">Ou importar arquivo:</span>
@@ -3032,7 +3871,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 <div class="modal-overlay hidden" id="modal-zerar">
   <div class="modal" style="max-width:440px">
     <h2 style="color:var(--warn);margin-bottom:4px">🗑️ Opções de reset</h2>
-    <div class="msub" style="margin-bottom:18px">Nenhuma opção apaga relatórios ou dados do Firebase.</div>
+    <div class="msub" style="margin-bottom:18px">Nenhuma opção apaga relatórios ou dados do Supabase.</div>
 
     <!-- Opção 1: Zerar SELBs em andamento -->
     <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:12px;padding:14px;margin-bottom:10px">
@@ -3296,8 +4135,11 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.19.1/umd/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-<script src="firebase-compat-shim.js"></script>
-<script src="app.js?v=23"></script>
+<script src="supabase-compat-shim.js?v=2"></script>
+<script src="app.js?v=25"></script>
+<script src="planejamento.js?v=2"></script>
+<script src="pendencias.js?v=4"></script>
+
 
 <!-- ═══ ALERTA FIXO: SELB EM ANDAMENTO (Complexa / Montagem / Limpeza) ═══ -->
 <div id="selb-alert-panel"></div>
@@ -3585,58 +4427,6 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       </div>
     </div>
   </div>
-
-  <!-- ═══ TEMPO SELB — Relatório de tempo Início (Consulta) → Conclusão (Qualidade) ═══ -->
-  <div class="view" id="view-tempo-selb" style="padding:20px 24px">
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:16px">
-      <div>
-        <h2 style="margin:0;font-size:18px;font-weight:700">⏱️ Tempo SELB</h2>
-        <div style="font-size:12px;color:var(--muted);margin-top:4px">
-          Tempo decorrido entre <b>Início do SELB</b> (Consulta) e <b>SELB concluído</b> (Qualidade)
-        </div>
-      </div>
-      <button class="btn bp" onclick="exportTempoSelbCSV()">⬇️ Exportar CSV</button>
-    </div>
-
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-bottom:14px;padding:12px;background:var(--panel,#1a1d29);border:1px solid var(--border2,#2a2f3e);border-radius:8px">
-      <div style="display:flex;flex-direction:column;gap:4px">
-        <label style="font-size:11px;color:var(--muted)">Data de</label>
-        <input type="date" id="tempo-selb-de" onchange="renderTempoSelb()" style="padding:6px 10px;background:var(--bg);border:1px solid var(--border2);border-radius:6px;color:var(--text)">
-      </div>
-      <div style="display:flex;flex-direction:column;gap:4px">
-        <label style="font-size:11px;color:var(--muted)">Data até</label>
-        <input type="date" id="tempo-selb-ate" onchange="renderTempoSelb()" style="padding:6px 10px;background:var(--bg);border:1px solid var(--border2);border-radius:6px;color:var(--text)">
-      </div>
-      <div style="display:flex;flex-direction:column;gap:4px;flex:1;min-width:180px">
-        <label style="font-size:11px;color:var(--muted)">Buscar SELB / Modelo / Responsável</label>
-        <input type="text" id="tempo-selb-busca" placeholder="Digite para filtrar..." oninput="renderTempoSelb()" style="padding:6px 10px;background:var(--bg);border:1px solid var(--border2);border-radius:6px;color:var(--text)">
-      </div>
-      <button class="btn" onclick="document.getElementById('tempo-selb-de').value='';document.getElementById('tempo-selb-ate').value='';document.getElementById('tempo-selb-busca').value='';renderTempoSelb()">Limpar</button>
-    </div>
-
-    <div id="tempo-selb-resumo" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px"></div>
-
-    <div style="overflow:auto;border:1px solid var(--border2,#2a2f3e);border-radius:8px">
-      <table id="tempo-selb-table" style="width:100%;border-collapse:collapse;font-size:13px">
-        <thead style="background:var(--panel,#1a1d29);position:sticky;top:0">
-          <tr>
-            <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--border2)">SELB</th>
-            <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--border2)">Modelo</th>
-            <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--border2)">Início (Consulta)</th>
-            <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--border2)">Conclusão (Qualidade)</th>
-            <th style="text-align:right;padding:10px 12px;border-bottom:1px solid var(--border2)">Duração</th>
-            <th style="text-align:left;padding:10px 12px;border-bottom:1px solid var(--border2)">Responsável</th>
-          </tr>
-        </thead>
-        <tbody id="tempo-selb-tbody">
-          <tr><td colspan="6" style="padding:24px;text-align:center;color:var(--muted)">Carregando...</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-
-
   <!-- ═══ MODAL: MENU DE NAVEGAÇÃO MOBILE ═══ -->
   <div class="modal-overlay hidden" id="modal-menu-mobile" style="z-index:1000001;background:rgba(0,0,0,0.85)" onclick="if(event.target===this)closeModal('modal-menu-mobile')">
     <div class="modal" style="width:340px;max-width:90vw;display:flex;flex-direction:column;padding:0;border-radius:20px;overflow:hidden;border:1px solid rgba(79,142,247,0.25);background:var(--bg2)">
@@ -3723,328 +4513,767 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     </div>
   </div>
 
-<!-- ═══════════════════════════════════════════════════════
-     LABTECH — ALARME GLOBAL
-     Sincroniza via Firebase em todas as abas/dispositivos.
-     API: Alarme.disparar(msg, tipo) | Alarme.encerrar()
-         tipo: 'urgente' | 'aviso' | 'info'
-     ═══════════════════════════════════════════════════════ -->
+  <!-- ═══ TEMPO SELB JS ═══ -->
 <script>
-(function () {
-  'use strict';
+// ════════════════════════════════════════════════════════════
+// ⏱️ TEMPO SELB — Baseado em /fluxolab_log
+// Início da contagem: movimentação onde para === 'GAIOLA_LAB'
+// Fim da contagem:    primeira movimentação onde para === 'LIBERADAS' depois do início
+// Mostra duração por SELB e tempo médio por modelo
+// ════════════════════════════════════════════════════════════
+(function(){
 
-  var FB_PATH = '/alarme_global';
-  var SONS = {
-    urgente : { freqs:[880,660,880,660], dur:0.18, gap:0.04, rep:3, interval:800  },
-    aviso   : { freqs:[660,550],         dur:0.22, gap:0.06, rep:2, interval:1200 },
-    info    : { freqs:[520,660],         dur:0.25, gap:0.08, rep:1, interval:2000 },
-  };
-  var CORES = {
-    urgente : { bg:'#fee2e2', border:'#ef4444', text:'#7f1d1d', badge:'#ef4444', icon:'🚨' },
-    aviso   : { bg:'#fef3c7', border:'#f59e0b', text:'#78350f', badge:'#f59e0b', icon:'⚠️' },
-    info    : { bg:'#dbeafe', border:'#3b82f6', text:'#1e3a5f', badge:'#3b82f6', icon:'ℹ️' },
-  };
+  const START_BOLSAO = 'GAIOLA_LAB';
+  const END_BOLSAO   = 'LIBERADAS';
 
-  var _ctx = null, _loop = null, _state = null, _fbRef = null, _styled = false;
+  let _tsRows = [];     // [{selb, modelo, inicioTs, fimTs, duracao, status}]
+  let _tsActiveTab = 'selbs';
+  let _tsModelosSortField = 'media'; // 'media' | 'mediaLimpMont'
+  let _tsModelosSortDir = 'desc';    // 'asc' | 'desc'
 
-  /* ── AudioContext ── */
-  function _audio() {
-    if (!_ctx) try { _ctx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){}
-    if (_ctx && _ctx.state === 'suspended') _ctx.resume().catch(function(){});
-    return _ctx;
+  // ── Helpers ──
+  function fmtDur(ms){
+    if(!ms || ms <= 0) return '—';
+    const s = Math.floor(ms/1000);
+    const d = Math.floor(s/86400);
+    const h = Math.floor((s%86400)/3600);
+    const m = Math.floor((s%3600)/60);
+    const sec = s%60;
+    if(d>0) return d+'d '+String(h).padStart(2,'0')+'h';
+    if(h>0) return h+'h '+String(m).padStart(2,'0')+'m';
+    if(m>0) return m+'m '+String(sec).padStart(2,'0')+'s';
+    return sec+'s';
   }
-  function _unlock() { _audio(); document.removeEventListener('click',_unlock,true); document.removeEventListener('touchstart',_unlock,true); }
-  document.addEventListener('click',_unlock,true);
-  document.addEventListener('touchstart',_unlock,true);
+  function fmtDt(ts){
+    if(!ts) return '—';
+    return new Date(ts).toLocaleString('pt-BR');
+  }
+  function todayIso(){ return new Date().toISOString().slice(0,10); }
+  function thirtyDaysAgoIso(){ return new Date(Date.now()-29*86400000).toISOString().slice(0,10); }
 
-  /* ── Beep ── */
-  function _beep(cfg) {
-    var ctx = _audio(); if (!ctx) return;
-    var t = ctx.currentTime + 0.05;
-    cfg.freqs.forEach(function(hz){
-      var o = ctx.createOscillator(), g = ctx.createGain();
-      o.connect(g); g.connect(ctx.destination);
-      o.type = 'sine'; o.frequency.setValueAtTime(hz, t);
-      g.gain.setValueAtTime(0,t);
-      g.gain.linearRampToValueAtTime(0.35, t+0.01);
-      g.gain.linearRampToValueAtTime(0, t+cfg.dur);
-      o.start(t); o.stop(t+cfg.dur+0.02);
-      t += cfg.dur + cfg.gap;
+  function initDates(){
+    const de  = document.getElementById('tempo-selb-de');
+    const ate = document.getElementById('tempo-selb-ate');
+    let isDefault = false;
+    if(de  && !de.value){  de.value  = thirtyDaysAgoIso(); isDefault = true; }
+    if(ate && !ate.value){ ate.value = todayIso(); isDefault = true; }
+    if(isDefault){
+      const btn30 = document.getElementById('ts-quick-30');
+      if(btn30) btn30.classList.add('bp');
+    }
+  }
+
+  // ── Busca TODOS os movimentos do fluxolab_log ──
+  // Retorna array ordenado por ts ASC
+  async function fetchFluxoLog(){
+    try{
+      const data = await dbGet('/fluxolab_log');
+      if(!data) return [];
+      const arr = Object.entries(data).map(([k,v])=>({...v, _key:k}));
+      arr.sort((a,b)=>(a.ts||0)-(b.ts||0));
+      return arr;
+    }catch(e){
+      console.warn('[TempoSELB] erro ao buscar fluxolab_log', e);
+      return [];
+    }
+  }
+
+  // ── Constrói linhas: para cada SELB cria um ciclo por (entrada Gaiola → saída Liberadas) ──
+  function buildRows(log){
+    const bySelb = {};
+    log.forEach(m => {
+      const selb = String(m.selb||'').toUpperCase().trim();
+      if(!selb) return;
+      (bySelb[selb] = bySelb[selb] || []).push(m);
+    });
+
+    // Mapa auxiliar: melhor equipamento conhecido dentro do próprio log para cada SELB
+    const logModelMap = {};
+    log.forEach(m => {
+      const selb = String(m.selb||'').toUpperCase().trim();
+      const eq = String(m.equipamento||'').trim();
+      if(selb && eq && eq.toUpperCase() !== 'DESCONHECIDO' && !logModelMap[selb]){
+        logModelMap[selb] = eq;
+      }
+    });
+    const pickEq = (raw, selb) => {
+      const eq = String(raw||'').trim();
+      if(eq && eq.toUpperCase() !== 'DESCONHECIDO') return eq;
+      return logModelMap[selb] || '—';
+    };
+
+    // Bolsões que compõem o tempo de Limpeza + Montagem (apenas os dois setores, sem o bolsão intermediário)
+    const BOLSOES_LIMP_MONT = new Set(['LIMPEZA','MONTAGEM']);
+
+    const rows = [];
+    Object.keys(bySelb).forEach(selb => {
+      const movs = bySelb[selb];
+      let cicloAberto = null;
+      movs.forEach(m => {
+        const para = (m.para || '').toUpperCase();
+        const ts   = m.ts || 0;
+        if(para === START_BOLSAO){
+          if(cicloAberto){
+            rows.push({ selb, modelo: cicloAberto.modelo || '—', inicioTs: cicloAberto.inicioTs, fimTs: 0, duracao: 0, duracaoLimpMont: 0, status: 'abandonado' });
+          }
+          cicloAberto = { inicioTs: ts, modelo: pickEq(m.equipamento, selb), limpMontMs: 0, lmEntradaTs: null, lmBolsaoAtual: null };
+        } else if(cicloAberto){
+          // Rastreia entrada/saída dos bolsões de Limp+Mont dentro do ciclo
+          if(BOLSOES_LIMP_MONT.has(para)){
+            // Entrou num bolsão de Limp+Mont (se já estava em outro bolsão LimpMont, mantém o cronômetro)
+            if(!cicloAberto.lmBolsaoAtual){
+              cicloAberto.lmEntradaTs = ts;
+              cicloAberto.lmBolsaoAtual = para;
+            }
+          } else if(cicloAberto.lmBolsaoAtual){
+            // Saiu de um bolsão de Limp+Mont para outro lugar (inclui END_BOLSAO)
+            if(cicloAberto.lmEntradaTs && ts > cicloAberto.lmEntradaTs){
+              cicloAberto.limpMontMs += (ts - cicloAberto.lmEntradaTs);
+            }
+            cicloAberto.lmBolsaoAtual = null;
+            cicloAberto.lmEntradaTs = null;
+          }
+
+          if(para === END_BOLSAO){
+            const fimTs = ts;
+            const modelo = (cicloAberto.modelo && cicloAberto.modelo !== '—')
+              ? cicloAberto.modelo : pickEq(m.equipamento, selb);
+            rows.push({ selb, modelo, inicioTs: cicloAberto.inicioTs, fimTs,
+              duracao: (fimTs > cicloAberto.inicioTs) ? (fimTs - cicloAberto.inicioTs) : 0,
+              duracaoLimpMont: cicloAberto.limpMontMs || 0,
+              status: 'concluido' });
+            cicloAberto = null;
+          }
+        }
+      });
+      if(cicloAberto){
+        // Fecha contagem LimpMont para em-andamento
+        let lmMs = cicloAberto.limpMontMs || 0;
+        if(cicloAberto.lmBolsaoAtual && cicloAberto.lmEntradaTs){
+          lmMs += (Date.now() - cicloAberto.lmEntradaTs);
+        }
+        rows.push({ selb, modelo: cicloAberto.modelo || '—', inicioTs: cicloAberto.inicioTs, fimTs: 0, duracao: 0, duracaoLimpMont: lmMs, status: 'andamento' });
+      }
+    });
+    rows.sort((a,b)=>(b.fimTs||b.inicioTs||0)-(a.fimTs||a.inicioTs||0));
+    return rows;
+  }
+
+  // ── Consulta automática: varre /history (mesma fonte da aba "Consulta")
+  //    para mapear SELB → modelo quando o log gravou "DESCONHECIDO". ──
+  async function fetchHistoryModelos(deIso, ateIso){
+    const map = {};
+    try{
+      if(typeof dbGet !== 'function') return map;
+      const start = deIso ? new Date(deIso+'T00:00:00') : new Date(Date.now()-29*86400000);
+      const end   = ateIso ? new Date(ateIso+'T00:00:00') : new Date();
+      const maxDays = 370;
+      const days = [];
+      const cur = new Date(start);
+      while(cur <= end && days.length < maxDays){
+        days.push(cur.toDateString().replace(/ /g,'_'));
+        cur.setDate(cur.getDate()+1);
+      }
+      const results = await Promise.all(days.map(dk => dbGet('/history/'+dk).catch(()=>null)));
+      results.forEach(data => {
+        if(!data) return;
+        Object.values(data).forEach(v => {
+          const selb = String(v.selb||'').toUpperCase().trim();
+          const eq   = String(v.equipamento||'').trim();
+          if(selb && eq && eq.toUpperCase() !== 'DESCONHECIDO' && !map[selb]){
+            map[selb] = eq;
+          }
+        });
+      });
+    }catch(e){ console.warn('[TempoSELB] fetchHistoryModelos', e); }
+    return map;
+  }
+
+  function enrichModelos(rows, histMap){
+    rows.forEach(r => {
+      const cur = (r.modelo||'').trim();
+      const unknown = !cur || cur === '—' || cur.toUpperCase() === 'DESCONHECIDO';
+      if(!unknown) return;
+      let m = histMap && histMap[r.selb];
+      if(!m && typeof getEquipName === 'function'){
+        try{ m = getEquipName(r.selb) || ''; }catch(_){}
+      }
+      if(m) r.modelo = m;
     });
   }
-  function _startLoop(tipo) {
-    _stopLoop();
-    var cfg = SONS[tipo]||SONS.aviso, rep=0;
-    function ciclo(){
-      if (!_state||!_state.ativa) return;
-      _beep(cfg); rep++;
-      var beatLen = cfg.freqs.length*(cfg.dur+cfg.gap)*1000+80;
-      if (rep < cfg.rep) setTimeout(ciclo, beatLen);
-      else _loop = setTimeout(function(){ rep=0; ciclo(); }, cfg.interval);
+
+  // ── Filtros ──
+  function applyFilters(rows){
+    const de  = document.getElementById('tempo-selb-de')?.value;
+    const ate = document.getElementById('tempo-selb-ate')?.value;
+    const q   = (document.getElementById('tempo-selb-busca')?.value||'').toLowerCase().trim();
+    const incIncomp = document.getElementById('tempo-selb-incompletos')?.checked;
+    let deTs=0, ateTs=Infinity;
+    if(de){ const [y,m,d]=de.split('-').map(Number); deTs=new Date(y,m-1,d,0,0,0).getTime(); }
+    if(ate){ const [y,m,d]=ate.split('-').map(Number); ateTs=new Date(y,m-1,d,23,59,59).getTime(); }
+    return rows.filter(r=>{
+      if(!incIncomp && r.status !== 'concluido') return false;
+      // referência de data: para concluídos usa fim; para abertos/abandonados usa início
+      const refTs = r.fimTs || r.inicioTs || 0;
+      if(refTs < deTs || refTs > ateTs) return false;
+      if(q && !((r.selb||'')+' '+(r.modelo||'')).toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }
+
+  // ── Resumo ──
+  function renderResumo(rows){
+    const resumo = document.getElementById('tempo-selb-resumo');
+    if(!resumo) return;
+    const validas = rows.filter(r=>r.status==='concluido' && r.duracao>0);
+    const andamento = rows.filter(r=>r.status==='andamento').length;
+    if(!validas.length && !andamento){ resumo.innerHTML=''; return; }
+    const total = validas.reduce((s,r)=>s+r.duracao,0);
+    const media = validas.length ? total/validas.length : 0;
+    const min   = validas.length ? Math.min(...validas.map(r=>r.duracao)) : 0;
+    const max   = validas.length ? Math.max(...validas.map(r=>r.duracao)) : 0;
+    const card  = (t,v,cor)=>`<div style="background:var(--panel,#0f131a);border:1px solid var(--border2);border-radius:8px;padding:10px 14px;min-width:120px"><div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">${t}</div><div style="font-size:16px;font-weight:700;margin-top:2px;color:${cor||'var(--text)'}">${v}</div></div>`;
+    resumo.innerHTML =
+      card('Concluídos', validas.length, '#10b981')
+      + card('Em andamento', andamento, '#e879f9')
+      + card('Tempo médio', fmtDur(media), 'var(--accent)')
+      + card('Mín', fmtDur(min))
+      + card('Máx', fmtDur(max));
+  }
+
+  // ── Tabela por SELB ──
+  function renderTabelaSelbs(rows){
+    const tbody = document.getElementById('tempo-selb-tbody');
+    if(!tbody) return;
+    if(!rows.length){
+      tbody.innerHTML='<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--muted)">Nenhum registro encontrado.</td></tr>';
+      return;
     }
-    ciclo();
-  }
-  function _stopLoop(){ if(_loop){clearTimeout(_loop);_loop=null;} }
-
-  /* ── Estilos ── */
-  function _styles() {
-    if (_styled) return; _styled = true;
-    var s = document.createElement('style');
-    s.textContent =
-      '@keyframes alm-in{from{opacity:0;transform:translateY(-100%)}to{opacity:1;transform:translateY(0)}}'+
-      '@keyframes alm-shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-6px)}40%{transform:translateX(6px)}60%{transform:translateX(-4px)}80%{transform:translateX(4px)}}'+
-      '@keyframes alm-pulse{0%,100%{box-shadow:0 0 0 0 rgba(0,0,0,.12)}50%{box-shadow:0 0 0 8px rgba(0,0,0,0)}}'+
-      '#alm-banner{position:fixed;top:0;left:0;right:0;z-index:9999;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 20px;font-family:var(--font,Outfit,sans-serif);animation:alm-in .3s ease,alm-pulse 1.8s ease-in-out infinite;border-bottom:3px solid #ef4444}'+
-      '#alm-banner.shake{animation:alm-shake .4s ease}'+
-      '#alm-banner .al{display:flex;align-items:center;gap:10px;flex:1;min-width:0}'+
-      '#alm-banner .ai{font-size:22px;flex-shrink:0}'+
-      '#alm-banner .am{font-size:14px;font-weight:600;line-height:1.35;word-break:break-word}'+
-      '#alm-banner .at{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;padding:2px 8px;border-radius:20px;color:#fff;flex-shrink:0}'+
-      '#alm-banner .aa{display:flex;align-items:center;gap:8px;flex-shrink:0}'+
-      '#alm-banner .ab{border:none;border-radius:8px;font-family:inherit;font-size:12px;font-weight:700;padding:7px 14px;cursor:pointer;white-space:nowrap}'+
-      '#alm-banner .ab:hover{opacity:.8}'+
-      '#alm-banner .ab-f{background:rgba(0,0,0,.15)}'+
-      '#alm-banner .ab-f{color:inherit}'+
-      '#alm-banner .ab-e{background:#ef4444;color:#fff}'+
-      '#alm-ov{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px}'+
-      '#alm-p{background:var(--bg2,#1e2130);border:1px solid var(--border2,#2e3347);border-radius:16px;padding:24px;width:100%;max-width:420px;font-family:var(--font,Outfit,sans-serif);color:var(--text,#e8eaf0)}'+
-      '#alm-p h3{margin:0 0 4px;font-size:17px;font-weight:700}'+
-      '#alm-p .sub{margin:0 0 18px;font-size:12px;color:var(--muted,#6b7280)}'+
-      '#alm-p label{font-size:12px;font-weight:600;color:var(--muted,#6b7280);display:block;margin-bottom:6px}'+
-      '#alm-p textarea{width:100%;box-sizing:border-box;background:var(--bg3,#252a3a);border:1px solid var(--border2,#2e3347);border-radius:8px;color:var(--text,#e8eaf0);font-family:inherit;font-size:13px;padding:10px 12px;resize:vertical;min-height:72px;outline:none}'+
-      '#alm-p .tbtns{display:flex;gap:8px;margin:14px 0 20px}'+
-      '#alm-p .tbtn{flex:1;padding:9px 8px;border-radius:9px;border:1.5px solid var(--border2,#2e3347);background:var(--bg3,#252a3a);color:var(--muted,#6b7280);font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;text-align:center;transition:all .15s}'+
-      '#alm-p .tbtn.su{background:#fee2e2;border-color:#ef4444;color:#7f1d1d}'+
-      '#alm-p .tbtn.sa{background:#fef3c7;border-color:#f59e0b;color:#78350f}'+
-      '#alm-p .tbtn.si{background:#dbeafe;border-color:#3b82f6;color:#1e3a5f}'+
-      '#alm-p .row{display:flex;gap:8px}'+
-      '#alm-p .row button{flex:1;min-height:42px;font-size:13px;border-radius:9px;border:none;cursor:pointer;font-family:inherit;font-weight:700}'+
-      '#alm-p .bd{background:var(--accent,#3b82f6);color:#fff}'+
-      '#alm-p .bc{background:var(--bg3,#252a3a);color:var(--muted,#6b7280);border:1px solid var(--border2,#2e3347)!important}'+
-      '#alm-p .benc{width:100%;margin-top:10px;min-height:40px;background:#ef4444;color:#fff;border:none;border-radius:9px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer}'+
-      '#alm-fab{position:fixed;bottom:24px;right:24px;z-index:9998;width:52px;height:52px;border-radius:50%;border:none;background:var(--accent,#3b82f6);color:#fff;font-size:22px;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;transition:transform .15s,box-shadow .15s}'+
-      '#alm-fab:hover{transform:scale(1.1);box-shadow:0 6px 24px rgba(0,0,0,.45)}';
-    document.head.appendChild(s);
+    const badge = (status) => {
+      if(status==='concluido')  return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;background:rgba(16,185,129,.15);color:#10b981;font-size:11px;font-weight:600">✅ Concluído</span>';
+      if(status==='andamento')  return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;background:rgba(232,121,249,.15);color:#e879f9;font-size:11px;font-weight:600">⏳ Em andamento</span>';
+      return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;background:rgba(239,68,68,.15);color:#ef4444;font-size:11px;font-weight:600">⚠️ Abandonado</span>';
+    };
+    tbody.innerHTML = rows.map(r=>`
+      <tr style="border-bottom:1px solid var(--border2)">
+        <td style="padding:8px 12px;font-weight:600;font-family:var(--mono)">${r.selb||'—'}</td>
+        <td style="padding:8px 12px">${r.modelo||'—'}</td>
+        <td style="padding:8px 12px;font-size:12px">${fmtDt(r.inicioTs)}</td>
+        <td style="padding:8px 12px;font-size:12px">${r.fimTs?fmtDt(r.fimTs):'—'}</td>
+        <td style="padding:8px 12px;text-align:right;font-family:var(--mono);font-weight:600;color:${r.duracao>0?'var(--accent)':'var(--muted)'}">${fmtDur(r.duracao)}</td>
+        <td style="padding:8px 12px;text-align:center">${badge(r.status)}</td>
+      </tr>`).join('');
   }
 
-  /* ── Banner ── */
-  function _rmBanner(){ var b=document.getElementById('alm-banner'); if(b)b.remove(); }
-  function _showBanner(st) {
-    _rmBanner(); if(!st||!st.ativa) return;
-    var tipo=st.tipo||'aviso', cor=CORES[tipo]||CORES.aviso;
-    var isAdmin = typeof currentUser!=='undefined' && currentUser && currentUser.isAdmin;
-    var b = document.createElement('div');
-    b.id='alm-banner';
-    b.style.cssText='background:'+cor.bg+';border-color:'+cor.border+';color:'+cor.text;
-    b.innerHTML=
-      '<div class="al"><span class="ai">'+cor.icon+'</span>'+
-      '<span class="am">'+_esc(st.msg||'Alarme!')+'</span></div>'+
-      '<div class="aa">'+
-      '<span class="at" style="background:'+cor.badge+'">'+tipo+'</span>'+
-      (isAdmin
-        ? '<button class="ab ab-e" onclick="Alarme.encerrar()">Encerrar</button>'
-        : '<span style="font-size:11px;opacity:.7">Aguarde instrução</span>')+
-      '<button class="ab ab-f" onclick="document.getElementById(\'alm-banner\').style.display=\'none\'">✕</button>'+
-      '</div>';
-    document.body.prepend(b);
-    setTimeout(function(){
-      if(b.parentNode){ b.classList.add('shake');
-        setTimeout(function(){ if(b.parentNode)b.classList.remove('shake'); },450); }
-    },400);
-  }
-  function _esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-
-  /* ── Aplicar estado ── */
-  function _apply(st) {
-    _state = st;
-    if (st && st.ativa) { _styles(); _showBanner(st); _startLoop(st.tipo||'aviso'); }
-    else { _rmBanner(); _stopLoop(); }
-  }
-
-  /* ── Firebase listener ── */
-  function _connect(tries) {
-    tries = tries||0;
-    if (typeof window._db !== 'undefined') {
-      _fbRef = window._db.ref(FB_PATH);
-      _fbRef.on('value', function(snap){ _apply(snap.val()); });
-    } else if (tries<80) {
-      setTimeout(function(){ _connect(tries+1); }, 250);
+  // ── Tabela média por modelo ──
+  function renderTabelaModelos(rows){
+    const tbody = document.getElementById('tempo-selb-modelos-tbody');
+    if(!tbody) return;
+    const validas = rows.filter(r=>r.status==='concluido' && r.duracao>0);
+    if(!validas.length){
+      tbody.innerHTML='<tr><td colspan="7" style="padding:24px;text-align:center;color:var(--muted)">Nenhum modelo concluído no período.</td></tr>';
+      _tsUpdateSortArrows();
+      return;
     }
-  }
-  _connect();
-
-  /* ── Painel admin ── */
-  function _painel() {
-    _styles();
-    var ov = document.getElementById('alm-ov'); if(ov){ov.remove();return;}
-    ov = document.createElement('div'); ov.id='alm-ov';
-    var tipoSel='urgente';
-    function render(){
-      var tipos=['urgente','aviso','info'];
-      ov.innerHTML=
-        '<div id="alm-p">'+
-        '<h3>🔔 Disparar Alarme</h3>'+
-        '<p class="sub">Toca em <b>todas</b> as telas abertas em tempo real.</p>'+
-        '<label>Mensagem</label>'+
-        '<textarea id="alm-ta" placeholder="Ex: Atenção — Verificar Setor A"></textarea>'+
-        '<label>Tipo</label>'+
-        '<div class="tbtns">'+
-        tipos.map(function(t){
-          var c=CORES[t], cls='tbtn'+(t===tipoSel?' s'+t[0]:'');
-          return '<button class="'+cls+'" data-t="'+t+'">'+c.icon+' '+t+'</button>';
-        }).join('')+
-        '</div>'+
-        '<div class="row">'+
-        '<button class="bd" id="alm-disp">Disparar agora</button>'+
-        '<button class="bc" id="alm-canc">Cancelar</button>'+
-        '</div>'+
-        (_state&&_state.ativa?'<button class="benc" id="alm-enc">⛔ Encerrar alarme ativo</button>':'')+
-        '</div>';
-      ov.querySelectorAll('.tbtn').forEach(function(btn){
-        btn.onclick=function(){ tipoSel=this.dataset.t; render();
-          var ta=ov.querySelector('#alm-ta'); if(ta)ta.focus(); };
-      });
-      ov.querySelector('#alm-canc').onclick=function(){ ov.remove(); };
-      ov.querySelector('#alm-disp').onclick=function(){
-        var msg=(ov.querySelector('#alm-ta').value||'').trim();
-        if(!msg){ov.querySelector('#alm-ta').focus();return;}
-        window.Alarme.disparar(msg,tipoSel); ov.remove();
+    const byModel = {};
+    validas.forEach(r => {
+      const m = r.modelo || '—';
+      if(!byModel[m]) byModel[m] = { durs: [], lmDurs: [] };
+      byModel[m].durs.push(r.duracao);
+      if(r.duracaoLimpMont > 0) byModel[m].lmDurs.push(r.duracaoLimpMont);
+    });
+    const agg = Object.keys(byModel).map(m => {
+      const { durs, lmDurs } = byModel[m];
+      const total = durs.reduce((s,d)=>s+d,0);
+      const lmTotal = lmDurs.reduce((s,d)=>s+d,0);
+      return {
+        modelo: m,
+        qtd: durs.length,
+        media: total/durs.length,
+        mediaLimpMont: lmDurs.length ? lmTotal/lmDurs.length : 0,
+        lmQtd: lmDurs.length,
+        min: Math.min(...durs),
+        max: Math.max(...durs),
+        total
       };
-      var enc=ov.querySelector('#alm-enc');
-      if(enc) enc.onclick=function(){ window.Alarme.encerrar(); ov.remove(); };
-      ov.onclick=function(e){ if(e.target===ov)ov.remove(); };
+    });
+
+    const field = _tsModelosSortField;
+    const dir = _tsModelosSortDir === 'asc' ? 1 : -1;
+    agg.sort((a,b) => (a[field] - b[field]) * dir);
+
+    tbody.innerHTML = agg.map(a=>`
+      <tr style="border-bottom:1px solid var(--border2)">
+        <td style="padding:8px 12px;font-weight:600">${a.modelo}</td>
+        <td style="padding:8px 12px;text-align:right;font-family:var(--mono)">${a.qtd}</td>
+        <td style="padding:8px 12px;text-align:right;font-family:var(--mono);font-weight:700;color:var(--accent)">${fmtDur(a.media)}</td>
+        <td style="padding:8px 12px;text-align:right;font-family:var(--mono);font-weight:700;color:${a.mediaLimpMont>0?'#a78bfa':'var(--muted)'}">${a.mediaLimpMont>0?fmtDur(a.mediaLimpMont):'—'}</td>
+        <td style="padding:8px 12px;text-align:right;font-family:var(--mono);color:var(--muted)">${fmtDur(a.min)}</td>
+        <td style="padding:8px 12px;text-align:right;font-family:var(--mono);color:var(--muted)">${fmtDur(a.max)}</td>
+        <td style="padding:8px 12px;text-align:right;font-family:var(--mono)">${fmtDur(a.total)}</td>
+      </tr>`).join('');
+
+    _tsUpdateSortArrows();
+  }
+
+  // ── Atualiza setas de ordenação nos cabeçalhos clicáveis ──
+  function _tsUpdateSortArrows(){
+    const arrowMedia = document.getElementById('ts-sort-arrow-media');
+    const arrowLM = document.getElementById('ts-sort-arrow-mediaLimpMont');
+    const arrow = _tsModelosSortDir === 'asc' ? ' ▲' : ' ▼';
+    if(arrowMedia) arrowMedia.textContent = _tsModelosSortField === 'media' ? arrow : '';
+    if(arrowLM) arrowLM.textContent = _tsModelosSortField === 'mediaLimpMont' ? arrow : '';
+  }
+
+  // ── Alterna campo/direção de ordenação da tabela Média por Modelo ──
+  window.setTempoSelbModelosSort = function(field){
+    if(_tsModelosSortField === field){
+      _tsModelosSortDir = _tsModelosSortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      _tsModelosSortField = field;
+      _tsModelosSortDir = 'desc';
     }
-    render();
-    document.body.appendChild(ov);
-    setTimeout(function(){ var ta=ov.querySelector('#alm-ta'); if(ta)ta.focus(); },60);
-  }
-
-  /* ── Adiciona o botão FAB na tela ── */
-  function _addFab() {
-    // FAB desabilitado: ícone oculto por opção de configuração
-    return;
-  }
-  function _removeFab() {
-    var f=document.getElementById('alm-fab'); if(f)f.remove();
-  }
-
-  /* ── Hook no loginAs/logout do sistema para mostrar/esconder FAB ──
-     Aguarda o loginAs global ser definido pelo app.js, depois o envolve.
-     Isso garante que detectamos o login independente do timing. ── */
-  function _hookLoginAs(tries) {
-    tries = tries||0;
-    if (typeof loginAs === 'function' && !window.__almHooked) {
-      window.__almHooked = true;
-      var _origLogin = loginAs;
-      window.loginAs = function(u) {
-        var r = _origLogin.apply(this, arguments);
-        if (u && u.isAdmin) _addFab();
-        else _removeFab();
-        return r;
-      };
-      var _origLogout = typeof logout === 'function' ? logout : null;
-      if (_origLogout) {
-        window.logout = function() {
-          var r = _origLogout.apply(this, arguments);
-          _removeFab();
-          return r;
-        };
-      }
-      // Se já estava logado quando o hook instalou (ex: sessão salva via Firebase Auth)
-      if (typeof currentUser !== 'undefined' && currentUser && currentUser.isAdmin) {
-        _addFab();
-      }
-    } else if (!window.__almHooked && tries < 100) {
-      setTimeout(function(){ _hookLoginAs(tries+1); }, 100);
-    }
-  }
-  _hookLoginAs();
-
-  /* ── API pública ── */
-  window.Alarme = {
-    disparar: function(msg,tipo){
-      tipo=tipo||'aviso'; if(!SONS[tipo])tipo='aviso';
-      if(!_fbRef){console.warn('[Alarme] Firebase não pronto');return;}
-      _fbRef.set({msg:msg||'Alarme!',tipo:tipo,ts:Date.now(),ativa:true});
-    },
-    encerrar: function(){
-      if(_fbRef) _fbRef.set({ativa:false,ts:Date.now()});
-    },
-    abrirPainel: _painel,
+    renderTabelaModelos(applyFilters(_tsRows));
   };
+
+  // ── Carrega e renderiza tudo ──
+  async function loadAndRender(){
+    const tbody  = document.getElementById('tempo-selb-tbody');
+    if(tbody) tbody.innerHTML='<tr><td colspan="6" style="padding:24px;text-align:center;color:var(--muted)">⏳ Carregando movimentações…</td></tr>';
+
+    // Busca uma janela ampla e fixa de histórico (1 ano), independente do filtro de data em tela.
+    // Isso evita refazer a busca pesada no Supabase a cada mudança no filtro — o filtro de data
+    // passa a atuar apenas localmente sobre os dados já carregados (_tsRows).
+    const ateIso = todayIso();
+    const deIso  = new Date(Date.now()-364*86400000).toISOString().slice(0,10);
+    const [log, histMap] = await Promise.all([
+      fetchFluxoLog(),
+      fetchHistoryModelos(deIso, ateIso)
+    ]);
+    _tsRows = buildRows(log);
+    enrichModelos(_tsRows, histMap);
+    const filtered = applyFilters(_tsRows);
+    renderResumo(filtered);
+    renderTabelaSelbs(filtered);
+    renderTabelaModelos(filtered);
+  }
+
+  // ── Filtros rápidos de período (30 / 90 dias / Todos) ──
+  // Atua apenas localmente sobre os dados já carregados (_tsRows) — não rebusca o Supabase.
+  window.setTempoSelbPeriodo = function(dias, btnEl){
+    const deInput  = document.getElementById('tempo-selb-de');
+    const ateInput = document.getElementById('tempo-selb-ate');
+    if(dias === 'all'){
+      if(deInput)  deInput.value  = '';
+      if(ateInput) ateInput.value = '';
+    } else {
+      const hoje = new Date();
+      const inicio = new Date(Date.now() - (dias-1)*86400000);
+      if(ateInput) ateInput.value = hoje.toISOString().slice(0,10);
+      if(deInput)  deInput.value  = inicio.toISOString().slice(0,10);
+    }
+    // Destaca o botão ativo
+    ['ts-quick-30','ts-quick-90','ts-quick-all'].forEach(id=>{
+      const el = document.getElementById(id);
+      if(el) el.classList.remove('bp');
+    });
+    if(btnEl) btnEl.classList.add('bp');
+    window.renderTempoSelb();
+  };
+
+  // ── Tabs internas ──
+  window.setTempoSelbTab = function(tab){
+    _tsActiveTab = tab;
+    const tSelbs = document.getElementById('ts-tab-selbs');
+    const tMods  = document.getElementById('ts-tab-modelos');
+    const vSelbs = document.getElementById('ts-view-selbs');
+    const vMods  = document.getElementById('ts-view-modelos');
+    const active = 'border-bottom:2px solid var(--accent);color:var(--text)';
+    const inactive = 'border-bottom:2px solid transparent;color:var(--muted)';
+    if(tSelbs) tSelbs.style.cssText = 'background:none;border:none;padding:8px 16px;font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;'+(tab==='selbs'?active:inactive);
+    if(tMods)  tMods.style.cssText  = 'background:none;border:none;padding:8px 16px;font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;'+(tab==='modelos'?active:inactive);
+    if(vSelbs) vSelbs.style.display = tab==='selbs' ? '' : 'none';
+    if(vMods)  vMods.style.display  = tab==='modelos' ? '' : 'none';
+  };
+
+  // ── API pública ──
+  window.renderTempoSelb = function(){
+    const filtered = applyFilters(_tsRows);
+    renderResumo(filtered);
+    renderTabelaSelbs(filtered);
+    renderTabelaModelos(filtered);
+  };
+
+  window.loadTempoSelb = loadAndRender;
+
+  window.exportTempoSelbCSV = function(){
+    const rows = applyFilters(_tsRows);
+    const lines = [['SELB','Modelo','Entrada_Gaiola_LAB','Saida_Liberados_Qualidade','Duracao','Duracao_min','Status'].join(';')];
+    rows.forEach(r=>{
+      lines.push([
+        r.selb, r.modelo,
+        r.inicioTs?fmtDt(r.inicioTs):'',
+        r.fimTs?fmtDt(r.fimTs):'',
+        fmtDur(r.duracao),
+        r.duracao ? Math.round(r.duracao/60000) : 0,
+        r.status
+      ].map(v=>'"'+String(v||'').replace(/"/g,'""')+'"').join(';'));
+    });
+    // Aba 2: média por modelo
+    const validas = rows.filter(r=>r.status==='concluido' && r.duracao>0);
+    const byModel = {};
+    validas.forEach(r => {
+      const m2 = r.modelo||'—';
+      if(!byModel[m2]) byModel[m2] = { durs:[], lmDurs:[] };
+      byModel[m2].durs.push(r.duracao);
+      if(r.duracaoLimpMont > 0) byModel[m2].lmDurs.push(r.duracaoLimpMont);
+    });
+    lines.push('');
+    lines.push(['MEDIA_POR_MODELO'].join(';'));
+    lines.push(['Modelo','SELBs','Tempo_medio','Tempo_medio_min','Media_LimpMont','Media_LimpMont_min','Min','Max','Total_acumulado'].join(';'));
+    Object.keys(byModel).forEach(m=>{
+      const { durs, lmDurs } = byModel[m];
+      const total = durs.reduce((s,d)=>s+d,0);
+      const media = total/durs.length;
+      const lmMedia = lmDurs.length ? lmDurs.reduce((s,d)=>s+d,0)/lmDurs.length : 0;
+      lines.push([m, durs.length, fmtDur(media), Math.round(media/60000),
+        lmMedia>0?fmtDur(lmMedia):'', lmMedia>0?Math.round(lmMedia/60000):'',
+        fmtDur(Math.min(...durs)), fmtDur(Math.max(...durs)), fmtDur(total)
+      ].map(v=>'"'+String(v||'').replace(/"/g,'""')+'"').join(';'));
+    });
+    const blob = new Blob(['\ufeff'+lines.join('\n')],{type:'text/csv;charset=utf-8'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+    a.download='tempo_selb_'+new Date().toISOString().slice(0,10)+'.csv'; a.click();
+  };
+
+  // ── Hook em setView ──
+  function hookSetView(){
+    if(typeof window.setView !== 'function'){ setTimeout(hookSetView,100); return; }
+    const _orig = window.setView;
+    window.setView = function(v, el){
+      const r = _orig.apply(this, arguments);
+      if(v === 'tempo-selb'){
+        initDates();
+        loadAndRender().catch(e=>console.warn('[TempoSELB]',e));
+      }
+      return r;
+    };
+  }
+  hookSetView();
 })();
 </script>
 
-<!-- ═══ MODAL: Bipagem em Massa via Supabase do Pietro ═══ -->
-<div id="modal-bipar-maquinas-a" class="modal hidden" style="position:fixed;inset:0;z-index:600;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;padding:20px">
-  <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:16px;width:100%;max-width:720px;max-height:90vh;overflow:hidden;display:flex;flex-direction:column">
-    <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
-      <div>
-        <div style="font-size:16px;font-weight:700;color:#10b981">📥 Bipagem em Massa — Máquinas A</div>
-        <div style="font-size:12px;color:var(--muted);margin-top:2px">Modelo puxado do sistema do Pietro · Salva como Máquina A</div>
-      </div>
-      <button onclick="closeModal('modal-bipar-maquinas-a')" style="background:none;border:none;color:var(--muted);font-size:20px;cursor:pointer">×</button>
-    </div>
+<!-- pedPrintLabels: impressão isolada via iframe, com QR convertido para imagem -->
+<script>
+function pedPrintLabels() {
+  var gallery = document.getElementById('ped-gallery');
+  var wraps = gallery ? gallery.querySelectorAll('.ped-label-wrap') : [];
+  if (!wraps.length) {
+    alert('Nenhuma etiqueta gerada para imprimir.');
+    return;
+  }
 
-    <!-- LOGIN PIETRO -->
-    <div id="bipar-login-box" style="padding:22px;display:none;flex-direction:column;gap:10px">
-      <div style="font-size:12px;color:var(--muted)">Faça login no Supabase do Pietro para liberar a consulta de SELBs (apenas 1x por sessão).</div>
-      <input id="bipar-email" class="sinp" placeholder="E-mail" autocomplete="username" style="padding:10px 12px">
-      <input id="bipar-pass" class="sinp" type="password" placeholder="Senha" autocomplete="current-password" style="padding:10px 12px">
-      <button onclick="biparPietroLogin()" id="bipar-login-btn" style="background:#10b981;color:#000;border:none;border-radius:9px;font-weight:700;padding:10px 14px;cursor:pointer">Entrar</button>
-      <div id="bipar-login-err" style="font-size:12px;color:var(--danger)"></div>
-    </div>
+  // Clona cada etiqueta e converte os <canvas> (QR codes) em <img> data URL
+  var labelsHTML = '';
+  wraps.forEach(function (wrap) {
+    var et = wrap.querySelector('.ped-etiqueta');
+    if (!et) return;
+    var clone = et.cloneNode(true);
 
-    <!-- BIPAGEM -->
-    <div id="bipar-scan-box" style="padding:18px 22px;display:none;flex-direction:column;gap:12px;flex:1;min-height:0;overflow:hidden">
-      <div style="display:flex;gap:8px;align-items:center">
-        <input id="bipar-input" class="sinp" placeholder="Bipe ou digite o SELB e tecle ENTER" style="flex:1;padding:11px 14px;font-family:var(--mono);font-size:14px">
-        <button onclick="biparAddSelb()" style="background:#10b981;color:#000;border:none;border-radius:9px;font-weight:700;padding:10px 16px;cursor:pointer">+ Adicionar</button>
-      </div>
-      <div id="bipar-status" style="font-size:12px;color:var(--muted);min-height:16px"></div>
-      <div style="flex:1;overflow:auto;border:1px solid var(--border);border-radius:10px">
-        <table class="rtbl" style="width:100%">
-          <thead style="position:sticky;top:0;background:var(--bg3);z-index:1">
-            <tr><th style="width:40px">#</th><th>SELB</th><th>Modelo</th><th style="width:60px"></th></tr>
-          </thead>
-          <tbody id="bipar-lista"></tbody>
-        </table>
-      </div>
-      <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
-        <div style="font-size:12px;color:var(--muted)"><span id="bipar-count">0</span> SELB(s) na fila</div>
-        <div style="display:flex;gap:8px">
-          <button onclick="biparLimpar()" style="background:var(--bg3);border:1px solid var(--border2);color:var(--muted);border-radius:9px;padding:9px 14px;cursor:pointer;font-weight:600">Limpar</button>
-          <button id="bipar-salvar-btn" onclick="biparSalvarTudo()" style="background:#10b981;color:#000;border:none;border-radius:9px;font-weight:700;padding:9px 18px;cursor:pointer">💾 Salvar tudo como Máquina A</button>
-        </div>
-      </div>
+    // Mapeia canvases originais -> clones para copiar o bitmap
+    var origCanvases = et.querySelectorAll('canvas');
+    var cloneCanvases = clone.querySelectorAll('canvas');
+    origCanvases.forEach(function (oc, i) {
+      var cc = cloneCanvases[i];
+      if (!cc) return;
+      try {
+        var dataUrl = oc.toDataURL('image/png');
+        var img = document.createElement('img');
+        img.src = dataUrl;
+        // Preserva classes/estilo (ped-etiq-qr / ped-unit-qr controlam tamanho)
+        if (cc.className) img.className = cc.className;
+        if (cc.style.cssText) img.style.cssText = cc.style.cssText;
+        cc.parentNode.replaceChild(img, cc);
+      } catch (e) {
+        console.warn('[print] canvas->img falhou:', e);
+      }
+    });
+
+    labelsHTML += '<div class="sheet">' + clone.outerHTML + '</div>';
+  });
+
+  // CSS embutido — copia apenas o necessário para a etiqueta (sem stylesheets externos)
+  var css = [
+    '@page { size: 15cm 10cm; margin: 0; }',
+    'html, body { margin:0; padding:0; background:#fff; font-family:"Arial Black",Arial,sans-serif; }',
+    '.sheet { width:15cm; height:10cm; overflow:hidden; background:#fff; page-break-after:always; break-after:page; }',
+    '.sheet:last-child { page-break-after:auto; break-after:auto; }',
+    '.ped-etiqueta { width:15cm; height:10cm; background:#fff; color:#000; border:0.1cm solid #000; border-radius:0; display:flex; flex-direction:column; overflow:hidden; font-family:"Arial Black",Arial,sans-serif; position:relative; box-shadow:none; box-sizing:border-box; }',
+    '.ped-etiq-row { display:flex; align-items:stretch; border-bottom:2px solid #000; flex:1; }',
+    '.ped-etiq-row:last-child { border-bottom:none; }',
+    '.ped-etiq-row2 { flex:1.1; }',
+    '.ped-etiq-elem { display:flex; align-items:center; justify-content:center; padding:0.3cm 0.4cm; flex:1; overflow:hidden; }',
+    '.ped-etiq-elem1 { display:flex; align-items:center; justify-content:center; padding:0.2cm 0.35cm; flex:1; overflow:hidden; }',
+    '.ped-etiq-titulo { font-size:2.2rem; font-weight:900; color:#888; text-transform:uppercase; letter-spacing:.04em; white-space:nowrap; margin:0; line-height:1; }',
+    '.ped-etiq-valor { font-size:2.8rem; font-weight:900; color:#000; text-transform:uppercase; letter-spacing:.04em; white-space:nowrap; margin:0; line-height:1; }',
+    '.ped-etiq-modelo { font-size:2rem; font-weight:900; color:#000; text-transform:uppercase; text-align:center; line-height:1.15; margin:0; word-break:break-word; }',
+    '.ped-etiq-qr { width:2.5cm; height:2.5cm; display:block; flex-shrink:0; }',
+    '.ped-auditado-bar { position:absolute; top:0; left:0; right:0; background:#f5a623; color:#000; font-weight:900; font-size:11px; text-align:center; padding:3px 0; letter-spacing:.1em; z-index:1; }',
+    '.ped-pedido-bar { position:absolute; top:0; left:0; right:0; background:#3dd68c; color:#000; font-weight:900; font-size:11px; text-align:center; padding:3px 0; letter-spacing:.1em; z-index:1; }',
+    '.ped-unit-pill, .no-print { display:none !important; }',
+    '* { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }'
+  ].join('\n');
+
+  var doc = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Etiquetas</title>' +
+            '<style>' + css + '</style>' +
+            '</head><body>' + labelsHTML + '</body></html>';
+
+  var iframe = document.createElement('iframe');
+  iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+  document.body.appendChild(iframe);
+
+  var idoc = iframe.contentDocument || iframe.contentWindow.document;
+  idoc.open(); idoc.write(doc); idoc.close();
+
+  var win = iframe.contentWindow;
+
+  function waitImagesAndPrint() {
+    var imgs = idoc.images;
+    var pending = 0;
+    for (var i = 0; i < imgs.length; i++) {
+      if (!imgs[i].complete) {
+        pending++;
+        imgs[i].addEventListener('load',  done);
+        imgs[i].addEventListener('error', done);
+      }
+    }
+    function done() {
+      if (--pending <= 0) fire();
+    }
+    function fire() {
+      try { win.focus(); win.print(); } catch (e) { console.error(e); }
+      setTimeout(function(){ iframe.remove(); }, 1500);
+    }
+    if (pending === 0) fire();
+  }
+
+  if (idoc.readyState === 'complete') setTimeout(waitImagesAndPrint, 50);
+  else win.addEventListener('load', function(){ setTimeout(waitImagesAndPrint, 50); });
+}
+</script>
+
+
+<!-- ═══════════════════════════════════════════════
+     MODAL INFORMATIVO — "Como funciona este relatório"
+     ═══════════════════════════════════════════════ -->
+<div class="info-rel-overlay" id="info-rel-overlay" onclick="if(event.target===this) fecharInfoRelatorio()">
+  <div class="info-rel-modal-wrap">
+    <div class="info-rel-modal" id="info-rel-modal">
+      <button class="info-rel-close" onclick="fecharInfoRelatorio()">✕</button>
+      <h3 id="info-rel-titulo">📊 Relatório</h3>
+      <p class="info-rel-sub" id="info-rel-sub"></p>
+      <div id="info-rel-corpo"></div>
     </div>
   </div>
 </div>
 
-<!-- ── TOGGLE DE TEMA CLARO/ESCURO ── -->
 <script>
 (function(){
-  var DARK_ICON  = '🌙';
-  var LIGHT_ICON = '☀️';
-
-  function applyTheme(theme) {
-    document.documentElement.setAttribute('data-theme', theme);
-    var btn = document.getElementById('theme-toggle-btn');
-    if (btn) btn.textContent = theme === 'light' ? LIGHT_ICON : DARK_ICON;
-    try { localStorage.setItem('labtech-theme', theme); } catch(e) {}
-  }
-
-  window.toggleTheme = function() {
-    var current = document.documentElement.getAttribute('data-theme');
-    applyTheme(current === 'light' ? 'dark' : 'light');
+  // ── Textos explicativos de cada relatório, em linguagem simples (sem código/termos técnicos) ──
+  const INFO_RELATORIOS = {
+    'prod': {
+      titulo: '📊 Relatório de Produtividade',
+      resumo: 'Mostra o desempenho de cada profissional no período escolhido.',
+      secoes: [
+        { label: 'O que é contado', texto: 'Para cada profissional, o sistema soma quantos SELBs ele <b>aprovou</b>, quantos <b>reprovou</b> e quantos enviou para <b>SCRAP</b> (descarte) dentro do período selecionado no filtro de data.' },
+        { label: 'Tempo ativo e tempo ocioso', texto: 'O <b>tempo ativo</b> é a soma do tempo que o profissional passou de fato trabalhando em cada SELB (já descontando pausas). O <b>tempo ocioso</b> é o tempo que ficou sem registrar nenhum trabalho dentro do turno.' },
+        { label: 'Cuidado com SELB repetido', texto: 'Quando o período escolhido é de 30 dias ou mais (ou "Todos"), um mesmo SELB aprovado mais de uma vez pelo mesmo profissional só é contado <b>uma vez</b>, para não inflar o resultado. Em períodos curtos (dia, semana), cada registro conta normalmente.' },
+      ]
+    },
+    'pedido': {
+      titulo: '📦 Facilitador de Pedido',
+      resumo: 'Ferramenta para gerar etiquetas de peças a partir de uma planilha e dos SELBs bipados.',
+      secoes: [
+        { label: 'Como funciona', texto: 'Você envia a planilha do sistema (XLSX) e cola a lista de SELBs que foram bipados. O sistema cruza essas informações e identifica o modelo, série e SKU de cada equipamento.' },
+        { label: 'Etiquetas geradas', texto: 'Para cada modelo encontrado, é possível marcar quantas etiquetas (15×10cm, com QR Code) devem ser impressas como <b>pedido</b> de peça.' },
+        { label: 'Não é um relatório de histórico', texto: 'Diferente dos demais, esta tela não guarda regra de cálculo sobre tempo ou aprovação — ela apenas organiza e imprime etiquetas a partir dos dados que você importa.' },
+      ]
+    },
+    'scrap': {
+      titulo: '🗑️ Relatório de SCRAP',
+      resumo: 'Mostra os equipamentos descartados (status SCRAP) no período.',
+      secoes: [
+        { label: 'O que entra na contagem', texto: 'Todo SELB marcado como <b>SCRAP</b> por um profissional, em qualquer setor (Montagem, Limpeza, Complexa, Eletrônica), dentro do período do filtro de data.' },
+        { label: 'Exceção: Desmembramento', texto: 'Registros do setor de <b>Desmembramento</b> aparecem na tabela, mas não entram no card "Total SCRAP" — eles são tratados separadamente porque são um descarte direto, sem passar pelo fluxo normal de tempo de trabalho.' },
+        { label: 'Tempo gasto', texto: 'Os cards de tempo (total, médio e maior tempo) são calculados apenas com os registros normais de SCRAP que têm duração registrada — o Desmembramento não entra nessa conta.' },
+      ]
+    },
+    'modelo': {
+      titulo: '⏱️ Tempo Médio por Modelo',
+      resumo: 'Mostra quanto tempo, em média, cada modelo de equipamento leva para ser concluído.',
+      secoes: [
+        { label: 'Período analisado', texto: 'Você escolhe uma janela de <b>30, 60 ou 90 dias</b> para trás. Registros mais antigos que essa janela não entram na média, mesmo que ainda existam no sistema.' },
+        { label: 'Quais registros contam', texto: 'Por padrão, só entram SELBs <b>aprovados</b>. Se você trocar o filtro para "Todas concluídas", também entram os reprovados e SCRAP.' },
+        { label: 'Filtro de tempos "estranhos" (Montagem e Limpeza)', texto: 'Para evitar que a média seja distorcida por registros muito rápidos ou muito longos, o sistema aplica uma regra apenas nesses dois setores: <ul><li>Tempos de <b>15 minutos ou menos</b> são descartados (provável erro de registro).</li><li>Tempos de <b>mais de 6 horas</b> também são descartados (provável esquecimento de finalizar).</li><li>Tempos entre <b>180 minutos e 6 horas</b> são contados, mas com um teto de 180 minutos, para não distorcer a média para cima.</li></ul>' },
+        { label: 'Excluir SELBs específicos', texto: 'É possível remover manualmente um SELB do cálculo da média (por exemplo, se você sabe que aquele caso foi atípico). Ele continua aparecendo na lista de "Excluídos", podendo ser restaurado depois.' },
+      ]
+    },
+    'usuario': {
+      titulo: '👤 Tempo Médio por Modelo — Por Usuário',
+      resumo: 'Igual ao relatório de Tempo por Modelo, mas filtrado para um profissional específico.',
+      secoes: [
+        { label: 'Como funciona', texto: 'Você seleciona um profissional na lista, e o sistema mostra apenas os equipamentos que ele concluiu, com o tempo médio que ele levou em cada modelo.' },
+        { label: 'Mesmas regras de cálculo', texto: 'Usa as mesmas regras de filtro do relatório "Tempo por Modelo": período escolhido, status (aprovadas ou todas concluídas), e o mesmo ajuste de tempos muito curtos ou muito longos nos setores de Montagem e Limpeza.' },
+        { label: 'Para que serve', texto: 'Ajuda a identificar se um profissional está mais rápido ou mais lento que a média geral em determinados modelos, para apoiar treinamento ou redistribuição de tarefas.' },
+      ]
+    },
+    'reprov': {
+      titulo: '⚠️ Máquinas Reprovadas',
+      resumo: 'Lista os equipamentos que foram reprovados na qualidade e precisaram de retrabalho.',
+      secoes: [
+        { label: 'O que entra na lista', texto: 'Todo SELB marcado como <b>reprovado</b> no período do filtro de data, podendo ser filtrado por setor.' },
+        { label: 'Retrabalho', texto: 'Quando um equipamento reprovado é corrigido e enviado de novo, o sistema mede o tempo entre a reprovação e a nova entrega — esse é o <b>tempo de retrabalho</b>. Se ainda não foi corrigido, ele aparece como "aguardando retrabalho".' },
+        { label: 'Motivos mais frequentes', texto: 'O sistema agrupa os motivos de reprovação informados pelos profissionais e mostra qual foi o mais comum no período, além de quem mais reprovou equipamentos.' },
+      ]
+    },
+    'defeitos': {
+      titulo: '🔍 Defeitos Frequentes',
+      resumo: 'Agrupa os motivos de reprovação por categoria, para identificar padrões.',
+      secoes: [
+        { label: 'Como agrupa', texto: 'Cada reprovação tem um motivo escrito pelo profissional. O sistema reconhece palavras-chave parecidas (por exemplo, variações de "tela quebrada") e agrupa tudo na mesma categoria de defeito.' },
+        { label: 'Gráfico de distribuição', texto: 'O gráfico de pizza mostra as 8 categorias de defeito mais comuns no período; o restante é somado em "Outros" para não poluir a visualização.' },
+        { label: 'Para que serve', texto: 'Ajuda a identificar se um defeito específico está se repetindo muito em determinados modelos, o que pode indicar um problema recorrente de fabricação ou de manuseio.' },
+      ]
+    },
+    'duplicados': {
+      titulo: '🔄 SELBs Duplicados',
+      resumo: 'Mostra SELBs aprovados que foram registrados mais de uma vez pelo mesmo profissional.',
+      secoes: [
+        { label: 'O que é considerado duplicado', texto: 'Se o <b>mesmo profissional</b> registrou o <b>mesmo SELB</b> como aprovado mais de uma vez dentro do período selecionado, esse SELB aparece nesta lista.' },
+        { label: 'Por que isso importa', texto: 'Registros duplicados podem indicar erro de digitação, re-bipagem acidental, ou tentativa de inflar a produtividade — por isso o sistema separa esses casos para revisão.' },
+        { label: 'Filtro por profissional', texto: 'É possível selecionar um profissional específico para ver apenas as duplicidades causadas por ele.' },
+      ]
+    },
+    'busca-modelo': {
+      titulo: '🔍 Busca por Modelo',
+      resumo: 'Mostra o rendimento (aprovados x SCRAP) de um modelo específico de equipamento.',
+      secoes: [
+        { label: 'Como funciona', texto: 'Você escolhe um modelo na lista. O sistema busca todos os SELBs daquele modelo no período filtrado e mostra o status mais recente de cada um — aprovado ou SCRAP.' },
+        { label: 'Sem duplicar SELB', texto: 'Mesmo que um SELB tenha passado por várias etapas, ele só é contado <b>uma vez</b>, usando sempre o registro mais recente daquele equipamento.' },
+        { label: 'Gráfico e tabela', texto: 'O gráfico de pizza mostra a proporção entre aprovados e SCRAP daquele modelo, e a tabela abaixo lista cada SELB individualmente com seu status final.' },
+      ]
+    },
+    'qual-liberados': {
+      titulo: '📊 Registros por Usuário (Liberados Qualidade)',
+      resumo: 'Mostra quantos SELBs cada responsável liberou na tela de Qualidade.',
+      secoes: [
+        { label: 'O que é contado', texto: 'Para cada responsável, o sistema soma quantos SELBs ele liberou na tela de Qualidade dentro do período escolhido, além de quantas etiquetas imprimiu e quantos chamados abriu durante essas liberações.' },
+        { label: 'Auditoria', texto: 'Registros marcados com a palavra "auditoria" na observação são contados separadamente, para diferenciar liberação normal de uma revisão de auditoria.' },
+        { label: 'Reprovações no mesmo período', texto: 'O relatório também mostra quantos equipamentos aquele mesmo responsável reprovou dentro do período, para dar uma visão completa do trabalho dele na Qualidade.' },
+        { label: 'Liberações por dia, semana e mês', texto: 'Os cartões de resumo mostram sempre quantos SELBs foram liberados <b>hoje</b>, <b>ontem</b>, nos <b>últimos 7 dias</b>, no <b>mês atual</b> e no <b>ano atual</b>, independente do filtro escolhido. Logo abaixo, a tabela "Liberações por período" agrupa as liberações do período filtrado por dia, por semana (segunda a domingo) ou por mês, com totais de etiquetas, chamados, auditoria e SELBs únicos.' },
+        { label: 'Saúde da equipe no período', texto: 'Mostra a <b>presença média</b> da equipe (check-in por PIN) nos dias que tiveram liberação dentro do filtro, além de presentes por dia, pessoas distintas e dias avaliados. A tabela "Liberações por período" traz a mesma métrica por dia/semana/mês. O setor <b>Eletrônica não entra no cálculo</b> de saúde da equipe (nem aqui, nem na aba Admin).' },
+        { label: 'Registros detalhados', texto: 'A última tabela lista cada liberação individualmente (data/hora, SELB, equipamento, responsável, etiqueta, chamado e observação), com busca livre e exportação em CSV.' },
+      ]
+    },
+    'tempo-selb': {
+      titulo: '⏱️ Tempo SELB',
+      resumo: 'Mede quanto tempo cada SELB leva desde a entrada no Laboratório até a liberação final da Qualidade.',
+      secoes: [
+        { label: 'Início e fim do cálculo', texto: 'A contagem começa quando o SELB entra no bolsão <b>Gaiola LAB</b> e termina quando ele chega em <b>Liberados Qualidade</b>. Esse intervalo total é a "Duração" mostrada na aba Por SELB.' },
+        { label: 'Tempo de Limpeza + Montagem', texto: 'Além da duração total, o sistema soma separadamente quanto tempo o SELB ficou parado especificamente dentro dos bolsões de <b>Limpeza</b> e <b>Montagem</b> — esse valor aparece na coluna "Limp+Mont" e ajuda a saber quanto do tempo total foi realmente gasto nessas duas etapas, sem contar o transporte entre bolsões.' },
+        { label: 'Média por Modelo', texto: 'Nessa aba, o sistema agrupa todos os SELBs concluídos pelo modelo de equipamento e calcula a média de tempo total e a média de Limpeza+Montagem de cada modelo, permitindo comparar quais modelos demoram mais.' },
+        { label: 'Filtros de período', texto: 'Os botões de "30 dias", "90 dias" e "Todos" ajustam rapidamente o intervalo de datas analisado. SELBs que ainda não chegaram em Liberados Qualidade só aparecem se a opção "Incluir SELBs em andamento" estiver marcada.' },
+      ]
+    },
   };
 
-  // Inicializar ícone ao carregar a página
-  document.addEventListener('DOMContentLoaded', function(){
-    var saved = 'dark';
-    try { saved = localStorage.getItem('labtech-theme') || 'dark'; } catch(e){}
-    applyTheme(saved);
+  function montarCorpoHtml(info){
+    return info.secoes.map(s => `
+      <div class="info-rel-section">
+        <div class="info-rel-label">💡 ${s.label}</div>
+        <div class="info-rel-text">${s.texto}</div>
+      </div>`).join('');
+  }
+
+  window.mostrarInfoRelatorio = function(chave){
+    const info = INFO_RELATORIOS[chave];
+    if(!info){ console.warn('[InfoRelatorio] chave não encontrada:', chave); return; }
+    document.getElementById('info-rel-titulo').textContent = info.titulo;
+    document.getElementById('info-rel-sub').textContent = info.resumo;
+    document.getElementById('info-rel-corpo').innerHTML = montarCorpoHtml(info);
+    document.getElementById('info-rel-overlay').classList.add('open');
+  };
+
+  window.fecharInfoRelatorio = function(){
+    document.getElementById('info-rel-overlay').classList.remove('open');
+  };
+
+  // Fecha com a tecla ESC
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape') window.fecharInfoRelatorio();
   });
+})();
+</script>
+
+<script>
+// ════════════════════════════════════════════════════════════════
+// AUTO-RESPONSIVO MOBILE — Barras de abas/botões (FluxoLAB, Relatórios,
+// Máquinas A, Garantia, etc.) viram faixas roláveis horizontalmente em
+// telas pequenas, em vez de quebrar linha/cortar. Genérico: detecta
+// qualquer <div> cujos filhos diretos sejam só <button>, sem precisar
+// editar cada view manualmente. Roda em loop leve pois o app troca
+// innerHTML dinamicamente ao trocar de aba.
+// ════════════════════════════════════════════════════════════════
+(function(){
+  function isMobile(){ return window.innerWidth <= 768; }
+
+  function enhance(){
+    var mobile = isMobile();
+    var divs = document.querySelectorAll('div:not([data-mtb])');
+    for (var i = 0; i < divs.length; i++) {
+      var div = divs[i];
+      var kids = div.children;
+      if (!kids.length || kids.length < 3) continue;
+      var allButtons = true;
+      for (var j = 0; j < kids.length; j++) {
+        if (kids[j].tagName !== 'BUTTON') { allButtons = false; break; }
+      }
+      if (!allButtons) continue;
+      var cs = window.getComputedStyle(div);
+      if (cs.display !== 'flex') continue;
+      div.setAttribute('data-mtb', '1');
+    }
+
+    var bars = document.querySelectorAll('div[data-mtb]');
+    for (var k = 0; k < bars.length; k++) {
+      var bar = bars[k];
+      if (mobile) {
+        bar.style.overflowX = 'auto';
+        bar.style.overflowY = 'hidden';
+        bar.style.flexWrap = 'nowrap';
+        bar.style.webkitOverflowScrolling = 'touch';
+        bar.style.scrollbarWidth = 'none';
+        for (var b = 0; b < bar.children.length; b++) {
+          bar.children[b].style.flexShrink = '0';
+          bar.children[b].style.whiteSpace = 'nowrap';
+        }
+      } else {
+        bar.style.overflowX = '';
+        bar.style.overflowY = '';
+        bar.style.flexWrap = '';
+        bar.style.webkitOverflowScrolling = '';
+        for (var b2 = 0; b2 < bar.children.length; b2++) {
+          bar.children[b2].style.flexShrink = '';
+          bar.children[b2].style.whiteSpace = '';
+        }
+      }
+    }
+  }
+
+  window.addEventListener('DOMContentLoaded', enhance);
+  window.addEventListener('resize', enhance);
+  window.addEventListener('orientationchange', enhance);
+  setInterval(enhance, 1200); // reaplica após re-renders dinâmicos do app
 })();
 </script>
 
@@ -4062,6 +5291,213 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     </div>
   </div>
 
+
+<!-- ── ETIQUETADOR DE CÓDIGO — JavaScript & Impressão Confiável ── -->
+<script>
+(function() {
+  function descSize(text) {
+    if (text.length > 90) return 'sm';
+    if (text.length > 55) return 'md';
+    return 'lg';
+  }
+  function isEncodable(code) {
+    return code.length > 0 && /^[\x20-\x7E]+$/.test(code);
+  }
+
+  function parseLine(text) {
+    text = (text || '').replace(/\u00a0/g, ' ').trim();
+    if (!text) return { code: '', desc: '' };
+
+    if (text.includes('\t')) {
+      var parts = text.split('\t');
+      return { code: parts[0].trim(), desc: parts.slice(1).join(' ').trim() };
+    }
+
+    var tokens = text.split(/\s+/);
+    return { code: tokens[0] || '', desc: tokens.slice(1).join(' ') };
+  }
+
+  window.etqParsePaste = function(raw) {
+    var p = parseLine(raw);
+    var code = p.code;
+    var desc = p.desc;
+
+    var info = document.getElementById('etq-parsed-info');
+    var pcEl = document.getElementById('etq-parsed-code');
+    var pdEl = document.getElementById('etq-parsed-desc-info');
+    var warn = document.getElementById('etq-code-warn');
+
+    if (code) {
+      if (info) info.style.display = 'flex';
+      if (pcEl) pcEl.textContent = code;
+      if (pdEl) pdEl.textContent = desc || '(sem descrição)';
+      if (warn) warn.style.display = !isEncodable(code) ? '' : 'none';
+    } else {
+      if (info) info.style.display = 'none';
+      if (warn) warn.style.display = 'none';
+    }
+
+    etqUpdatePreview(code, desc);
+  };
+
+  function etqUpdatePreview(code, desc) {
+    var prevCode  = document.getElementById('etq-prev-code');
+    var prevDesc  = document.getElementById('etq-prev-desc');
+    var prevHuman = document.getElementById('etq-prev-human');
+    var svg       = document.getElementById('etq-prev-barcode');
+
+    if (prevCode)  prevCode.textContent = code || '—';
+    if (prevHuman) prevHuman.textContent = code || '—';
+    if (prevDesc) {
+      prevDesc.textContent = desc || '\u00a0';
+      prevDesc.setAttribute('data-size', descSize(desc));
+    }
+
+    if (svg && code && isEncodable(code) && typeof JsBarcode !== 'undefined') {
+      try {
+        JsBarcode(svg, code, {
+          format: 'CODE128', displayValue: false, margin: 0,
+          width: 2, height: 100, background: 'transparent', lineColor: '#000'
+        });
+        var w = (svg.getAttribute('width') || '200').replace('px','');
+        var h = (svg.getAttribute('height') || '100').replace('px','');
+        svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+        svg.removeAttribute('width'); svg.removeAttribute('height');
+        svg.setAttribute('preserveAspectRatio', 'none');
+        svg.style.removeProperty('transform');
+      } catch(e) {}
+    } else if (svg) {
+      while (svg.firstChild) svg.removeChild(svg.firstChild);
+    }
+  }
+
+  window.etqImprimir = function() {
+    var raw  = (document.getElementById('etq-paste-field') || {}).value || '';
+    var p    = parseLine(raw);
+    var code = p.code;
+    var desc = p.desc;
+
+    if (!code) { alert('Cole o código antes de imprimir.'); return; }
+    if (!isEncodable(code)) {
+      alert('Código contém caracteres inválidos para Code 128.\nUse apenas caracteres ASCII imprimíveis.');
+      return;
+    }
+
+    // Criar SVG temporário para gerar código de barras
+    var tempSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    if (typeof JsBarcode !== 'undefined') {
+      try {
+        JsBarcode(tempSvg, code, {
+          format: 'CODE128', displayValue: false, margin: 0,
+          width: 2, height: 100, background: 'transparent', lineColor: '#000'
+        });
+        var w = (tempSvg.getAttribute('width') || '200').replace('px','');
+        var h = (tempSvg.getAttribute('height') || '100').replace('px','');
+        tempSvg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+        tempSvg.removeAttribute('width'); tempSvg.removeAttribute('height');
+        tempSvg.setAttribute('preserveAspectRatio', 'none');
+      } catch(e) {}
+    }
+
+    var barcodeXml = tempSvg.outerHTML;
+    var dSize = descSize(desc);
+
+    var labelHtml = '' +
+      '<div class="etq-label-sheet">' +
+        '<div class="etq-label-head">' +
+          '<span class="etq-label-kicker">Código</span>' +
+          '<span class="etq-label-code">' + escapeHtml(code) + '</span>' +
+        '</div>' +
+        '<p class="etq-label-desc" data-size="' + dSize + '">' + (desc ? escapeHtml(desc) : '&nbsp;') + '</p>' +
+        '<div class="etq-label-foot">' +
+          '<div class="etq-barcode-wrap">' + barcodeXml + '</div>' +
+          '<span class="etq-label-human">' + escapeHtml(code) + '</span>' +
+        '</div>' +
+      '</div>';
+
+    var printCss = '' +
+      '@page { size: 150mm 100mm; margin: 0; }' +
+      'html, body { margin: 0; padding: 0; background: #fff; width: 150mm; height: 100mm; }' +
+      '.etq-label-sheet { width: 150mm; height: 100mm; padding: 6mm 7mm 5mm; box-sizing: border-box; background: #fff; color: #000; display: grid; grid-template-rows: auto 1fr auto; gap: 3mm; overflow: hidden; font-family: "Arial Black", Arial, sans-serif; -webkit-print-color-adjust: exact; print-color-adjust: exact; }' +
+      '.etq-label-head { display: flex; align-items: baseline; gap: 4mm; padding-bottom: 2.5mm; border-bottom: 0.7mm solid #000; }' +
+      '.etq-label-kicker { font-size: 3.4mm; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #000; }' +
+      '.etq-label-code { font-family: "JetBrains Mono", monospace; font-weight: 800; font-size: 14mm; line-height: 1; letter-spacing: -0.02em; color: #000; }' +
+      '.etq-label-desc { margin: 0; font-weight: 800; text-transform: uppercase; line-height: 1.12; letter-spacing: -0.005em; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; align-self: center; color: #000; }' +
+      '.etq-label-desc[data-size="lg"] { font-size: 7.6mm; }' +
+      '.etq-label-desc[data-size="md"] { font-size: 6.4mm; }' +
+      '.etq-label-desc[data-size="sm"] { font-size: 5.2mm; -webkit-line-clamp: 4; }' +
+      '.etq-label-foot { display: flex; flex-direction: column; align-items: center; gap: 1.2mm; }' +
+      '.etq-barcode-wrap { width: 110mm; height: 26mm; }' +
+      '.etq-barcode-wrap svg { display: block; width: 100%; height: 100%; }' +
+      '.etq-label-human { font-family: "JetBrains Mono", monospace; font-size: 5mm; font-weight: 600; letter-spacing: 0.35em; padding-left: 0.35em; color: #000; }';
+
+    function escapeHtml(t) {
+      return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    var doc = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Etiqueta ' + escapeHtml(code) + '</title>' +
+              '<style>' + printCss + '</style></head><body>' + labelHtml + '</body></html>';
+
+    var iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+    document.body.appendChild(iframe);
+
+    var idoc = iframe.contentDocument || iframe.contentWindow.document;
+    idoc.open(); idoc.write(doc); idoc.close();
+
+    var win = iframe.contentWindow;
+    setTimeout(function() {
+      try {
+        win.focus();
+        win.print();
+      } catch(e) {
+        console.error('Falha ao imprimir etiqueta:', e);
+      }
+      setTimeout(function() { iframe.remove(); }, 2000);
+    }, 150);
+  };
+
+  window.etqLimpar = function() {
+    var f = document.getElementById('etq-paste-field');
+    if (f) f.value = '';
+    var info = document.getElementById('etq-parsed-info');
+    if (info) info.style.display = 'none';
+    var warn = document.getElementById('etq-code-warn');
+    if (warn) warn.style.display = 'none';
+    etqUpdatePreview('', '');
+  };
+
+  window.etqToggle = function() {
+    var body = document.getElementById('etq-body-wrap');
+    var btn  = document.getElementById('btn-toggle-etq');
+    if (!body) return;
+    var collapsed = body.style.display === 'none';
+    body.style.display = collapsed ? '' : 'none';
+    if (btn) btn.textContent = collapsed ? '▼' : '▶';
+    try { localStorage.setItem('etq-collapsed', collapsed ? '0' : '1'); } catch(e){}
+  };
+
+  document.addEventListener('DOMContentLoaded', function() {
+    try {
+      if (localStorage.getItem('etq-collapsed') === '1') {
+        var body = document.getElementById('etq-body-wrap');
+        var btn  = document.getElementById('btn-toggle-etq');
+        if (body) body.style.display = 'none';
+        if (btn)  btn.textContent = '▶';
+      }
+    } catch(e){}
+
+    var f = document.getElementById('etq-paste-field');
+    if (f) {
+      f.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); etqImprimir(); }
+      });
+      // Se já houver algo digitado/restaurado pelo browser
+      if (f.value) etqParsePaste(f.value);
+    }
+  });
+})();
+</script>
+
 </body>
 </html>
-

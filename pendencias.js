@@ -197,6 +197,11 @@ function pendGroupStateByPedido(tableName) {
     else empty.push(row);
   });
   filled.sort((a, b) => {
+    // ── Urgências sempre no topo ─────────────────────────────────────────
+    const urgA = (typeof _fluxolabModeloUrgenteQtd === 'function') ? (_fluxolabModeloUrgenteQtd(a.row.modelo) > 0 ? 1 : 0) : 0;
+    const urgB = (typeof _fluxolabModeloUrgenteQtd === 'function') ? (_fluxolabModeloUrgenteQtd(b.row.modelo) > 0 ? 1 : 0) : 0;
+    if (urgA !== urgB) return urgB - urgA;
+
     const pedCmp = pendComparePedido(a.pedido, b.pedido);
     if (pedCmp !== 0) return pedCmp;
     return a.idx - b.idx;
@@ -214,6 +219,11 @@ function pendApplyStateSort(tableName, metricCompare) {
     else empty.push(row);
   });
   filled.sort((a, b) => {
+    // ── Urgências sempre no topo ────────────────────────────────────────────
+    const urgA = (typeof _fluxolabModeloUrgenteQtd === 'function') ? (_fluxolabModeloUrgenteQtd(a.row.modelo) > 0 ? 1 : 0) : 0;
+    const urgB = (typeof _fluxolabModeloUrgenteQtd === 'function') ? (_fluxolabModeloUrgenteQtd(b.row.modelo) > 0 ? 1 : 0) : 0;
+    if (urgA !== urgB) return urgB - urgA; // urgente (1) antes do normal (0)
+
     // A métrica escolhida pelo usuário (Dias Úteis Andamento / Dias em Aberto)
     // manda primeiro. O Pedido só desempata quando a métrica é igual —
     // antes era o contrário (Pedido mandava e a métrica só desempatava),
@@ -248,6 +258,11 @@ function pendSortFilledByPedido(filled, tableName) {
     : ((_pendMediaSortDir[tableName] === 'asc') ? 'asc' : 'desc');
 
   filled.sort((a, b) => {
+    // ── Urgências sempre no topo ────────────────────────────────────────────
+    const urgA = (typeof _fluxolabModeloUrgenteQtd === 'function') ? (_fluxolabModeloUrgenteQtd(a.row.modelo) > 0 ? 1 : 0) : 0;
+    const urgB = (typeof _fluxolabModeloUrgenteQtd === 'function') ? (_fluxolabModeloUrgenteQtd(b.row.modelo) > 0 ? 1 : 0) : 0;
+    if (urgA !== urgB) return urgB - urgA;
+
     // Mesmo ajuste feito em pendApplyStateSort: a métrica escolhida
     // (Dias Úteis Andamento / Dias em Aberto) manda primeiro; o Pedido
     // só desempata quando a métrica é igual. Antes o Pedido mandava
