@@ -103,6 +103,75 @@ body.ro-visu-fluxolab #fluxolab-tab-pendencias-panel button {
   opacity: 0.55 !important;
 }
 </style>
+<style>
+/* ─── GUIA DE BANCADA / DIAGNÓSTICO DE DEFEITOS (TELA OPERADOR) ─── */
+.op-def-btn {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 12px;
+  padding: 12px 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: all .18s ease;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  user-select: none;
+}
+.op-def-btn:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(245, 158, 11, 0.45);
+  transform: translateY(-1px);
+}
+.op-def-btn.active {
+  background: rgba(245, 158, 11, 0.16) !important;
+  border-color: #f59e0b !important;
+  box-shadow: 0 0 14px rgba(245, 158, 11, 0.3) !important;
+}
+.op-def-btn.active .op-def-title {
+  color: #f59e0b !important;
+}
+.op-step-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: all .15s ease;
+  user-select: none;
+}
+.op-step-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+.op-step-item.checked {
+  background: rgba(16, 185, 129, 0.08) !important;
+  border-color: rgba(16, 185, 129, 0.35) !important;
+}
+.op-step-checkbox {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 2px solid rgba(255, 255, 255, 0.22);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+  font-size: 13px;
+  font-weight: 800;
+  color: transparent;
+  transition: all .15s ease;
+}
+.op-step-item.checked .op-step-checkbox {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+</style>
 </head>
 <body>
 
@@ -772,15 +841,20 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
   </div>
 
   <!-- ── OPERADOR (tela dedicada para operador logado por PIN) ── -->
-  <div class="view" id="view-operador" style="flex-direction:column;align-items:center;justify-content:flex-start;min-height:calc(100vh - 90px);padding:24px 16px">
+    <div class="view" id="view-operador" style="flex-direction:column;align-items:center;justify-content:flex-start;min-height:calc(100vh - 90px);padding:20px 16px;width:100%">
     <!-- Header do operador -->
-    <div id="op-header" style="width:100%;max-width:480px;margin-bottom:20px;text-align:center">
+    <div id="op-header" style="width:100%;max-width:1160px;margin-bottom:18px;text-align:center">
       <div id="op-name-big" style="font-size:22px;font-weight:700;color:var(--text);margin-bottom:4px"></div>
       <div id="op-sector-tag" style="font-size:12px;font-weight:600;letter-spacing:.06em;color:var(--muted)"></div>
     </div>
 
-    <!-- Card central de status -->
-    <div id="op-card" style="width:100%;max-width:480px;background:var(--bg2);border:1px solid var(--border2);border-radius:20px;padding:28px 24px;text-align:center">
+    <!-- Container em duas colunas aproveitando o espaço da bancada sem interferir no SELB -->
+    <div style="display:flex;flex-direction:row;align-items:flex-start;justify-content:center;gap:24px;width:100%;max-width:1160px;flex-wrap:wrap">
+      
+      <!-- COLUNA 1: SELB EM ANDAMENTO & MEUS SELBS (ORIGINAL TOTALMENTE PRESERVADO) -->
+      <div style="flex:1;min-width:320px;max-width:460px;display:flex;flex-direction:column;align-items:stretch">
+        <!-- Card central de status -->
+        <div id="op-card" style="width:100%;background:var(--bg2);border:1px solid var(--border2);border-radius:20px;padding:28px 24px;text-align:center">
 
       <!-- Estado: idle -->
       <div id="op-idle" style="display:none">
@@ -878,20 +952,152 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     </div>
 
     <!-- Cadastrar novo SELB (sempre visível) -->
-    <div style="width:100%;max-width:480px;margin-top:18px">
-      <button onclick="abrirCadastrarSelb()" style="
-        width:100%;padding:12px;font-family:var(--font);font-size:13px;font-weight:700;
-        background:rgba(79,142,247,.10);color:var(--accent);
-        border:1px solid rgba(79,142,247,.40);border-radius:12px;cursor:pointer;
-        transition:all .15s;letter-spacing:.02em">
-        📝 Cadastrar SELB
-      </button>
-    </div>
 
-    <!-- Histórico rápido do dia -->
-    <div style="width:100%;max-width:480px;margin-top:20px">
-      <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Meus SELBs hoje</div>
-      <div id="op-history-list" style="display:flex;flex-direction:column;gap:6px"></div>
+        <!-- Cadastrar novo SELB (sempre visível) -->
+        <div style="width:100%;margin-top:16px">
+          <button onclick="abrirCadastrarSelb()" style="
+            width:100%;padding:12px;font-family:var(--font);font-size:13px;font-weight:700;
+            background:rgba(79,142,247,.10);color:var(--accent);
+            border:1px solid rgba(79,142,247,.40);border-radius:12px;cursor:pointer;
+            transition:all .15s;letter-spacing:.02em">
+            📝 Cadastrar SELB
+          </button>
+        </div>
+
+        <!-- Histórico rápido do dia -->
+        <div style="width:100%;margin-top:20px">
+          <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Meus SELBs hoje</div>
+          <div id="op-history-list" style="display:flex;flex-direction:column;gap:6px"></div>
+        </div>
+      </div>
+
+      <!-- COLUNA 2: NOVO BADGE GRANDE - GUIA DE DIAGNÓSTICO & DEFEITOS -->
+      <div id="op-defeitos-panel" style="flex:1.25;min-width:340px;max-width:620px;background:var(--bg2);border:1px solid rgba(245,158,11,0.28);border-radius:20px;padding:24px;display:flex;flex-direction:column;box-shadow:0 12px 35px rgba(0,0,0,0.45);position:relative">
+        
+        <!-- Header do Badge -->
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;border-bottom:1px solid rgba(255,255,255,0.07);padding-bottom:12px">
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="width:38px;height:38px;border-radius:10px;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.3);display:flex;align-items:center;justify-content:center;font-size:19px">
+              🛠️
+            </div>
+            <div>
+              <div style="font-size:15px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px">
+                Equipamento apresentou defeito?
+                <span style="font-size:10px;padding:2px 8px;border-radius:6px;background:rgba(245,158,11,0.15);color:var(--warn);border:1px solid rgba(245,158,11,0.3);font-weight:700;letter-spacing:.04em">GUIA DE BANCADA</span>
+              </div>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px">Selecione o sintoma para carregar o passo a passo de testes rápidos:</div>
+            </div>
+          </div>
+          <button id="op-def-btn-reset" onclick="opDefeitoLimpar()" style="display:none;background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:8px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;transition:all .15s">
+            ✕ Fechar
+          </button>
+        </div>
+
+        <!-- Grade com as 6 opções de defeito solicitadas -->
+        <div id="op-def-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));gap:10px;margin-bottom:16px">
+          <!-- 1. Código de erro -->
+          <button type="button" class="op-def-btn" onclick="opDefeitoSelecionar('erro')" id="btn-def-erro">
+            <span style="font-size:22px;line-height:1">🔢</span>
+            <div>
+              <div class="op-def-title" style="font-size:12px;font-weight:700;color:var(--text);transition:color .15s">Código de erro</div>
+              <div style="font-size:10px;color:var(--muted);margin-top:2px">LEDs / Painel / Trava</div>
+            </div>
+          </button>
+
+          <!-- 2. Atolamento no ADF -->
+          <button type="button" class="op-def-btn" onclick="opDefeitoSelecionar('adf')" id="btn-def-adf">
+            <span style="font-size:22px;line-height:1">📄</span>
+            <div>
+              <div class="op-def-title" style="font-size:12px;font-weight:700;color:var(--text);transition:color .15s">Atolamento no ADF</div>
+              <div style="font-size:10px;color:var(--muted);margin-top:2px">Scanner / Roletes</div>
+            </div>
+          </button>
+
+          <!-- 3. Atolamento na impressão -->
+          <button type="button" class="op-def-btn" onclick="opDefeitoSelecionar('impressao')" id="btn-def-impressao">
+            <span style="font-size:22px;line-height:1">🖨️</span>
+            <div>
+              <div class="op-def-title" style="font-size:12px;font-weight:700;color:var(--text);transition:color .15s">Atolamento impressão</div>
+              <div style="font-size:10px;color:var(--muted);margin-top:2px">Gaveta / Fusor / Saída</div>
+            </div>
+          </button>
+
+          <!-- 4. Recopiando -->
+          <button type="button" class="op-def-btn" onclick="opDefeitoSelecionar('recopiando')" id="btn-def-recopiando">
+            <span style="font-size:22px;line-height:1">🔁</span>
+            <div>
+              <div class="op-def-title" style="font-size:12px;font-weight:700;color:var(--text);transition:color .15s">Recopiando</div>
+              <div style="font-size:10px;color:var(--muted);margin-top:2px">Ghosting / PCR / Fusor</div>
+            </div>
+          </button>
+
+          <!-- 5. Amassando Folhas -->
+          <button type="button" class="op-def-btn" onclick="opDefeitoSelecionar('amassando')" id="btn-def-amassando">
+            <span style="font-size:22px;line-height:1">〰️</span>
+            <div>
+              <div class="op-def-title" style="font-size:12px;font-weight:700;color:var(--text);transition:color .15s">Amassando Folhas</div>
+              <div style="font-size:10px;color:var(--muted);margin-top:2px">Vincos / Buchas / Unhas</div>
+            </div>
+          </button>
+
+          <!-- 6. Impressão clara -->
+          <button type="button" class="op-def-btn" onclick="opDefeitoSelecionar('clara')" id="btn-def-clara">
+            <span style="font-size:22px;line-height:1">🌫️</span>
+            <div>
+              <div class="op-def-title" style="font-size:12px;font-weight:700;color:var(--text);transition:color .15s">Impressão clara</div>
+              <div style="font-size:10px;color:var(--muted);margin-top:2px">Laser LSU / Contatos / Toner</div>
+            </div>
+          </button>
+        </div>
+
+        <!-- Área de Exibição dos Passos -->
+        <div id="op-def-conteudo" style="min-height:220px;display:flex;flex-direction:column;justify-content:center">
+          
+          <!-- Estado Inicial (quando nada foi clicado) -->
+          <div id="op-def-placeholder" style="text-align:center;padding:26px 16px;background:rgba(0,0,0,0.18);border:1px dashed rgba(255,255,255,0.1);border-radius:14px">
+            <div style="font-size:28px;margin-bottom:8px">👆</div>
+            <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:4px">Nenhum defeito selecionado</div>
+            <div style="font-size:11px;color:var(--muted);max-width:380px;margin:0 auto 14px;line-height:1.4">
+              Clique em um dos botões acima para ver os testes práticos de bancada e resolver a anomalia sem travar sua montagem.
+            </div>
+            <div style="display:inline-flex;align-items:center;gap:6px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);border-radius:20px;padding:6px 14px;font-size:11px;color:var(--accent)">
+              <span>💡 Dica:</span> 60% dos atolamentos são sanados com limpeza de roletes e ajuste das guias.
+            </div>
+          </div>
+
+          <!-- Estado Detalhado do Passo a Passo (dinâmico via JS) -->
+          <div id="op-def-detalhe" style="display:none;flex-direction:column;gap:12px">
+            <!-- Header do Defeito Ativo -->
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:12px 14px">
+              <div>
+                <div id="op-def-det-titulo" style="font-size:14px;font-weight:700;color:var(--warn);display:flex;align-items:center;gap:8px"></div>
+                <div id="op-def-det-desc" style="font-size:12.5px;color:var(--muted);margin-top:3px"></div>
+              </div>
+              <div id="op-def-det-progresso" style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--muted);white-space:nowrap;background:rgba(0,0,0,0.25);padding:4px 8px;border-radius:6px">
+                0/5 checados
+              </div>
+            </div>
+
+            <!-- Lista de Passos -->
+            <div id="op-def-lista-passos" style="display:flex;flex-direction:column;gap:8px;max-height:360px;overflow-y:auto;padding-right:4px">
+              <!-- Cards gerados dinamicamente pelo script -->
+            </div>
+
+            <!-- Rodapé de Ações do Defeito -->
+            <div style="display:flex;align-items:center;gap:10px;margin-top:6px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.07);flex-wrap:wrap">
+              <button type="button" onclick="opDefeitoFinalizarCheck(true)" style="flex:1;min-width:140px;padding:11px 14px;background:rgba(16,185,129,0.15);color:var(--accent);border:1px solid rgba(16,185,129,0.4);border-radius:10px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s">
+                ✓ Resolvido na Bancada
+              </button>
+              <button type="button" onclick="opDefeitoSolicitarPeca()" style="flex:1;min-width:140px;padding:11px 14px;background:rgba(245,158,11,0.15);color:var(--warn);border:1px solid rgba(245,158,11,0.4);border-radius:10px;font-size:12px;font-weight:700;cursor:pointer;transition:all .15s">
+                🔩 Não resolveu? Pedir Peça
+              </button>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+
     </div>
   </div>
 
@@ -5496,6 +5702,303 @@ function pedPrintLabels() {
       if (f.value) etqParsePaste(f.value);
     }
   });
+})();
+</script>
+
+
+<!-- ── GUIA DE BANCADA / DIAGNÓSTICO DE DEFEITOS (TELA OPERADOR) ── -->
+<script>
+(function() {
+  const DEFEITOS_GUIA = {
+    erro: {
+      id: 'erro',
+      titulo: 'Código de Erro',
+      icone: '🔢',
+      sub: 'LEDs piscando / Mensagem no painel',
+      descricao: 'Acesse o repositório técnico para verificar a documentação oficial do modelo e código de erro.',
+      passos: [
+        {
+          titulo: 'Acesse os manuais para ter um diagnóstico mais assertivo',
+          desc: 'Consulte a documentação técnica oficial, boletins técnicos (BTH), drivers e firmwares no link:',
+          peca: 'Manuais Técnicos',
+          link: 'https://selbetti365.sharepoint.com/:f:/r/sites/labtecnico1/Documentos%20Compartilhados/REPOSITORIO/LabTecnico/MANUAIS,%20DRIVERS,%20FIRMWARES,%20BTH?d=w1dd6795dee1648299468efd69bcd6872&csf=1&web=1&e=En4tG5',
+          linkTexto: 'MANUAIS, DRIVERS, FIRMWARES, BTH'
+        }
+      ]
+    },
+    adf: {
+      id: 'adf',
+      titulo: 'Atolamento no ADF',
+      icone: '📄',
+      sub: 'Papel preso no alimentador superior',
+      descricao: 'Verificação do alimentador automático de originais (scanner superior).',
+      passos: [
+        {
+          titulo: 'Desobstrução do Caminho do Original',
+          desc: 'Abra a tampa do ADF e inspecione com lanterna se há pedaços de papel rasgado, clipes, grampos ou restos de fita adesiva no trajeto.',
+          peca: 'Trajeto ADF'
+        },
+        {
+          titulo: 'Limpeza dos Roletes de Alimentação',
+          desc: 'Limpe o Pick-up Roller (tração) e o Separation Pad (retardo) com pano de microfibra levemente umedecido em álcool isopropílico.',
+          peca: 'Roletes ADF'
+        },
+        {
+          titulo: 'Avaliação de Desgaste da Borracha',
+          desc: 'Verifique se a borracha está lisa/vitrificada ou com sulcos gastos. Se lisa, troque os roletes.',
+          peca: 'Kit Roletes ADF'
+        },
+        {
+          titulo: 'Atuadores dos Sensores de Passagem',
+          desc: 'Pressione com o dedo a bandeirinha do sensor de entrada e saída do ADF: ela precisa retornar imediatamente sem engasgar (checar mola).',
+          peca: 'Sensores ADF'
+        },
+        {
+          titulo: 'Teste Padrão com Sulfite Seco',
+          desc: 'Teste a puxada contínua com 5 a 10 folhas sulfites 75g novas e alinhadas para confirmar a tração e fluidez.',
+          peca: 'Teste de Carga'
+        }
+      ]
+    },
+    impressao: {
+      id: 'impressao',
+      titulo: 'Atolamento na Impressão',
+      icone: '🖨️',
+      sub: 'Papel preso na gaveta, meio ou fusor',
+      descricao: 'Diagnóstico para isolar o ponto exato onde a folha para no trajeto interno da máquina.',
+      passos: [
+        {
+          titulo: 'Mapear o Ponto de Parada da Folha',
+          desc: 'Observe onde a folha parou: Gaveta/Alimentação (rolete patinando), Área de Registro/Cilindro (sincronismo), ou Fusor/Saída (fusor travado/unha).',
+          peca: 'Mapeamento'
+        },
+        {
+          titulo: 'Limpeza dos Roletes de Tração (Pick-up)',
+          desc: 'Remova a poeira de papel e toner acumulado nos roletes de tração da gaveta principal e gaveta multiuso com álcool isopropílico.',
+          peca: 'Pick-up Roller'
+        },
+        {
+          titulo: 'Ajuste das Guias Laterais da Gaveta',
+          desc: 'Certifique-se de que os batentes da bandeja estão justos nas folhas (sem apertar de mais para não empenar, nem folgados para não puxar torto).',
+          peca: 'Bandeja / Gaveta'
+        },
+        {
+          titulo: 'Atolamento por Colisão ou Sensores',
+          desc: 'Por colisão, algum obstáculo devido ao acúmulo de sujeira (verificar fisicamente obstáculos, pedaços de papel, peças e guias), ou por sensores onde a folha para no meio do processo (fazer a limpeza dos sensores). Verifique se os atuadores de papel estão funcionando corretamente (atuando e retornando).',
+          peca: 'Guias / Sensores'
+        }
+      ]
+    },
+    recopiando: {
+      id: 'recopiando',
+      titulo: 'Recopiando (Ghosting)',
+      icone: '🔁',
+      sub: 'Imagem duplicando / repetição fantasma',
+      descricao: 'Como descobrir com precisão qual peça cilíndrica está gerando a imagem fantasma.',
+      passos: [
+        {
+          titulo: 'Medir a Distância da Repetição (Régua)',
+          desc: 'Curta (3 a 4 cm) = PCR / Rolo de Carga; 5 cm = Caixa de Revelação; Média (7 a 9 cm) = Cilindro Fotocondutor (OPC); Longa (7,5 a 10 cm) = Rolo Fusor / Rolo de Pressão.',
+          peca: 'Medição Perímetro'
+        },
+        {
+          titulo: 'Stop Test (Parada Brusca no Meio)',
+          desc: 'Mande imprimir e desligue no momento da entrada no fusor: se a repetição já existir antes do fusor, é Cartucho/Cilindro; se for após, é Fusor.',
+          peca: 'Teste Isolamento'
+        },
+        {
+          titulo: 'Limpeza do Rolo de Carga (PCR) e Aterramentos',
+          desc: 'Limpe o PCR com pano macio e seco. Verifique as molas e contatos metálicos de aterramento do cartucho na lateral interna.',
+          peca: 'PCR / Aterramento'
+        },
+        {
+          titulo: 'Inspecionar Superfície do Fusor e Pressão',
+          desc: 'Veja se o rolo fusor/película está descascando ou acumulando toner queimado. Verifique se o rolo de pressão inferior está enrugado.',
+          peca: 'Película / Rolo'
+        },
+        {
+          titulo: 'Configuração de Gramatura de Papel',
+          desc: 'Se o papel for mais grosso que 75g e a máquina estiver configurada para papel comum, a fusão não aquece o suficiente e o toner recopia.',
+          peca: 'Configuração'
+        }
+      ]
+    },
+    amassando: {
+      id: 'amassando',
+      titulo: 'Amassando Folhas',
+      icone: '〰️',
+      sub: 'Papel vincado, ondulado ou sanfonado',
+      descricao: 'Solução para problemas de trajeto enviesado e desnível de pressão térmica.',
+      passos: [
+        {
+          titulo: 'Alinhamento na Entrada (Puxada Torta)',
+          desc: 'Verifique se a folha está iniciando a puxada enviesada. Ajuste as guias da bandeja para evitar entrada em ângulo.',
+          peca: 'Guias de Entrada'
+        },
+        {
+          titulo: 'Inspeção de Corpo Estranho nas Guias',
+          desc: 'Procure pedaços de etiqueta adesiva, grampos ou rebarbas de plástico nas calhas pretas de condução da folha.',
+          peca: 'Trajeto de Papel'
+        },
+        {
+          titulo: 'Unhas Separadoras do Fusor',
+          desc: 'Verifique se as unhas do fusor estão limpas, sem pontas quebradas e com as molas exercendo pressão correta sobre a película.',
+          peca: 'Unhas do Fusor'
+        },
+        {
+          titulo: 'Pressão Desigual nas Buchas do Fusor',
+          desc: 'Buchas de pressão gastas em apenas um dos lados fazem o papel amassar em formato de leque ou vincar na lateral.',
+          peca: 'Buchas Fusor'
+        },
+        {
+          titulo: 'Teste com Papel Totalmente Seco',
+          desc: 'Papel que absorveu umidade do ambiente enruga violentamente com o calor de 180°C da fusão. Teste com folhas de pacote lacrado.',
+          peca: 'Insumo Papel'
+        }
+      ]
+    },
+    clara: {
+      id: 'clara',
+      titulo: 'Impressão Clara',
+      icone: '🌫️',
+      sub: 'Fraca, apagada, listrada ou sem densidade',
+      descricao: 'Diagnóstico para transferência de toner fraca ou falha óptica na unidade laser.',
+      passos: [
+        {
+          titulo: 'Limpeza do Vidro da LSU (Laser)',
+          desc: 'Poeira de papel ou pó de toner sobre a lente de saída do canhão laser causa impressão fraca/apagada. Limpe com haste de algodão seca.',
+          peca: 'Vidro LSU / Laser'
+        },
+        {
+          titulo: 'Contatos Elétricos do Rolo Magnético e Cilindro',
+          desc: 'Inspecione e limpe as palhetas de contato elétrico com álcool isopropílico e graxa condutiva onde necessário.',
+          peca: 'Contatos Elétricos'
+        },
+        {
+          titulo: 'Teste com Toner de Bancada',
+          desc: 'Insira um cartucho/toner de bancada reconhecidamente bom para isolar se a falha é do toner/revelador ou da alta tensão da placa.',
+          peca: 'Cartucho / Toner'
+        }
+      ]
+    }
+  };
+
+  let defeitoAtual = null;
+  const passosChecados = {};
+
+  window.opDefeitoSelecionar = function(id) {
+    console.log('[Guia Defeitos] Selecionado:', id);
+    defeitoAtual = id;
+    const def = DEFEITOS_GUIA[id];
+    if (!def) {
+      console.warn('[Guia Defeitos] Defeito não encontrado:', id);
+      return;
+    }
+
+    if (!passosChecados[id]) {
+      passosChecados[id] = new Array(def.passos.length).fill(false);
+    }
+
+    // Marca botão ativo visualmente
+    document.querySelectorAll('.op-def-btn').forEach(btn => btn.classList.remove('active'));
+    const btnAtivo = document.getElementById('btn-def-' + id);
+    if (btnAtivo) btnAtivo.classList.add('active');
+
+    const btnReset = document.getElementById('op-def-btn-reset');
+    if (btnReset) btnReset.style.display = 'inline-block';
+
+    // Exibe área detalhada e esconde placeholder
+    const placeholder = document.getElementById('op-def-placeholder');
+    const detalhe = document.getElementById('op-def-detalhe');
+    if (placeholder) placeholder.style.setProperty('display', 'none', 'important');
+    if (detalhe) detalhe.style.setProperty('display', 'flex', 'important');
+
+    // Preenche cabeçalho
+    const titEl = document.getElementById('op-def-det-titulo');
+    if (titEl) {
+      titEl.innerHTML = def.icone + ' ' + def.titulo + ' <span style="font-size:11px;color:var(--muted);font-weight:400">· ' + def.sub + '</span>';
+    }
+    const descEl = document.getElementById('op-def-det-desc');
+    if (descEl) descEl.textContent = def.descricao;
+
+    renderPassos();
+  };
+
+  window.opDefeitoTogglePasso = function(index) {
+    if (!defeitoAtual || !passosChecados[defeitoAtual]) return;
+    passosChecados[defeitoAtual][index] = !passosChecados[defeitoAtual][index];
+    renderPassos();
+  };
+
+  function renderPassos() {
+    if (!defeitoAtual) return;
+    const def = DEFEITOS_GUIA[defeitoAtual];
+    const lista = document.getElementById('op-def-lista-passos');
+    const progEl = document.getElementById('op-def-det-progresso');
+    if (!lista || !def) return;
+
+    const checadosCount = passosChecados[defeitoAtual].filter(Boolean).length;
+    if (progEl) {
+      progEl.textContent = checadosCount + '/' + def.passos.length + ' checados';
+      progEl.style.color = checadosCount === def.passos.length ? 'var(--accent)' : 'var(--muted)';
+    }
+
+    lista.innerHTML = def.passos.map(function(p, idx) {
+      const isChecked = !!passosChecados[defeitoAtual][idx];
+      const linkHtml = p.link ? (
+        '<div style="margin-top:10px">' +
+          '<a href="' + p.link + '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:8px;padding:9px 14px;background:rgba(79,142,247,0.18);border:1px solid rgba(79,142,247,0.45);border-radius:10px;color:#93c5fd;font-size:12px;font-weight:700;text-decoration:none;transition:all .15s;cursor:pointer">' +
+            '<span>📂</span> ' + (p.linkTexto || 'Acessar Manuais') + ' <span style="font-size:11px">↗</span>' +
+          '</a>' +
+        '</div>'
+      ) : '';
+      return (
+        '<div class="op-step-item ' + (isChecked ? 'checked' : '') + '" onclick="opDefeitoTogglePasso(' + idx + ')">' +
+          '<div class="op-step-checkbox">' + (isChecked ? '✓' : '') + '</div>' +
+          '<div style="flex:1">' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">' +
+              '<span style="font-size:14px;font-weight:700;color:' + (isChecked ? 'var(--accent)' : 'var(--text)') + '">' +
+                'Passo ' + (idx + 1) + ': ' + p.titulo +
+              '</span>' +
+              '<span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;background:rgba(255,255,255,0.06);color:var(--muted)">' +
+                p.peca +
+              '</span>' +
+            '</div>' +
+            '<div style="font-size:13.5px;color:#cbd5e1;margin-top:4px;line-height:1.45">' +
+              p.desc +
+            '</div>' +
+            linkHtml +
+          '</div>' +
+        '</div>'
+      );
+    }).join('');
+  }
+
+  window.opDefeitoLimpar = function() {
+    defeitoAtual = null;
+    document.querySelectorAll('.op-def-btn').forEach(btn => btn.classList.remove('active'));
+    const btnReset = document.getElementById('op-def-btn-reset');
+    if (btnReset) btnReset.style.display = 'none';
+    const placeholder = document.getElementById('op-def-placeholder');
+    const detalhe = document.getElementById('op-def-detalhe');
+    if (placeholder) placeholder.style.setProperty('display', 'block', 'important');
+    if (detalhe) detalhe.style.setProperty('display', 'none', 'important');
+  };
+
+  window.opDefeitoFinalizarCheck = function(resolvido) {
+    if (resolvido) {
+      alert('🎉 Parabéns! Defeito resolvido na bancada. Prossiga com os testes e finalize o SELB quando concluído.');
+      opDefeitoLimpar();
+    }
+  };
+
+  window.opDefeitoSolicitarPeca = function() {
+    if (typeof abrirSolicitarPecaOperador === 'function') {
+      abrirSolicitarPecaOperador();
+    } else {
+      alert('Solicitação de peça não disponível.');
+    }
+  };
 })();
 </script>
 
