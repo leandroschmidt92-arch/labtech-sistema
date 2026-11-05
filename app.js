@@ -20778,8 +20778,11 @@ function _fluxolabRenderGrid() {
         : '';
       // Urgência do modelo deste SELB
       const _urgQ = _fluxolabModeloUrgenteQtd(modeloSelb);
-      const urgChip = _fluxolabUrgBadge(_urgQ, 'sm');
-      return '<div style="position:relative;display:flex;align-items:center;justify-content:space-between;gap:6px;background:' + (_urgQ ? 'rgba(239,68,68,.10)' : chipBg) + ';border:1px solid ' + (_urgQ ? 'rgba(239,68,68,.7)' : chipBd) + ';border-radius:8px;padding:6px 10px;transition:background .15s,opacity .15s;opacity:' + chipOp + '" onmouseover="this.style.background=\'var(--bg4)\'" onmouseout="this.style.background=\'' + chipBg + '\'">'
+      const _urgCor = _urgQ ? _fluxolabModeloUrgenteCor(modeloSelb) : '';
+      const urgChip = _fluxolabUrgBadge(_urgQ, 'sm', _urgCor);
+      const _urgBg = _urgCor === 'laranja' ? 'rgba(255,115,0,.15)' : 'rgba(239,68,68,.12)';
+      const _urgBd = _urgCor === 'laranja' ? 'rgba(255,115,0,.75)' : 'rgba(239,68,68,.75)';
+      return '<div style="position:relative;display:flex;align-items:center;justify-content:space-between;gap:6px;background:' + (_urgQ ? _urgBg : chipBg) + ';border:1px solid ' + (_urgQ ? _urgBd : chipBd) + ';border-radius:8px;padding:6px 10px;transition:background .15s,opacity .15s;opacity:' + chipOp + '" onmouseover="this.style.background=\'var(--bg4)\'" onmouseout="this.style.background=\'' + chipBg + '\'">'
         + (urgChip ? '<div style="position:absolute;top:4px;right:' + (adminRemoveBtn ? '36px' : '6px') + ';z-index:2;pointer-events:none">' + urgChip + '</div>' : '')
         + '<div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1">'
           + '<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:' + b.color + ';white-space:nowrap">' + selbCode + warnBadge + starBadge + '</span>'
@@ -22137,6 +22140,17 @@ function fluxolabSwitchTab(tab) {
 }
 
 
+window._fluxolabBadgeFilter = null;
+function fluxolabFiltrarPorBadge(key) {
+  if (window._fluxolabBadgeFilter === key || key === 'modelos' || key === 'todos' || !key) {
+    window._fluxolabBadgeFilter = null;
+  } else {
+    window._fluxolabBadgeFilter = key;
+  }
+  fluxolabRenderModelos();
+}
+window.fluxolabFiltrarPorBadge = fluxolabFiltrarPorBadge;
+
 function fluxolabRenderModelos() {
   window._fluxolabModelosExpanded = window._fluxolabModelosExpanded || new Set();
   const grid = document.getElementById('fluxolab-modelos-grid');
@@ -22193,6 +22207,33 @@ function fluxolabRenderModelos() {
       return `<div style="padding:14px 18px;color:var(--muted);font-size:12px">Nenhum checklist importado encontrado para este modelo.</div>`;
     }
     const k = info.keys;
+
+    let rowsToRender = info.rows;
+    let badgeNote = '';
+    if (window._fluxolabBadgeFilter === 'troca') {
+      const matchRows = info.rows.filter(r => _fluxolabIsTrocaTecnica(r, k.tipo));
+      if (matchRows.length > 0) {
+        rowsToRender = matchRows;
+        if (matchRows.length < info.rows.length) {
+          badgeNote = `<div style="padding:6px 14px;background:rgba(255,115,0,.12);border-bottom:1px solid rgba(255,115,0,.35);color:#ffedd5;font-size:11px;display:flex;align-items:center;justify-content:space-between">
+            <span>⚡ Exibindo apenas os <b>${matchRows.length}</b> pedidos de <b>Troca Técnica</b> deste modelo (total: ${info.rows.length}).</span>
+            <button type="button" onclick="event.stopPropagation();fluxolabFiltrarPorBadge(null)" style="background:none;border:none;color:#ff7700;font-weight:700;text-decoration:underline;cursor:pointer;font-size:11px">Mostrar todos os ${info.rows.length}</button>
+          </div>`;
+        }
+      }
+    } else if (window._fluxolabBadgeFilter === 'urgencias') {
+      const matchRows = info.rows.filter(_fluxolabRowUrgente);
+      if (matchRows.length > 0) {
+        rowsToRender = matchRows;
+        if (matchRows.length < info.rows.length) {
+          badgeNote = `<div style="padding:6px 14px;background:rgba(239,68,68,.12);border-bottom:1px solid rgba(239,68,68,.35);color:#fee2e2;font-size:11px;display:flex;align-items:center;justify-content:space-between">
+            <span>🚨 Exibindo apenas os <b>${matchRows.length}</b> pedidos em <b>Urgência</b> deste modelo (total: ${info.rows.length}).</span>
+            <button type="button" onclick="event.stopPropagation();fluxolabFiltrarPorBadge(null)" style="background:none;border:none;color:#ef4444;font-weight:700;text-decoration:underline;cursor:pointer;font-size:11px">Mostrar todos os ${info.rows.length}</button>
+          </div>`;
+        }
+      }
+    }
+
     const headers = [
       ['Andamento',  k.andamento],
       ['Pedido',     k.pedido],
@@ -22207,7 +22248,9 @@ function fluxolabRenderModelos() {
     const ths = headers.map(([h]) =>
       `<th style="padding:8px 12px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-bottom:1px solid var(--border2);white-space:nowrap">${h}</th>`
     ).join('');
-    const trs = info.rows.map(r => {
+    const trs = rowsToRender.map(r => {
+      const _urgRow = _fluxolabRowUrgente(r);
+      const _isTroca = _urgRow && _fluxolabIsTrocaTecnica(r, k.tipo);
       const tds = headers.map(([, key]) => {
         let val = '—';
         if (key === k.customer || key === k.telefone || key === (k.customer || k.telefone)) {
@@ -22222,12 +22265,27 @@ function fluxolabRenderModelos() {
         } else if (key && r[key] != null && String(r[key]).trim() !== '') {
           val = _escDet(r[key]);
         }
+        if (key && key === k.tipo && _urgRow) {
+          const pillBg = _isTroca ? 'rgba(255,115,0,0.30)' : 'rgba(239,68,68,0.30)';
+          const pillBd = _isTroca ? '#ff7700' : '#ef4444';
+          const pillTx = _isTroca ? '#ffffff' : '#fee2e2';
+          const icone  = _isTroca ? '⚡' : '🚨';
+          const tagPill = _isTroca
+            ? '<span style="background:#ff7700;color:#000000;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:900;letter-spacing:.04em;margin-left:4px">TROCA TÉCNICA</span>'
+            : '<span style="background:#ef4444;color:#ffffff;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:900;letter-spacing:.04em;margin-left:4px">A INSTALAR</span>';
+          val = `<span style="display:inline-flex;align-items:center;gap:5px;background:${pillBg};border:1.5px solid ${pillBd};color:${pillTx};padding:3px 9px;border-radius:6px;font-weight:800;font-size:11px;white-space:nowrap;box-shadow:0 0 8px ${_isTroca ? 'rgba(255,115,0,0.45)' : 'rgba(239,68,68,0.45)'}"><span class="fx-urg-icon">${icone}</span> ${val} ${tagPill}</span>`;
+        }
         return `<td style="padding:7px 12px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border);vertical-align:top">${val}</td>`;
       }).join('');
-      const _urgRow = _fluxolabRowUrgente(r);
-      return `<tr${_urgRow ? ' style="background:rgba(239,68,68,.10);box-shadow:inset 3px 0 0 #ef4444"' : ''}>${tds}</tr>`;
+      const _rowStyle = _urgRow
+        ? (_isTroca
+            ? ' style="background:linear-gradient(90deg, rgba(255,115,0,0.26) 0%, rgba(255,140,0,0.10) 45%, rgba(255,115,0,0.02) 100%);box-shadow:inset 6px 0 0 #ff6b00"'
+            : ' style="background:linear-gradient(90deg, rgba(239,68,68,0.24) 0%, rgba(220,38,38,0.10) 45%, rgba(239,68,68,0.02) 100%);box-shadow:inset 6px 0 0 #ef4444"')
+        : '';
+      return `<tr${_rowStyle}>${tds}</tr>`;
     }).join('');
     return `<div style="background:var(--bg1);overflow-x:auto">
+      ${badgeNote}
       <table style="width:100%;border-collapse:collapse;min-width:1040px">
 
         <thead><tr style="background:var(--bg3)">${ths}</tr></thead>
@@ -22350,8 +22408,10 @@ function fluxolabRenderModelos() {
     }
   });
 
-  // Filtrar por texto + filtro de dias úteis
-  let entradas = Object.entries(grupos)
+  // 1. Filtrar modelos com checklist e aplicar busca de texto + dropdown de dias
+  const modelosNoPlano = _fluxolabModelosEmProgramacaoOuPendencias();
+
+  let allEntradas = Object.entries(grupos)
     .filter(([modelo, d]) => {
       // Exibe apenas modelos que têm checklist importado na planilha
       if ((checklistIdx.get(_fluxolabNormModel(modelo)) || 0) === 0) return false;
@@ -22377,42 +22437,72 @@ function fluxolabRenderModelos() {
         });
       }
       return true;
-    })
-    .sort((a, b) => {
-      // ── Urgências sempre no topo (qualquer filtro/sort) ───────────────────
-      const urgA = _fluxolabModeloUrgenteQtd(a[0]) > 0 ? 1 : 0;
-      const urgB = _fluxolabModeloUrgenteQtd(b[0]) > 0 ? 1 : 0;
-      if (urgA !== urgB) return urgB - urgA;
-
-      if (sortFilter === 'mediaDias') return b[1].mediaDiasUteis - a[1].mediaDiasUteis;
-      if (sortFilter === 'maxDias')   return b[1].maxAberto   - a[1].maxAberto;
-      if (sortFilter === 'urgencia')  {
-        const clA = checklistIdx.get(_fluxolabNormModel(a[0])) || 0;
-        const clB = checklistIdx.get(_fluxolabNormModel(b[0])) || 0;
-        const fA = clA > 0 ? Math.max(0, clA - a[1].total) : 0;
-        const fB = clB > 0 ? Math.max(0, clB - b[1].total) : 0;
-        if (fA !== fB) return fB - fA;
-        return b[1].maxAberto - a[1].maxAberto;
-      }
-      if (sortFilter === 'puxar') {
-        const clA = checklistIdx.get(_fluxolabNormModel(a[0])) || 0;
-        const clB = checklistIdx.get(_fluxolabNormModel(b[0])) || 0;
-        const fA = clA > 0 ? Math.max(0, clA - a[1].total) : 0;
-        const fB = clB > 0 ? Math.max(0, clB - b[1].total) : 0;
-        return fB - fA;
-      }
-      if (sortFilter === 'acima4' || sortFilter === 'acima10' || sortFilter === 'acima20') return b[1].maxAberto - a[1].maxAberto;
-      return b[1].total - a[1].total;
     });
 
-  if (entradas.length === 0) {
-    grid.innerHTML = '<div style="text-align:center;padding:40px;color:var(--muted);font-size:13px">Nenhum modelo encontrado. Verifique o filtro ou se a planilha possui a coluna "Descrição Equipamento".</div>';
-    return;
-  }
+  // 2. Aplicar filtro do Badge clicado (se houver)
+  const badgeFilter = window._fluxolabBadgeFilter || null;
+  let entradas = allEntradas.filter(([modelo, d]) => {
+    if (!badgeFilter || badgeFilter === 'modelos') return true;
 
-  // Descobrir quais bolsões têm ao menos 1 item (para montar colunas dinâmicas)
+    const normKey = _fluxolabNormModel(modelo);
+    const clTotal = checklistIdx.get(normKey) || 0;
+
+    if (badgeFilter === 'checklists') {
+      return clTotal > 0;
+    }
+    if (badgeFilter === 'nolab') {
+      return d.total > 0;
+    }
+    if (badgeFilter === 'faltantes') {
+      const falt = Math.max(0, clTotal - d.total);
+      return falt > 0;
+    }
+    if (badgeFilter === 'foraplano') {
+      return !modelosNoPlano.has(normKey);
+    }
+    if (badgeFilter === 'troca') {
+      const det = checklistDetalhes.get(normKey);
+      const kTipoDet = det ? det.keys.tipo : null;
+      return det && det.rows.some(r => _fluxolabIsTrocaTecnica(r, kTipoDet));
+    }
+    if (badgeFilter === 'urgencias') {
+      const det = checklistDetalhes.get(normKey);
+      return _fluxolabModeloUrgenteQtd(modelo) > 0 || (det && det.rows.some(_fluxolabRowUrgente));
+    }
+    return true;
+  });
+
+  // Ordenação
+  entradas.sort((a, b) => {
+    // ── Urgências sempre no topo (qualquer filtro/sort) ───────────────────
+    const urgA = _fluxolabModeloUrgenteQtd(a[0]) > 0 ? 1 : 0;
+    const urgB = _fluxolabModeloUrgenteQtd(b[0]) > 0 ? 1 : 0;
+    if (urgA !== urgB) return urgB - urgA;
+
+    if (sortFilter === 'mediaDias') return b[1].mediaDiasUteis - a[1].mediaDiasUteis;
+    if (sortFilter === 'maxDias')   return b[1].maxAberto   - a[1].maxAberto;
+    if (sortFilter === 'urgencia')  {
+      const clA = checklistIdx.get(_fluxolabNormModel(a[0])) || 0;
+      const clB = checklistIdx.get(_fluxolabNormModel(b[0])) || 0;
+      const fA = clA > 0 ? Math.max(0, clA - a[1].total) : 0;
+      const fB = clB > 0 ? Math.max(0, clB - b[1].total) : 0;
+      if (fA !== fB) return fB - fA;
+      return b[1].maxAberto - a[1].maxAberto;
+    }
+    if (sortFilter === 'puxar') {
+      const clA = checklistIdx.get(_fluxolabNormModel(a[0])) || 0;
+      const clB = checklistIdx.get(_fluxolabNormModel(b[0])) || 0;
+      const fA = clA > 0 ? Math.max(0, clA - a[1].total) : 0;
+      const fB = clB > 0 ? Math.max(0, clB - b[1].total) : 0;
+      return fB - fA;
+    }
+    if (sortFilter === 'acima4' || sortFilter === 'acima10' || sortFilter === 'acima20') return b[1].maxAberto - a[1].maxAberto;
+    return b[1].total - a[1].total;
+  });
+
+  // Descobrir quais bolsões têm ao menos 1 item (mantém colunas consistentes baseadas em allEntradas)
   const bolsoesAtivos = FLUXOLAB_BOLSOES.filter(b =>
-    entradas.some(([, d]) => d.bolsoes[b.key] && d.bolsoes[b.key].count > 0)
+    allEntradas.some(([, d]) => d.bolsoes[b.key] && d.bolsoes[b.key].count > 0)
   );
 
   // Helper: badge "PARADO Xd"
@@ -22431,8 +22521,7 @@ function fluxolabRenderModelos() {
     `<th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);white-space:nowrap;text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3)">${b.icon} ${b.label}</th>`
   ).join('');
 
-  // Modelos já listados em Programação Entrada em Lote / Pendências Mistas / Complexas
-  const modelosNoPlano = _fluxolabModelosEmProgramacaoOuPendencias();
+  // (modelosNoPlano já definido acima)
 
   const rows = entradas.map(([modelo, dados], idx) => {
     const clTotal = checklistIdx.get(_fluxolabNormModel(modelo)) || 0;
@@ -22555,22 +22644,49 @@ function fluxolabRenderModelos() {
     const isOpen = window._fluxolabModelosExpanded.has(normKey);
 
     // Urgência: modelos com checklist "Urgência Laboratório"
-    const _urgQtd = (() => {
+    const _urgRows = (() => {
       const det = checklistDetalhes.get(normKey);
-      if (!det || !det.rows.length) return 0;
-      return det.rows.filter(_fluxolabRowUrgente).length;
+      if (!det || !det.rows.length) return [];
+      return det.rows.filter(_fluxolabRowUrgente);
     })();
-    const _urgBadge = _fluxolabUrgBadge(_urgQtd);
+    const _urgQtd = _urgRows.length;
+    const _detKeys = checklistDetalhes.get(normKey)?.keys;
+    const _kTipoDet = _detKeys ? _detKeys.tipo : null;
+    const _trocaUrgRows = _urgRows.filter(r => _fluxolabIsTrocaTecnica(r, _kTipoDet));
+    const _instalarUrgRows = _urgRows.filter(r => !_fluxolabIsTrocaTecnica(r, _kTipoDet));
 
-    // Azul: modelo/pedido fora da Programação Entrada em Lote e das Pendências Mistas/Complexas
+    let _urgBadge = '';
+    let _urgCor = '';
+    let rowBgFinal = rowBg;
+    let rowInset = '';
+
     const foraDoPlano = !modelosNoPlano.has(normKey);
     const _foraBadge = foraDoPlano ? _fluxolabBadgeForaProgramacao() : '';
-    const rowBgFinal = _urgQtd
-      ? 'rgba(239,68,68,.10)'
-      : (foraDoPlano ? 'rgba(59,130,246,.08)' : rowBg);
-    const rowInset = _urgQtd
-      ? 'box-shadow:inset 4px 0 0 #ef4444;'
-      : (foraDoPlano ? 'box-shadow:inset 4px 0 0 #3b82f6;' : '');
+
+    if (_urgQtd > 0) {
+      if (_trocaUrgRows.length > 0 && _instalarUrgRows.length === 0) {
+        // Exclusivo TROCA TÉCNICA -> Laranja Elétrico vibrante
+        _urgCor = 'laranja';
+        _urgBadge = _fluxolabUrgBadge(_trocaUrgRows.length, null, 'laranja');
+        rowBgFinal = 'linear-gradient(90deg, rgba(255,115,0,0.32) 0%, rgba(255,140,0,0.14) 40%, rgba(255,115,0,0.03) 100%)';
+        rowInset = 'box-shadow:inset 8px 0 0 #ff6b00;';
+      } else if (_instalarUrgRows.length > 0 && _trocaUrgRows.length === 0) {
+        // Exclusivo A INSTALAR -> Vermelho Carmim intenso
+        _urgCor = 'red';
+        _urgBadge = _fluxolabUrgBadge(_instalarUrgRows.length, null, 'red');
+        rowBgFinal = 'linear-gradient(90deg, rgba(239,68,68,0.30) 0%, rgba(220,38,38,0.12) 40%, rgba(239,68,68,0.03) 100%)';
+        rowInset = 'box-shadow:inset 8px 0 0 #ef4444;';
+      } else {
+        // Misto: tem Troca Técnica e A Instalar
+        _urgCor = 'misto';
+        _urgBadge = _fluxolabUrgBadge(_instalarUrgRows.length, null, 'red') + ' ' + _fluxolabUrgBadge(_trocaUrgRows.length, null, 'laranja');
+        rowBgFinal = 'linear-gradient(90deg, rgba(239,68,68,0.28) 0%, rgba(255,115,0,0.16) 40%, rgba(239,68,68,0.03) 100%)';
+        rowInset = 'box-shadow:inset 8px 0 0 #ef4444, inset 16px 0 0 #ff6b00;';
+      }
+    } else if (foraDoPlano) {
+      rowBgFinal = 'rgba(59,130,246,.08)';
+      rowInset = 'box-shadow:inset 4px 0 0 #3b82f6;';
+    }
 
     const modeloEnc = encodeURIComponent(modelo);
     const mainRow = `<tr style="background:${rowBgFinal};${rowInset}transition:background .12s;cursor:${hasDet?'pointer':'default'}"
@@ -22603,48 +22719,85 @@ function fluxolabRenderModelos() {
     return mainRow + detRow;
   }).join('');
 
-  // Contagem de modelos fora do plano (para card resumo)
-  const _sumForaPlano = entradas.reduce((s, [m]) => s + (_fluxolabNormModel(m) && !modelosNoPlano.has(_fluxolabNormModel(m)) ? 1 : 0), 0);
-
-  // ── Painel de resumo: modelos com faltantes e/ou doca disponível ──
-  const alertas = entradas
-    .map(([modelo, dados]) => {
-      const clTotal  = checklistIdx.get(_fluxolabNormModel(modelo)) || 0;
-      if (!clTotal) return null;
-      const labTot   = dados.total;
-      const docaTot  = (dados.bolsoes['DOCA_1'] && dados.bolsoes['DOCA_1'].count) || 0;
-      const falt     = Math.max(0, clTotal - labTot);
-      if (!falt && !docaTot) return null; // sem interesse
-      const du = dados.maxDiasUteis || 0;
-      return { modelo, clTotal, labTot, docaTot, falt, du };
-    })
-    .filter(Boolean);
-
-  // ── Cards de resumo global ──
+  // ── Cards de resumo global (calculados a partir de allEntradas para estabilidade) ──
   const _sumTotalCL  = Array.from(checklistIdx.values()).reduce((s, v) => s + v, 0);
-  const _sumTotalLAB = entradas.reduce((s, [, d]) => s + d.total, 0);
+  const _sumTotalLAB = allEntradas.reduce((s, [, d]) => s + d.total, 0);
   const _sumFaltantes = Math.max(0, _sumTotalCL - _sumTotalLAB);
-  const _sumModelos  = entradas.length;
+  const _sumModelos  = allEntradas.length;
+  const _sumForaPlano = allEntradas.reduce((s, [m]) => s + (_fluxolabNormModel(m) && !modelosNoPlano.has(_fluxolabNormModel(m)) ? 1 : 0), 0);
+
+  // Totais globais de Urgências e Troca Técnica
+  let _sumUrgencias = 0;
+  let _sumTrocaTec = 0;
+  if (Array.isArray(_fluxolabChecklistsImported) && _fluxolabChecklistsImported.length) {
+    const sample = _fluxolabChecklistsImported[0];
+    const kTipoGlobal = _fluxolabFindKey(sample, 'Tipo') || Object.keys(sample).find(k => k.trim().toLowerCase() === 'status');
+    for (const r of _fluxolabChecklistsImported) {
+      if (_fluxolabRowUrgente(r)) _sumUrgencias++;
+      if (_fluxolabIsTrocaTecnica(r, kTipoGlobal)) _sumTrocaTec++;
+    }
+  }
 
   // Atualiza badge na aba "📋 Checklists Importados" do dashboard
   _fluxolabAtualizarBadgeChecklists(_sumTotalCL);
 
-  function _sumCard(label, val, color, icon) {
-    return `<div style="background:var(--bg2);border:1px solid var(--border2);border-radius:12px;padding:10px 18px;display:flex;flex-direction:column;align-items:center;min-width:110px;gap:2px">
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);white-space:nowrap">${icon} ${label}</div>
+  // Helper para renderizar os cards clicáveis com estado visual ativo
+  function _sumCard(key, label, val, color, icon) {
+    const isFiltered = window._fluxolabBadgeFilter === key;
+    const borderStyle = isFiltered
+      ? `border:2px solid ${color};box-shadow:0 0 16px ${color}66, inset 0 0 10px ${color}22;background:rgba(255,255,255,.05);`
+      : `border:1px solid var(--border2);background:var(--bg2);`;
+
+    const activePill = isFiltered
+      ? `<span style="position:absolute;top:5px;right:6px;font-size:8.5px;font-weight:900;background:${color};color:#000;border-radius:10px;padding:1px 5px;letter-spacing:.03em;box-shadow:0 1px 4px rgba(0,0,0,.4)">ATIVO ✕</span>`
+      : '';
+
+    const tooltip = isFiltered
+      ? `Filtro ativo: ${label} (clique para limpar filtro)`
+      : (key === 'modelos' ? 'Exibir todos os modelos' : `Clique para filtrar apenas ${label}`);
+
+    return `<div onclick="fluxolabFiltrarPorBadge('${key}')" title="${tooltip}"
+      style="position:relative;border-radius:12px;padding:10px 18px;display:flex;flex-direction:column;align-items:center;min-width:115px;gap:2px;cursor:pointer;user-select:none;transition:all .18s;${borderStyle}"
+      onmouseover="this.style.transform='translateY(-2px)';this.style.borderColor='${color}';this.style.boxShadow='0 4px 14px rgba(0,0,0,.4)'"
+      onmouseout="this.style.transform='';this.style.borderColor='${isFiltered ? color : 'var(--border2)'}';this.style.boxShadow='${isFiltered ? `0 0 16px ${color}66` : 'none'}'">
+      ${activePill}
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:${isFiltered ? color : 'var(--muted)'};white-space:nowrap">${icon} ${label}</div>
       <div style="font-size:26px;font-weight:900;color:${color};font-family:var(--mono);line-height:1.1">${val}</div>
     </div>`;
   }
 
-  grid.innerHTML = `
-    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px;align-items:stretch">
-      ${_sumCard('Modelos',   _sumModelos,  'var(--text)',  '📦')}
-      ${_sumCard('Checklists', _sumTotalCL, '#f59e0b',      '📋')}
-      ${_sumCard('No LAB',    _sumTotalLAB, '#22d3ee',      '🔬')}
-      ${_sumCard('Faltantes', _sumFaltantes, _sumFaltantes > 0 ? '#ef4444' : '#22c55e', '⚠')}
-      ${_sumCard('Fora do plano', _sumForaPlano, _sumForaPlano > 0 ? '#60a5fa' : '#22c55e', '●')}
-    </div>
+  // Descrição do filtro ativo para banner informativo
+  const _filterMeta = {
+    'nolab':      { label: 'No LAB',        icon: '🔬', desc: 'modelos com equipamentos físicos presentes no laboratório' },
+    'faltantes':  { label: 'Faltantes',     icon: '⚠',  desc: 'modelos com checklists sem equipamento suficiente no LAB' },
+    'foraplano':  { label: 'Fora do plano', icon: '●',  desc: 'modelos que não estão na Programação Entrada em Lote nem em Pendências' },
+    'troca':      { label: 'Troca Técnica', icon: '⚡', desc: 'modelos com pedidos de Troca Técnica' },
+    'urgencias':  { label: 'Urgências',     icon: '🚨', desc: 'modelos com pedidos com prioridade de Urgência Laboratório' },
+    'checklists': { label: 'Checklists',    icon: '📋', desc: 'modelos com checklists importados da planilha' }
+  };
 
+  const _activeMeta = window._fluxolabBadgeFilter ? _filterMeta[window._fluxolabBadgeFilter] : null;
+
+  const filterBanner = _activeMeta ? `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;background:rgba(255,255,255,.04);border:1px solid var(--border2);border-radius:10px;padding:9px 16px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text)">
+        <span style="font-size:16px">${_activeMeta.icon}</span>
+        <span>Filtrando por <b>${_activeMeta.label}</b> (${_activeMeta.desc}) — <b>${entradas.length}</b> modelo(s) encontrado(s)</span>
+      </div>
+      <button onclick="fluxolabFiltrarPorBadge(null)" style="display:inline-flex;align-items:center;gap:5px;background:var(--bg3);border:1px solid var(--border2);border-radius:6px;color:var(--text);font-size:11px;font-weight:700;padding:4px 12px;cursor:pointer;transition:all .15s" onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background='var(--bg3)'">✕ Limpar filtro</button>
+    </div>` : '';
+
+  const emptyTableHtml = `
+    <div style="background:var(--bg2);border:1px dashed var(--border2);border-radius:16px;padding:40px 20px;text-align:center">
+      <div style="font-size:26px;margin-bottom:8px">🔍</div>
+      <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:6px">Nenhum modelo encontrado</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:14px">
+        ${_activeMeta ? `Nenhum modelo corresponde ao filtro de <b>${_activeMeta.label}</b>.` : 'Verifique o filtro de busca ou se há checklists importados.'}
+      </div>
+      ${_activeMeta ? `<button onclick="fluxolabFiltrarPorBadge(null)" style="background:var(--accent);color:#000;border:none;border-radius:8px;font-size:12px;font-weight:800;padding:6px 16px;cursor:pointer">Limpar filtro de badge</button>` : ''}
+    </div>`;
+
+  const tableHtml = `
     <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:16px;overflow:hidden">
       <div id="fluxolab-modelos-scroll" style="overflow-x:auto;max-height:calc(100vh - 320px);overflow-y:auto">
       <table style="width:100%;border-collapse:collapse">
@@ -22663,6 +22816,19 @@ function fluxolabRenderModelos() {
       </table>
       </div>
     </div>`;
+
+  grid.innerHTML = `
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:14px;align-items:stretch">
+      ${_sumCard('modelos',    'Modelos',        _sumModelos,   'var(--text)',  '📦')}
+      ${_sumCard('checklists', 'Checklists',     _sumTotalCL,   '#f59e0b',      '📋')}
+      ${_sumCard('nolab',      'No LAB',         _sumTotalLAB,  '#22d3ee',      '🔬')}
+      ${_sumCard('faltantes',  'Faltantes',      _sumFaltantes, _sumFaltantes > 0 ? '#ef4444' : '#22c55e', '⚠')}
+      ${_sumCard('foraplano',  'Fora do plano',  _sumForaPlano, _sumForaPlano > 0 ? '#60a5fa' : '#22c55e', '●')}
+      ${_sumCard('troca',      'Troca Técnica',  _sumTrocaTec,  '#ff7700',      '⚡')}
+      ${_sumCard('urgencias',  'Urgências',      _sumUrgencias, _sumUrgencias > 0 ? '#ef4444' : '#22c55e', '🚨')}
+    </div>
+    ${filterBanner}
+    ${entradas.length === 0 ? emptyTableHtml : tableHtml}`;
 
   if (savedScrollTop > 0) {
     const newScrollContainer = document.getElementById('fluxolab-modelos-scroll');
@@ -23040,7 +23206,13 @@ function fluxolabRenderChecklistsImported(){
         ? `<td style="padding:4px 8px;border-bottom:1px solid var(--border)"><button onclick="(function(btn,ped){if(!confirm('Remover pedido '+ped+' da lista do FluxoLAB?'))return;btn.disabled=true;btn.textContent='...';if(typeof fluxolabRemoverPedidoDaLista==='function')fluxolabRemoverPedidoDaLista(ped).then(function(){}).catch(function(e){btn.disabled=false;btn.textContent='🗑️';});})(this,'${pedNum.replace(/'/g,"\\\'")}')" style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:6px;color:#ef4444;font-size:11px;font-weight:700;padding:3px 8px;cursor:pointer;white-space:nowrap">🗑️ Remover</button></td>`
         : `<td style="padding:4px 8px;border-bottom:1px solid var(--border)"></td>`;
       const _urgRow = _fluxolabRowUrgente(r);
-      return `<tr${_urgRow ? ' style="background:rgba(239,68,68,.10);box-shadow:inset 3px 0 0 #ef4444"' : ''}>${detailKeys.map(k =>
+      const _isTroca = _urgRow && _fluxolabIsTrocaTecnica(r, kStatus);
+      const _rowStyle = _urgRow
+        ? (_isTroca
+            ? ' style="background:rgba(245,158,11,.20);box-shadow:inset 5px 0 0 #f59e0b"'
+            : ' style="background:rgba(239,68,68,.18);box-shadow:inset 5px 0 0 #ef4444"')
+        : '';
+      return `<tr${_rowStyle}>${detailKeys.map(k =>
         `<td style="padding:7px 12px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border)">${esc(k?r[k]:'—')}</td>`
       ).join('')}${btnRemover}</tr>`;
     }).join('');
@@ -23217,7 +23389,13 @@ function fluxolabRenderCaindoHoje() {
         return `<td style="padding:7px 12px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border);vertical-align:top">${val}</td>`;
       }).join('');
       const _urgRow = _fluxolabRowUrgente(r);
-      return `<tr${_urgRow ? ' style="background:rgba(239,68,68,.10);box-shadow:inset 3px 0 0 #ef4444"' : ''}>${tds}</tr>`;
+      const _isTroca = _urgRow && _fluxolabIsTrocaTecnica(r, k.tipo);
+      const _rowStyle = _urgRow
+        ? (_isTroca
+            ? ' style="background:rgba(245,158,11,.20);box-shadow:inset 5px 0 0 #f59e0b"'
+            : ' style="background:rgba(239,68,68,.18);box-shadow:inset 5px 0 0 #ef4444"')
+        : '';
+      return `<tr${_rowStyle}>${tds}</tr>`;
     }).join('');
     return `<div style="background:var(--bg1);overflow-x:auto">
       <table style="width:100%;border-collapse:collapse;min-width:1040px">
@@ -23371,7 +23549,7 @@ function fluxolabRenderLiberadosHoje() {
         }).join('');
       return `<div style="border-bottom:1px solid var(--border2)">
         <div style="padding:12px 16px;background:var(--bg3);display:flex;align-items:center;justify-content:space-between">
-          <span style="font-size:13px;font-weight:700;color:var(--text);display:inline-flex;align-items:center;gap:8px"><span>${esc(modelo)}</span>${_fluxolabUrgBadge(_fluxolabModeloUrgenteQtd(modelo))}</span>
+          <span style="font-size:13px;font-weight:700;color:var(--text);display:inline-flex;align-items:center;gap:8px"><span>${esc(modelo)}</span>${(function(){var q=_fluxolabModeloUrgenteQtd(modelo);return q?_fluxolabUrgBadge(q,null,_fluxolabModeloUrgenteCor(modelo)):'';})()}</span>
           <span style="font-size:12px;font-weight:800;color:#4ade80;background:rgba(74,222,128,.12);border:1px solid rgba(74,222,128,.4);border-radius:10px;padding:2px 10px">${items.length}</span>
         </div>
         <table style="width:100%;border-collapse:collapse">
@@ -23548,6 +23726,37 @@ function _fluxolabRowUrgente(r){
   }
   return false;
 }
+
+function _fluxolabRowTipo(r, kTipo) {
+  if (!r || typeof r !== 'object') return '';
+  if (kTipo && r[kTipo] != null && String(r[kTipo]).trim() !== '') {
+    return String(r[kTipo]).trim();
+  }
+  for (const k of Object.keys(r)) {
+    const kn = k.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (kn === 'tipo' || kn.includes('tipo')) {
+      const v = String(r[k] || '').trim();
+      if (v) return v;
+    }
+  }
+  for (const k of Object.keys(r)) {
+    const s = String(r[k] || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (s.includes('TROCA TECNICA') || s.includes('A INSTALAR')) {
+      return String(r[k]).trim();
+    }
+  }
+  return '';
+}
+
+function _fluxolabIsTrocaTecnica(r, kTipo) {
+  const t = _fluxolabRowTipo(r, kTipo).toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  if (t.includes('TROCA')) return true;
+  for (const k of Object.keys(r)) {
+    const val = String(r[k] || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (val.includes('TROCA TECNICA')) return true;
+  }
+  return false;
+}
 // modelo normalizado -> qtd de checklists em urgência
 function _fluxolabBuildUrgenciaIndex(){
   const idx = new Map();
@@ -23577,22 +23786,56 @@ function _fluxolabModeloUrgenteQtd(modeloTexto){
   return 0;
 }
 // Badge padrão de urgência (usado em todas as abas)
-function _fluxolabUrgBadge(qtd, size){
+function _fluxolabUrgBadge(qtd, size, corTipo){
   if (!qtd) return '';
   const sm = size === 'sm';
-  return '<span class="fx-urg" title="' + qtd + ' checklist(s) em Urgência Laboratório"'
-    + ' style="flex-shrink:0;display:inline-flex;align-items:center;gap:3px;'
-    + 'background:rgba(239,68,68,.22);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);'
-    + 'border:1px solid rgba(239,68,68,.5);color:#ff6b6b;border-radius:5px;'
-    + (sm ? 'padding:1px 5px;font-size:8px;' : 'padding:2px 7px;font-size:10px;')
-    + 'font-weight:800;letter-spacing:.05em;white-space:nowrap;text-shadow:0 1px 3px rgba(0,0,0,.6)">🚨 URG' + (qtd > 1 ? ' ' + qtd : '') + '</span>';
+  const isLaranja = corTipo === 'laranja' || corTipo === 'orange' || corTipo === 'troca';
+  const icon = isLaranja ? '⚡' : '🚨';
+  const tagText = isLaranja ? 'TROCA TÉCNICA' : 'A INSTALAR';
+  const bg = isLaranja ? 'rgba(255,115,0,.30)' : 'rgba(239,68,68,.30)';
+  const border = isLaranja ? '1.5px solid #ff7700' : '1.5px solid #ef4444';
+  const color = isLaranja ? '#fff7ed' : '#fee2e2';
+  const tagBg = isLaranja ? '#ff7700' : '#ef4444';
+  const tagColor = isLaranja ? '#000000' : '#ffffff';
+  const shadow = isLaranja ? 'box-shadow:0 0 10px rgba(255,115,0,.45);' : 'box-shadow:0 0 10px rgba(239,68,68,.45);';
+  const tagPill = sm ? '' : ' <span style="background:' + tagBg + ';color:' + tagColor + ';padding:1.5px 6px;border-radius:4px;font-size:9.5px;font-weight:900;letter-spacing:.04em;margin-left:4px">' + tagText + '</span>';
+
+  const iconAnimated = '<span class="fx-urg-icon" style="display:inline-block">' + icon + '</span>';
+  return '<span class="fx-urg" title="' + qtd + ' checklist(s) em Urgência Laboratório (' + (isLaranja ? 'Troca Técnica' : 'A Instalar') + ')"'
+    + ' style="flex-shrink:0;display:inline-flex;align-items:center;gap:4px;'
+    + 'background:' + bg + ';' + shadow
+    + 'border:' + border + ';color:' + color + ';border-radius:6px;'
+    + (sm ? 'padding:2px 6px;font-size:8.5px;' : 'padding:3px 9px;font-size:11px;')
+    + 'font-weight:900;letter-spacing:.04em;white-space:nowrap;text-shadow:0 1px 3px rgba(0,0,0,.7)">'
+    + iconAnimated + ' URG' + (qtd > 1 ? ' ' + qtd : '') + tagPill + '</span>';
+}
+
+function _fluxolabModeloUrgenteCor(modeloTexto){
+  if (!modeloTexto || !Array.isArray(_fluxolabChecklistsImported) || !_fluxolabChecklistsImported.length) return 'red';
+  const sample = _fluxolabChecklistsImported[0];
+  const kMod = _fluxolabFindKey(sample, 'Descrição Equipamento') || _fluxolabFindKey(sample, 'Descricao Equipamento');
+  const kTipo = _fluxolabFindKey(sample, 'Tipo') || Object.keys(sample).find(x => x.trim().toLowerCase() === 'status');
+  const nk = _fluxolabNormModel(modeloTexto);
+  const rows = _fluxolabChecklistsImported.filter(r => _fluxolabRowUrgente(r) && _fluxolabNormModel(r[kMod]) === nk);
+  if (!rows.length) {
+    const tokens = nk.split(/\s+/).filter(t => t.length >= 4);
+    if (!tokens.length) return 'red';
+    const matchRow = _fluxolabChecklistsImported.find(r => _fluxolabRowUrgente(r) && tokens.every(t => _fluxolabNormModel(r[kMod]).includes(t)));
+    if (matchRow) return _fluxolabIsTrocaTecnica(matchRow, kTipo) ? 'laranja' : 'red';
+    return 'red';
+  }
+  const hasInstalar = rows.some(r => !_fluxolabIsTrocaTecnica(r, kTipo));
+  return hasInstalar ? 'red' : 'laranja';
 }
 try {
-  if (typeof document !== 'undefined' && !document.getElementById('fluxolab-urg-style')) {
-    const _fxUrgSt = document.createElement('style');
-    _fxUrgSt.id = 'fluxolab-urg-style';
-    _fxUrgSt.textContent = '@keyframes fxUrgPulse{0%,100%{opacity:1}50%{opacity:.5}}.fx-urg{animation:fxUrgPulse 1.5s ease-in-out infinite}';
-    (document.head || document.documentElement).appendChild(_fxUrgSt);
+  if (typeof document !== 'undefined') {
+    let _fxUrgSt = document.getElementById('fluxolab-urg-style');
+    if (!_fxUrgSt) {
+      _fxUrgSt = document.createElement('style');
+      _fxUrgSt.id = 'fluxolab-urg-style';
+      (document.head || document.documentElement).appendChild(_fxUrgSt);
+    }
+    _fxUrgSt.textContent = '@keyframes fxGiroflex{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.25;transform:scale(1.22)}}.fx-urg-icon{display:inline-block;animation:fxGiroflex 1.2s ease-in-out infinite;transform-origin:center;will-change:transform,opacity}';
   }
 } catch(_e) {}
 
