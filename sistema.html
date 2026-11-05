@@ -172,6 +172,372 @@ body.ro-visu-fluxolab #fluxolab-tab-pendencias-panel button {
   color: #fff;
 }
 </style>
+<style>
+/* ─── GUIA DE PLACAS & COMPONENTES (TELA OPERADOR) ─── */
+.op-comp-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 12px 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: all .18s ease;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  user-select: none;
+}
+.op-comp-card:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(79, 142, 247, 0.45);
+  transform: translateY(-1px);
+}
+.op-comp-card.active {
+  background: rgba(79, 142, 247, 0.16) !important;
+  border-color: #60a5fa !important;
+  box-shadow: 0 0 14px rgba(79, 142, 247, 0.3) !important;
+}
+.op-comp-card.active .op-comp-title {
+  color: #93c5fd !important;
+}
+.op-comp-section {
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 8px;
+}
+
+  
+  
+  /* ── Painel de Processos (Limpeza / Montagem) ── */
+  #op-proc-panel {
+    width: 100%;
+    box-sizing: border-box;
+    background: var(--bg2);
+    border: 1px solid rgba(79,142,247,0.28);
+    border-radius: 20px;
+    padding: 24px;
+    margin-top: 0;
+    box-shadow: 0 12px 35px rgba(0,0,0,0.45);
+    transition: border-color .25s ease;
+  }
+  @media (max-width: 1200px) {
+    #op-bancada-layout {
+      grid-template-columns: 1fr !important;
+    }
+  }
+  .op-proc-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    gap: 8px;
+  }
+  .op-proc-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .op-proc-toggle {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    color: #94a3b8;
+    font-size: 13px;
+    cursor: pointer;
+    padding: 3px 8px;
+    border-radius: 6px;
+    transition: all .15s;
+    line-height: 1;
+  }
+  .op-proc-toggle:hover { background: rgba(255,255,255,0.09); color: #fff; }
+  .op-proc-tabs {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+  .op-proc-tab {
+    flex: 1;
+    padding: 8px 10px;
+    border-radius: 9px;
+    font-size: 11.5px;
+    font-weight: 700;
+    cursor: pointer;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.04);
+    color: #64748b;
+    transition: all .15s;
+    text-align: center;
+  }
+  .op-proc-tab:hover { background: rgba(255,255,255,0.07); color: #94a3b8; }
+  .op-proc-tab.active-limp {
+    background: rgba(16,185,129,0.15);
+    border-color: rgba(16,185,129,0.45);
+    color: #34d399;
+  }
+  .op-proc-tab.active-mont {
+    background: rgba(79,142,247,0.15);
+    border-color: rgba(79,142,247,0.45);
+    color: #93c5fd;
+  }
+  .op-proc-lista {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    max-height: 520px;
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+  .op-proc-lista::-webkit-scrollbar { width: 5px; }
+  .op-proc-lista::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.02); border-radius: 4px; }
+  .op-proc-lista::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 4px; }
+  .op-proc-lista::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.25); }
+  .op-proc-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+    text-align: left;
+    user-select: none;
+  }
+  .op-proc-item:hover { background: rgba(255,255,255,0.06); border-color: rgba(255,255,255,0.1); }
+  .op-proc-item.done-limp {
+    background: rgba(16,185,129,0.08);
+    border-color: rgba(16,185,129,0.3);
+  }
+  .op-proc-item.done-mont {
+    background: rgba(79,142,247,0.08);
+    border-color: rgba(79,142,247,0.3);
+  }
+  .op-proc-num {
+    min-width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.08);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: #94a3b8;
+    flex-shrink: 0;
+    margin-top: 1px;
+    transition: all .15s;
+  }
+  .op-proc-item.done-limp .op-proc-num { background: rgba(16,185,129,0.25); color: #34d399; }
+  .op-proc-item.done-mont .op-proc-num { background: rgba(79,142,247,0.25); color: #93c5fd; }
+  .op-proc-step-text { font-size: 12.5px; color: #cbd5e1; line-height: 1.45; }
+  .op-proc-item.done-limp .op-proc-step-text,
+  .op-proc-item.done-mont .op-proc-step-text { color: #64748b; text-decoration: line-through; }
+  .op-proc-obs {
+    font-size: 11.5px;
+    color: #fbbf24;
+    background: rgba(234,179,8,0.08);
+    border: 1px solid rgba(234,179,8,0.25);
+    border-radius: 8px;
+    padding: 7px 10px;
+    margin-top: 5px;
+    line-height: 1.45;
+  }
+  .op-proc-warn {
+    font-size: 11.5px;
+    color: #f87171;
+    background: rgba(239,68,68,0.08);
+    border: 1px solid rgba(239,68,68,0.25);
+    border-radius: 8px;
+    padding: 7px 10px;
+    margin-top: 5px;
+    line-height: 1.45;
+    font-weight: 600;
+  }
+  .op-proc-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 12px;
+    gap: 8px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+  }
+  .op-proc-progresso {
+    font-size: 11.5px;
+    color: #64748b;
+    font-weight: 600;
+  }
+  .op-proc-reset {
+    padding: 5px 12px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 7px;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all .12s;
+  }
+  .op-proc-reset:hover { background: rgba(255,255,255,0.09); color: #94a3b8; }
+
+  /* ── Modal de Dica ao Resolver ── */
+  #op-dica-modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.65);
+    z-index: 9999;
+    align-items: center;
+    justify-content: center;
+  }
+  #op-dica-modal-overlay.active { display: flex; }
+  #op-dica-modal {
+    background: #1e2535;
+    border: 1px solid rgba(16,185,129,0.4);
+    border-radius: 16px;
+    padding: 28px 28px 24px;
+    width: 100%;
+    max-width: 460px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    animation: opDicaIn .18s ease;
+  }
+  @keyframes opDicaIn { from{transform:scale(.93);opacity:0} to{transform:scale(1);opacity:1} }
+  #op-dica-modal h3 {
+    margin: 0 0 6px;
+    font-size: 15px;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  #op-dica-modal p {
+    margin: 0 0 14px;
+    font-size: 12.5px;
+    color: #94a3b8;
+  }
+  #op-dica-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    color: #e2e8f0;
+    font-size: 13px;
+    padding: 12px 14px;
+    resize: vertical;
+    min-height: 90px;
+    outline: none;
+    font-family: inherit;
+    transition: border-color .15s;
+  }
+  #op-dica-textarea:focus { border-color: rgba(16,185,129,0.5); }
+  #op-dica-textarea::placeholder { color: #475569; }
+  .op-dica-modal-btns {
+    display: flex;
+    gap: 10px;
+    margin-top: 16px;
+  }
+  #op-dica-btn-salvar {
+    flex: 1;
+    padding: 11px;
+    background: rgba(16,185,129,0.2);
+    color: var(--accent);
+    border: 1px solid rgba(16,185,129,0.4);
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  #op-dica-btn-salvar:hover { background: rgba(16,185,129,0.3); }
+  #op-dica-btn-pular {
+    padding: 11px 18px;
+    background: rgba(255,255,255,0.05);
+    color: #64748b;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 10px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  #op-dica-btn-pular:hover { background: rgba(255,255,255,0.09); }
+
+  /* ── Card de Dica exibido nos passos ── */
+  .op-dica-card {
+    background: rgba(234,179,8,0.08);
+    border: 1px solid rgba(234,179,8,0.3);
+    border-radius: 12px;
+    padding: 12px 15px;
+    margin-bottom: 10px;
+  }
+  .op-dica-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+  }
+  .op-dica-card-title {
+    font-size: 11.5px;
+    font-weight: 700;
+    color: #fbbf24;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .op-dica-card-meta {
+    font-size: 10px;
+    color: #64748b;
+    white-space: nowrap;
+  }
+  .op-dica-card-texto {
+    font-size: 13px;
+    color: #cbd5e1;
+    line-height: 1.5;
+  }
+  .op-dica-card-nav {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .op-dica-nav-btn {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 6px;
+    color: #94a3b8;
+    font-size: 11px;
+    padding: 3px 9px;
+    cursor: pointer;
+    transition: background .12s;
+  }
+  .op-dica-nav-btn:hover { background: rgba(255,255,255,0.12); }
+  .op-dica-contador {
+    font-size: 11px;
+    color: #64748b;
+    flex: 1;
+    text-align: center;
+  }
+
+  .op-comp-sec-title {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+</style>
 </head>
 <body>
 
@@ -843,18 +1209,23 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
   <!-- ── OPERADOR (tela dedicada para operador logado por PIN) ── -->
     <div class="view" id="view-operador" style="flex-direction:column;align-items:center;justify-content:flex-start;min-height:calc(100vh - 90px);padding:20px 16px;width:100%">
     <!-- Header do operador -->
-    <div id="op-header" style="width:100%;max-width:1160px;margin-bottom:18px;text-align:center">
+    <div id="op-header" style="width:100%;max-width:1820px;margin-bottom:18px;text-align:center">
       <div id="op-name-big" style="font-size:22px;font-weight:700;color:var(--text);margin-bottom:4px"></div>
       <div id="op-sector-tag" style="font-size:12px;font-weight:600;letter-spacing:.06em;color:var(--muted)"></div>
     </div>
 
     <!-- Container em duas colunas aproveitando o espaço da bancada sem interferir no SELB -->
-    <div style="display:flex;flex-direction:row;align-items:flex-start;justify-content:center;gap:24px;width:100%;max-width:1160px;flex-wrap:wrap">
+    <div id="op-bancada-layout" style="display:grid;grid-template-columns:minmax(320px, 1fr) minmax(360px, 440px) minmax(320px, 1fr);gap:20px;align-items:start;width:100%;max-width:1820px">
       
-      <!-- COLUNA 1: SELB EM ANDAMENTO & MEUS SELBS (ORIGINAL TOTALMENTE PRESERVADO) -->
-      <div style="flex:1;min-width:320px;max-width:460px;display:flex;flex-direction:column;align-items:stretch">
-        <!-- Card central de status -->
-        <div id="op-card" style="width:100%;background:var(--bg2);border:1px solid var(--border2);border-radius:20px;padding:28px 24px;text-align:center">
+      <!-- COLUNA 1 (ESQUERDA): PROCESSO OPERACIONAL (LIMPEZA / MONTAGEM) -->
+      <div id="op-col-processo" style="display:flex;flex-direction:column;align-items:stretch;min-width:0">
+        <!-- Painel de Processo Operacional (renderizado dinamicamente por opProcRender) -->
+        <div id="op-proc-panel"></div>
+      </div>
+
+      <!-- COLUNA 2 (CENTRO): SELB EM ANDAMENTO & MEUS SELBS -->
+      <div id="op-col-selb" style="display:flex;flex-direction:column;align-items:stretch;min-width:0">
+        <div id="op-card" style="width:100%;box-sizing:border-box;background:var(--bg2);border:1px solid var(--border2);border-radius:20px;padding:28px 24px;text-align:center;box-shadow:0 12px 35px rgba(0,0,0,0.45)">
 
       <!-- Estado: idle -->
       <div id="op-idle" style="display:none">
@@ -951,7 +1322,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       </div>
     </div>
 
-    <!-- Cadastrar novo SELB (sempre visível) -->
+        <!-- Cadastrar novo SELB (sempre visível) -->
 
         <!-- Cadastrar novo SELB (sempre visível) -->
         <div style="width:100%;margin-top:16px">
@@ -972,7 +1343,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       </div>
 
       <!-- COLUNA 2: NOVO BADGE GRANDE - GUIA DE DIAGNÓSTICO & DEFEITOS -->
-      <div id="op-defeitos-panel" style="flex:1.25;min-width:340px;max-width:620px;background:var(--bg2);border:1px solid rgba(245,158,11,0.28);border-radius:20px;padding:24px;display:flex;flex-direction:column;box-shadow:0 12px 35px rgba(0,0,0,0.45);position:relative">
+      <div id="op-defeitos-panel" style="background:var(--bg2);border:1px solid rgba(245,158,11,0.28);border-radius:20px;padding:24px;display:flex;flex-direction:column;box-shadow:0 12px 35px rgba(0,0,0,0.45);position:relative;min-width:0">
         
         <!-- Header do Badge -->
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;border-bottom:1px solid rgba(255,255,255,0.07);padding-bottom:12px">
@@ -985,13 +1356,26 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
                 Equipamento apresentou defeito?
                 <span style="font-size:10px;padding:2px 8px;border-radius:6px;background:rgba(245,158,11,0.15);color:var(--warn);border:1px solid rgba(245,158,11,0.3);font-weight:700;letter-spacing:.04em">GUIA DE BANCADA</span>
               </div>
-              <div style="font-size:11px;color:var(--muted);margin-top:2px">Selecione o sintoma para carregar o passo a passo de testes rápidos:</div>
+              <div id="op-badge-sub" style="font-size:11px;color:var(--muted);margin-top:2px">Selecione o sintoma para carregar o passo a passo de testes rápidos:</div>
             </div>
           </div>
           <button id="op-def-btn-reset" onclick="opDefeitoLimpar()" style="display:none;background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:8px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;transition:all .15s">
             ✕ Fechar
           </button>
         </div>
+
+        <!-- Seletor de Abas: Defeitos vs Guia de Placas -->
+        <div style="display:flex;gap:6px;margin-bottom:14px;background:rgba(0,0,0,0.3);padding:4px;border-radius:12px;border:1px solid rgba(255,255,255,0.06)">
+          <button type="button" id="tab-btn-defeitos" onclick="opAlternarAbaGuia('defeitos')" style="flex:1;padding:8px 12px;border-radius:9px;border:none;background:rgba(245,158,11,0.18);color:#f59e0b;font-weight:700;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;transition:all .15s">
+            <span>🛠️</span> Defeitos & Resolução
+          </button>
+          <button type="button" id="tab-btn-componentes" onclick="opAlternarAbaGuia('componentes')" style="flex:1;padding:8px 12px;border-radius:9px;border:none;background:transparent;color:var(--muted);font-weight:700;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;transition:all .15s">
+            <span>🔌</span> O que cada Placa faz?
+          </button>
+        </div>
+
+        <!-- ABA 1: DEFEITOS & RESOLUÇÃO -->
+        <div id="op-aba-defeitos" style="display:flex;flex-direction:column">
 
         <!-- Grade com as 6 opções de defeito solicitadas -->
         <div id="op-def-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));gap:10px;margin-bottom:16px">
@@ -1079,7 +1463,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
             </div>
 
             <!-- Lista de Passos -->
-            <div id="op-def-lista-passos" style="display:flex;flex-direction:column;gap:8px;max-height:360px;overflow-y:auto;padding-right:4px">
+            <div id="op-def-lista-passos" style="display:flex;flex-direction:column;gap:8px;max-height:480px;overflow-y:auto;padding-right:4px">
               <!-- Cards gerados dinamicamente pelo script -->
             </div>
 
@@ -1095,6 +1479,76 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           </div>
 
         </div>
+        </div> <!-- Fim de op-aba-defeitos -->
+
+        <!-- ABA 2: GUIA DE PLACAS & COMPONENTES -->
+        <div id="op-aba-componentes" style="display:none;flex-direction:column;gap:12px">
+          
+          <!-- Lista / Grade de Componentes -->
+          <div id="op-comp-lista-wrap" style="display:flex;flex-direction:column;gap:10px">
+            <div>
+              <input type="text" id="op-comp-search" placeholder="🔍 Buscar placa (ex: BICU, Controladora, Fonte, Laser...)" oninput="opFiltrarComponentes(this.value)" style="width:100%;padding:10px 14px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:var(--text);font-family:var(--font);font-size:12px;outline:none">
+            </div>
+
+            <div id="op-comp-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:10px;max-height:500px;overflow-y:auto;padding-right:4px">
+              <!-- Cards gerados dinamicamente via JS -->
+            </div>
+          </div>
+
+          <!-- Detalhe do Componente Selecionado -->
+          <div id="op-comp-detalhe-wrap" style="display:none;flex-direction:column;gap:10px">
+            <!-- Header do Componente -->
+            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;background:rgba(79,142,247,0.10);border:1px solid rgba(79,142,247,0.25);border-radius:12px;padding:12px 14px">
+              <div style="display:flex;align-items:center;gap:10px">
+                <span id="op-comp-det-icone" style="font-size:26px"></span>
+                <div>
+                  <div id="op-comp-det-nome" style="font-size:14px;font-weight:700;color:#93c5fd"></div>
+                  <div id="op-comp-det-sub" style="font-size:11px;color:var(--muted);margin-top:2px"></div>
+                </div>
+              </div>
+              <button type="button" onclick="opComponenteVoltar()" style="background:rgba(255,255,255,0.06);border:1px solid var(--border);color:var(--text);border-radius:8px;padding:5px 12px;font-size:11px;font-weight:700;cursor:pointer;transition:all .15s">
+                ← Voltar
+              </button>
+            </div>
+
+            <div id="op-comp-det-apelidos" style="font-size:11px;color:var(--muted);font-style:italic;padding:0 4px"></div>
+
+            <!-- Corpo de Informações com Scroll -->
+            <div style="max-height:480px;overflow-y:auto;padding-right:4px;display:flex;flex-direction:column;gap:10px">
+              <!-- Seção 1: O que ela faz -->
+              <div class="op-comp-section">
+                <div class="op-comp-sec-title" style="color:var(--accent)">
+                  <span>📌</span> Função Principal (O que ela faz)
+                </div>
+                <div id="op-comp-det-funcao" style="font-size:13px;line-height:1.5;color:#e2e8f0"></div>
+              </div>
+
+              <!-- Seção 2: Sintomas de Defeito -->
+              <div class="op-comp-section">
+                <div class="op-comp-sec-title" style="color:var(--warn)">
+                  <span>⚠️</span> Sintomas de Defeito / Falhas Típicas
+                </div>
+                <ul id="op-comp-det-sintomas" style="margin:0;padding-left:18px"></ul>
+              </div>
+
+              <!-- Seção 3: Dica de Bancada / Como Testar -->
+              <div class="op-comp-section">
+                <div class="op-comp-sec-title" style="color:#60a5fa">
+                  <span>🛠️</span> O que testar na bancada
+                </div>
+                <div id="op-comp-det-testes" style="font-size:12.5px;line-height:1.5;color:#cbd5e1"></div>
+              </div>
+            </div>
+
+            <!-- Botão de rodapé -->
+            <div style="margin-top:4px">
+              <button type="button" onclick="opComponenteVoltar()" style="width:100%;padding:10px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:var(--text);font-size:12px;font-weight:700;cursor:pointer;transition:all .15s">
+                ← Ver Todas as Placas e Componentes
+              </button>
+            </div>
+          </div>
+
+        </div> <!-- Fim de op-aba-componentes -->
 
       </div>
 
@@ -5707,7 +6161,22 @@ function pedPrintLabels() {
 
 
 <!-- ── GUIA DE BANCADA / DIAGNÓSTICO DE DEFEITOS (TELA OPERADOR) ── -->
-<script>
+
+        <!-- Modal de Dica ao Resolver Defeito -->
+        <div id="op-dica-modal-overlay" onclick="if(event.target===this)opDicaFecharModal()">
+          <div id="op-dica-modal">
+            <h3>✅ Defeito resolvido!</h3>
+            <p>Deixe uma dica para ajudar a equipe na próxima ocorrência deste defeito neste modelo (opcional):</p>
+            <div id="op-dica-modal-modelo" style="display:none;font-size:11.5px;background:rgba(234,179,8,0.1);border:1px solid rgba(234,179,8,0.25);border-radius:8px;padding:7px 12px;margin-bottom:12px;color:#fbbf24;"></div>
+            <textarea id="op-dica-textarea" placeholder="Ex: O rolete de alimentação estava desgastado. Trocar pelo kit ADF resolve em 90% dos casos." maxlength="400"></textarea>
+            <div class="op-dica-modal-btns">
+              <button id="op-dica-btn-salvar" onclick="opDicaSalvar()">💾 Salvar Dica</button>
+              <button id="op-dica-btn-pular" onclick="opDicaPular()">Pular</button>
+            </div>
+          </div>
+        </div>
+
+        <script>
 (function() {
   const DEFEITOS_GUIA = {
     erro: {
@@ -5943,7 +6412,24 @@ function pedPrintLabels() {
       progEl.style.color = checadosCount === def.passos.length ? 'var(--accent)' : 'var(--muted)';
     }
 
-    lista.innerHTML = def.passos.map(function(p, idx) {
+    // ── Dicas da Equipe ──
+    let dicasHtml = '';
+    const dicaKey = opDicaKey(defeitoAtual);
+    let dicasArr = [];
+    try { dicasArr = JSON.parse(localStorage.getItem(dicaKey) || '[]'); } catch(e){}
+    if (dicasArr.length > 0) {
+      if (!dicaIndiceAtual[defeitoAtual]) dicaIndiceAtual[defeitoAtual] = 0;
+      const idx0 = dicaIndiceAtual[defeitoAtual] % dicasArr.length;
+      const d = dicasArr[idx0];
+      const navHtml = dicasArr.length > 1
+        ? '<div class="op-dica-card-nav"><button class="op-dica-nav-btn" onclick="opDicaNavegar(-1)">&#9664;</button><span class="op-dica-contador">Dica ' + (idx0+1) + ' de ' + dicasArr.length + '</span><button class="op-dica-nav-btn" onclick="opDicaNavegar(1)">&#9654;</button></div>'
+        : '';
+      const modeloAtual = opGetModeloAtual();
+      const modeloTag = modeloAtual ? '<span style="font-size:10px;background:rgba(234,179,8,0.15);border:1px solid rgba(234,179,8,0.3);color:#fbbf24;border-radius:5px;padding:2px 7px;margin-left:6px;">' + modeloAtual + '</span>' : '';
+      dicasHtml = '<div class="op-dica-card"><div class="op-dica-card-header"><span class="op-dica-card-title">💡 Dica da Equipe' + modeloTag + '</span><span class="op-dica-card-meta">' + d.data + '</span></div><div class="op-dica-card-texto">' + d.texto.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>' + navHtml + '</div>';
+    }
+
+    lista.innerHTML = dicasHtml + def.passos.map(function(p, idx) {
       const isChecked = !!passosChecados[defeitoAtual][idx];
       const linkHtml = p.link ? (
         '<div style="margin-top:10px">' +
@@ -5987,9 +6473,99 @@ function pedPrintLabels() {
 
   window.opDefeitoFinalizarCheck = function(resolvido) {
     if (resolvido) {
-      alert('🎉 Parabéns! Defeito resolvido na bancada. Prossiga com os testes e finalize o SELB quando concluído.');
-      opDefeitoLimpar();
+      // Abre modal para coletar dica antes de limpar
+      const overlay = document.getElementById('op-dica-modal-overlay');
+      const ta = document.getElementById('op-dica-textarea');
+      if (overlay) {
+        if (ta) ta.value = '';
+        // Exibe o modelo do SELB ativo no modal
+        const modeloDiv = document.getElementById('op-dica-modal-modelo');
+        if (modeloDiv) {
+          const mod = opGetModeloAtual();
+          if (mod) {
+            modeloDiv.textContent = '🖨️ Esta dica será salva para o modelo: ' + mod;
+            modeloDiv.style.display = 'block';
+          } else {
+            modeloDiv.style.display = 'none';
+          }
+        }
+        overlay.classList.add('active');
+        setTimeout(function(){ if(ta) ta.focus(); }, 180);
+      } else {
+        // fallback
+        opDefeitoLimpar();
+      }
     }
+  };
+
+  window.opDicaFecharModal = function() {
+    const overlay = document.getElementById('op-dica-modal-overlay');
+    if (overlay) overlay.classList.remove('active');
+  };
+
+  // Retorna o modelo do SELB ativo (ex: "HP LaserJet M428") ou null
+  function opGetModeloAtual() {
+    try {
+      // Tenta pegar do elemento exibido na tela (alimentado pelo opRenderState)
+      const el = document.getElementById('op-equip-name');
+      if (el && el.textContent && el.textContent.trim()) return el.textContent.trim();
+      // Fallback: acessa wstate diretamente se disponível
+      if (typeof currentUser !== 'undefined' && currentUser && typeof wstate !== 'undefined') {
+        const st = wstate[currentUser.id];
+        if (st && st.selb && typeof getEquipName === 'function') {
+          return getEquipName(st.selb) || null;
+        }
+      }
+    } catch(e){}
+    return null;
+  }
+
+  // Monta a chave de localStorage: guia_dicas_<modelo>_<defeito>
+  // Se não houver modelo ativo, usa chave genérica
+  function opDicaKey(defId) {
+    const modelo = opGetModeloAtual();
+    if (modelo) {
+      // Normaliza o modelo: minúsculas, sem caracteres especiais, espaços → _
+      const modeloNorm = modelo.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+      return 'guia_dicas_' + modeloNorm + '_' + defId;
+    }
+    return 'guia_dicas_' + defId; // genérico (sem SELB ativo)
+  }
+
+  window.opDicaSalvar = function() {
+    const ta = document.getElementById('op-dica-textarea');
+    const texto = ta ? ta.value.trim() : '';
+    if (texto && defeitoAtual) {
+      const key = opDicaKey(defeitoAtual);
+      let dicas = [];
+      try { dicas = JSON.parse(localStorage.getItem(key) || '[]'); } catch(e){}
+      const agora = new Date();
+      const dataFmt = agora.toLocaleDateString('pt-BR') + ' ' + agora.toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'});
+      dicas.unshift({ texto: texto, data: dataFmt });
+      if (dicas.length > 10) dicas = dicas.slice(0, 10); // máx 10 dicas por defeito
+      localStorage.setItem(key, JSON.stringify(dicas));
+    }
+    opDicaFecharModal();
+    opDefeitoLimpar();
+  };
+
+  window.opDicaPular = function() {
+    opDicaFecharModal();
+    opDefeitoLimpar();
+  };
+
+  // índice da dica exibida atualmente no card (por defeito)
+  const dicaIndiceAtual = {};
+
+  window.opDicaNavegar = function(dir) {
+    if (!defeitoAtual) return;
+    const key = 'guia_dicas_' + defeitoAtual;
+    let dicas = [];
+    try { dicas = JSON.parse(localStorage.getItem(key) || '[]'); } catch(e){}
+    if (!dicas.length) return;
+    if (!dicaIndiceAtual[defeitoAtual]) dicaIndiceAtual[defeitoAtual] = 0;
+    dicaIndiceAtual[defeitoAtual] = (dicaIndiceAtual[defeitoAtual] + dir + dicas.length) % dicas.length;
+    renderPassos();
   };
 
   window.opDefeitoSolicitarPeca = function() {
@@ -5999,6 +6575,493 @@ function pedPrintLabels() {
       alert('Solicitação de peça não disponível.');
     }
   };
+
+  
+  
+  // ─── PROCESSOS DE LIMPEZA & MONTAGEM ─────────────────────────────────────
+  const PROCESSOS_GUIA = {
+    limpeza: {
+      tab: 'limpeza',
+      label: 'Limpeza',
+      icone: '🧹',
+      passos: [
+        {
+          n: '1º',
+          texto: 'Analisar o equipamento: verificar se está íntegro — tampas laterais, gaveta de papel, bypass, interior da máquina, tampa traseira, ADF e mesa (se houver).'
+        },
+        {
+          n: '2º',
+          texto: 'Utilizar ar comprimido na máquina, começando pelo interior e, em seguida, pela parte externa.',
+          obs: 'Cuidar para não passar ar no cooler do equipamento.'
+        },
+        {
+          n: '3º',
+          texto: 'Se estiver muito sujo, retirar as tampas frontal e traseira e a bandeja de papel, e lavar no tanque.'
+        },
+        {
+          n: '4º',
+          texto: 'Deixar as tampas secando na sala do ar.'
+        },
+        {
+          n: '5º',
+          texto: 'Limpar o equipamento começando pelo ADF (se houver), passando produto na esponja e esfregando por completo.',
+          obs: 'Se não sair a sujeira, aplicar o produto diretamente no equipamento, tomando cuidado para não o lançar nas saídas de ar.'
+        },
+        {
+          n: '6º',
+          texto: 'Pegar as peças que estavam secando e, se necessário, secar os resíduos com ar comprimido.'
+        },
+        {
+          n: '7º',
+          texto: 'Montar a máquina e verificar se está seca e limpa.',
+          warn: 'IMPORTANTE: Nunca liberar o equipamento molhado e tomar cuidado com a quantidade de produto utilizada.'
+        }
+      ]
+    },
+    montagem: {
+      tab: 'montagem',
+      label: 'Montagem',
+      icone: '🔧',
+      passos: [
+        {
+          n: '1º',
+          texto: 'Verificar se o equipamento liga e está íntegro (se não há portas/tampas, chassi, vidro e/ou ADF quebrados).',
+          obs: 'Caso apresente algum defeito de placa (código 672 ou afim), consultar a liderança para avaliar se vale a pena solucionar o problema.'
+        },
+        {
+          n: '2º',
+          texto: 'Testar se está imprimindo pela bandeja 01 e pelo bypass.'
+        },
+        {
+          n: '3º',
+          texto: 'Testar se o ADF e a mesa estão funcionando.'
+        },
+        {
+          n: '4º',
+          texto: 'Avaliar quais suprimentos necessitam de troca de acordo com a qualidade da impressão.'
+        },
+        {
+          n: '5º',
+          texto: 'Solicitar as peças e os suprimentos necessários à liderança.'
+        },
+        {
+          n: '6º',
+          texto: 'Realizar a troca dos suprimentos e peças necessários para o funcionamento do equipamento.'
+        },
+        {
+          n: '7º',
+          texto: 'Realizar a limpeza da memória do equipamento, visando apagar quaisquer resquícios de e-mails ou hosts do cliente.'
+        },
+        {
+          n: '8º',
+          texto: 'Testar o equipamento novamente, garantindo que está sem defeitos.'
+        },
+        {
+          n: '9º',
+          texto: 'Verificar os parafusos e conferir novamente se há avarias no equipamento.'
+        }
+      ]
+    }
+  };
+
+  // Estado do checklist de processo
+  let procAberto = true;
+  let procAbaAtual = 'montagem'; // padrão
+  let procManualEscolhido = null; // guarda escolha manual do operador para não resetar
+  let ultimoOperadorId = null;
+  const procChecados = { limpeza: [], montagem: [] };
+
+  window.opProcAltAba = function(aba) {
+    procAbaAtual = aba;
+    procManualEscolhido = aba; // operador clicou manualmente na aba
+    opProcRender();
+  };
+
+  window.opProcInit = function(setorForcado) {
+    let userId = null;
+    try {
+      if (typeof currentUser !== 'undefined' && currentUser && currentUser.id) {
+        userId = currentUser.id;
+      }
+    } catch(e){}
+
+    // Se o mesmo operador já está logado e escolheu manualmente uma aba, preserva a escolha!
+    if (userId && userId === ultimoOperadorId && procManualEscolhido) {
+      procAbaAtual = procManualEscolhido;
+      ['limpeza', 'montagem'].forEach(function(k) {
+        if (!procChecados[k] || procChecados[k].length !== PROCESSOS_GUIA[k].passos.length) {
+          procChecados[k] = new Array(PROCESSOS_GUIA[k].passos.length).fill(false);
+        }
+      });
+      opProcRender();
+      return;
+    }
+
+    // Novo operador logado: reseta escolha manual e define pelo setor cadastrado
+    ultimoOperadorId = userId;
+    procManualEscolhido = null;
+
+    let sector = (setorForcado || '').toUpperCase();
+    if (!sector) {
+      try {
+        if (typeof currentUser !== 'undefined' && currentUser && currentUser.sector) {
+          sector = (currentUser.sector || '').toUpperCase();
+        }
+      } catch(e){}
+    }
+    if (!sector) {
+      const tag = document.getElementById('op-sector-tag');
+      if (tag && tag.textContent) {
+        sector = tag.textContent.toUpperCase();
+      }
+    }
+
+    if (sector.includes('LIMP')) {
+      procAbaAtual = 'limpeza';
+    } else {
+      procAbaAtual = 'montagem';
+    }
+
+    // Inicializa arrays se necessário
+    ['limpeza', 'montagem'].forEach(function(k) {
+      if (!procChecados[k] || procChecados[k].length !== PROCESSOS_GUIA[k].passos.length) {
+        procChecados[k] = new Array(PROCESSOS_GUIA[k].passos.length).fill(false);
+      }
+    });
+
+    opProcRender();
+  };
+
+  window.opProcTogglePasso = function(aba, idx) {
+    if (!procChecados[aba]) return;
+    procChecados[aba][idx] = !procChecados[aba][idx];
+    opProcRender();
+  };
+
+  window.opProcReset = function() {
+    procChecados[procAbaAtual] = new Array(PROCESSOS_GUIA[procAbaAtual].passos.length).fill(false);
+    opProcRender();
+  };
+
+  window.opProcToggleAberto = function() {
+    procAberto = !procAberto;
+    const body = document.getElementById('op-proc-body');
+    const icon = document.getElementById('op-proc-toggle-icon');
+    if (body) body.style.display = procAberto ? 'block' : 'none';
+    if (icon) icon.textContent = procAberto ? '▾' : '▸';
+  };
+
+  function opProcRender() {
+    const panel = document.getElementById('op-proc-panel');
+    if (!panel) return;
+    const proc = PROCESSOS_GUIA[procAbaAtual];
+    if (!proc) return;
+
+    const totalChecados = procChecados[procAbaAtual].filter(Boolean).length;
+    const totalPassos = proc.passos.length;
+    const isLimp = procAbaAtual === 'limpeza';
+    const classDone = isLimp ? 'done-limp' : 'done-mont';
+    const corProg = isLimp ? '#34d399' : '#93c5fd';
+    const corBorda = isLimp ? 'rgba(16,185,129,0.32)' : 'rgba(79,142,247,0.32)';
+
+    panel.style.borderColor = corBorda;
+
+    const passosHtml = proc.passos.map(function(p, idx) {
+      const done = !!procChecados[procAbaAtual][idx];
+      const obsHtml = p.obs ? '<div class="op-proc-obs">⚠️ ' + p.obs + '</div>' : '';
+      const warnHtml = p.warn ? '<div class="op-proc-warn">🚫 ' + p.warn + '</div>' : '';
+      const abaEscaped = procAbaAtual;
+      return '<div class="op-proc-item' + (done ? ' ' + classDone : '') + '" data-aba="' + abaEscaped + '" data-idx="' + idx + '" onclick="opProcTogglePasso(this.dataset.aba,+this.dataset.idx)">'
+        + '<div class="op-proc-num">' + (done ? '✓' : p.n) + '</div>'
+        + '<div style="flex:1"><div class="op-proc-step-text">' + p.texto + '</div>' + obsHtml + warnHtml + '</div>'
+        + '</div>';
+    }).join('');
+
+    const tabLimp = 'limpeza' === procAbaAtual ? 'op-proc-tab active-limp' : 'op-proc-tab';
+    const tabMont = 'montagem' === procAbaAtual ? 'op-proc-tab active-mont' : 'op-proc-tab';
+
+    panel.innerHTML =
+      '<div class="op-proc-header">'
+        + '<div class="op-proc-title">📋 Processo Operacional · <span style="color:' + corProg + '">' + proc.label + '</span></div>'
+        + '<button class="op-proc-toggle" onclick="opProcToggleAberto()" id="op-proc-toggle-icon" title="Expandir/Recolher">' + (procAberto ? '▾' : '▸') + '</button>'
+      + '</div>'
+      + '<div id="op-proc-body" style="display:' + (procAberto ? 'block' : 'none') + '">'
+        + '<div class="op-proc-tabs">'
+          + '<button class="' + tabLimp + '" data-aba="limpeza" onclick="opProcAltAba(this.dataset.aba)">🧹 Limpeza (7)</button>'
+          + '<button class="' + tabMont + '" data-aba="montagem" onclick="opProcAltAba(this.dataset.aba)">🔧 Montagem (9)</button>'
+        + '</div>'
+        + '<div class="op-proc-lista">' + passosHtml + '</div>'
+        + '<div class="op-proc-footer">'
+          + '<span class="op-proc-progresso" style="color:' + (totalChecados === totalPassos ? corProg : '#64748b') + '">' + totalChecados + '/' + totalPassos + ' concluídos</span>'
+          + '<button class="op-proc-reset" onclick="opProcReset()">↺ Reiniciar Checklist</button>'
+        + '</div>'
+      + '</div>';
+  }
+
+  // Auto-inicialização reativa ao login e troca de operador
+  try {
+    const secTag = document.getElementById('op-sector-tag');
+    if (secTag && window.MutationObserver) {
+      let lastSec = '';
+      const obs = new MutationObserver(function() {
+        const txt = (secTag.textContent || '').trim();
+        if (txt && txt !== lastSec) {
+          lastSec = txt;
+          opProcInit();
+        }
+      });
+      obs.observe(secTag, { childList: true, characterData: true, subtree: true });
+    }
+    const viewOp = document.getElementById('view-operador');
+    if (viewOp && window.MutationObserver) {
+      const obsView = new MutationObserver(function(muts) {
+        muts.forEach(function(m) {
+          if (m.attributeName === 'class' && viewOp.classList.contains('active')) {
+            opProcInit();
+          }
+        });
+      });
+      obsView.observe(viewOp, { attributes: true });
+    }
+  } catch(e){}
+
+  setTimeout(function() { if (typeof opProcInit === 'function') opProcInit(); }, 300);
+
+  // ─── DICIONÁRIO DE PLACAS & COMPONENTES ───
+  const COMPONENTES_GUIA = {
+    bicu: {
+      id: 'bicu',
+      nome: 'Placa BICU (Engine Board)',
+      icone: '🖲️',
+      sub: 'Basic Image Control Unit · Cérebro Mecânico e Analógico',
+      apelidos: 'BICU, Engine Board, Placa Mãe Mecânica, Placa de Controle dos Motores',
+      funcao: 'É a placa central que comanda a mecânica e a física da impressora. Ela aciona diretamente os motores principais, motores de passo, embreagens e solenoides de puxada de papel. Além disso, faz a leitura de todos os sensores de trajeto, comanda o acionamento das altas tensões da fonte HVPS e sincroniza a gravação do canhão laser com o giro do cilindro.',
+      sintomas: [
+        'Código de erro SC de comunicação entre BICU e Controladora (ex: SC-670 / SC-672 na Ricoh).',
+        'Motores principais não giram ou a máquina não faz o ciclo inicial de auto-teste (warm-up).',
+        'Atolamentos falsos constantes: a folha nem é puxada, mas a máquina já acusa papel preso porque os sensores não estão sendo lidos.',
+        'Solenoides de gaveta ou embreagens não disparam para puxar a folha.',
+        'Falha no acionamento do laser ou ausência de disparo da alta tensão.'
+      ],
+      testes: 'Inspecione os fusíveis SMD soldados na placa (marcados como F1, F2, ICP), verifique oxidações nos conectores de chicote e confira se os cabos flat que ligam a BICU à Controladora e à Fonte de Baixa Tensão estão 100% encaixados sem trilhas rompidas.'
+    },
+    controladora: {
+      id: 'controladora',
+      nome: 'Placa Controladora (Main Board / Formatter)',
+      icone: '🧠',
+      sub: 'Controller · Processador, Memória, Rede e Firmware',
+      apelidos: 'Controladora, Formatter, Placa Lógica Principal, Placa Mãe Digital',
+      funcao: 'É o "computador" da impressora. Possui a CPU principal, memórias RAM e ROM/NVRAM, armazenamento de firmware (SD Card/HD), interface de rede Ethernet/Wi-Fi e portas USB. Sua função é receber os arquivos de impressão do computador/rede, converter a linguagem (PCL/PostScript) em bitmap para o canhão laser e gerenciar o display/touchscreen.',
+      sintomas: [
+        'Código de erro SC-672 (o mais comum da controladora: falha de comunicação entre a controladora e o painel ou erro de inicialização do circuito).',
+        'Equipamento trava na tela de boot: fica no logotipo da marca ou barra de carregamento infinita e nunca inicializa.',
+        'Máquina não assume IP de rede: LEDs da porta de rede Ethernet apagados ou acesos fixos sem piscar tráfego.',
+        'Painel touchscreen fica preto, congelado ou não responde aos toques enquanto os coolers parecem ligados.',
+        'Perda constante das configurações de rede, data e hora ao desligar a máquina da tomada.',
+        'Erros de memória insuficiente ou travamento ao receber trabalhos de impressão pesados.'
+      ],
+      testes: 'Para o SC-672: retire e limpe os contatos da memória RAM com borracha escolar branca e limpa-contato, reconecte o cabo flat do painel de operação e teste ligar sem placas opcionais ou HD. Se persistir, regrave o firmware ou teste com outra placa controladora.'
+    },
+    fonte_baixa: {
+      id: 'fonte_baixa',
+      nome: 'Fonte de Baixa Tensão (LVPS)',
+      icone: '⚡',
+      sub: 'Low Voltage Power Supply · Linhas de 5V, 12V e 24V',
+      apelidos: 'LVPS, Fonte Primária, Placa Fonte, Fonte de Alimentação',
+      funcao: 'Recebe a energia da tomada (110V ou 220V AC) e transforma nas tensões contínuas (DC) que alimentam toda a máquina:\n• +3.3V / +5V: Alimenta os microprocessadores, memórias e circuitos digitais da Controladora e do Painel.\n• +12V: Alimenta sensores analógicos e placas de interface.\n• +24V: Fornece força bruta para os motores elétricos, solenoides de tração, travas magnéticas de porta e ventoinhas.',
+      sintomas: [
+        'Máquina totalmente "morta": não acende nenhum LED, painel não dá sinal e ventoinhas não giram.',
+        'Reinicialização em loop: a máquina parece ligar, mas reinicia no exato momento em que o motor tenta dar a primeira volta (a linha de +24V arreia por capacitor esgotado).',
+        'Fusível de entrada de vidro abre/queima repetidamente assim que conecta o cabo na tomada (curto no varistor, ponte retificadora ou chaveadores MOSFET).'
+      ],
+      testes: 'Meça as saídas com multímetro na escala de tensão contínua (DCV) nos pontos marcados na serigrafia (+24V, +5V, GND). Verifique se o seletor de voltagem 110V/220V não foi invertido por engano na bancada.'
+    },
+    fonte_alta: {
+      id: 'fonte_alta',
+      nome: 'Fonte de Alta Tensão (HVPS)',
+      icone: '⚡',
+      sub: 'High Voltage Power Supply · Carga, Bias e Transferência',
+      apelidos: 'HVPS, Placa de Alta Tensão, Gerador Eletrostático',
+      funcao: 'Gera tensões elétricas altíssimas e controladas (variando de centenas até milhares de Volts) para conduzir o processo eletrofotográfico:\n1. Carga (PCR/Grade): Aplica carga elétrica uniforme na superfície do cilindro fotocondutor (OPC).\n2. Bias de Revelação: Cria a atração magnética e eletrostática que faz o pó de toner sair da caixa de revelação e pular para o cilindro.\n3. Transferência: Tensão positiva aplicada no rolo de transferência para arrancar o toner do cilindro e fixá-lo na folha de papel.',
+      sintomas: [
+        'Página totalmente preta: Falha na tensão de carga do cilindro (sem carga negativa, o cilindro atrai toner na folha inteira).',
+        'Página totalmente em branco: Falha na tensão de transferência (o toner é gerado no cilindro, mas não pula para o papel) ou falta de bias de revelação.',
+        'Impressão excessivamente clara ou com fundo acinzentado generalizado em toda a folha.',
+        'Impressão com faixas horizontais de repetição ou descarga estática visível.'
+      ],
+      testes: 'ATENÇÃO: Em mais de 50% dos casos o defeito não é na placa, mas sim em MOLAS DE CONTATO METÁLICAS tortas, afundadas ou cobertas por pó de toner na lateral da carcaça interna. Limpe todos os terminais com álcool isopropílico antes de trocar a placa.'
+    },
+    laser: {
+      id: 'laser',
+      nome: 'Unidade Laser (LSU - Laser Scanner Unit)',
+      icone: '🔦',
+      sub: 'Canhão Laser · Escrita Óptica da Imagem Latente',
+      apelidos: 'LSU, ROS, Canhão Laser, Scanner Laser, Bloco Óptico',
+      funcao: 'É a unidade óptica de alta precisão que "desenha" a imagem linha por linha na superfície do cilindro fotocondutor. O canhão emite um feixe de diodo laser que atinge um espelho poligonal girando a mais de 20.000 RPM acionado por um motor de passo de altíssima precisão. O feixe refletido passa por lentes especiais (lentes F-theta) e espelhos refletores até atingir o cilindro.',
+      sintomas: [
+        'Código de erro SC de motor poligonal (Polygon Motor Error, LSU Error).',
+        'Faixas brancas em branco contínuas no sentido da impressão (poeira ou crosta de toner sobre o vidro de saída do laser).',
+        'Imagem desfocada, borrada, "fantasma" ou com perda de nitidez gradativa em um dos lados da folha.',
+        'Ruído agudo / apito vindo do interior da máquina antes de imprimir (rolamento do motor poligonal desgastado).'
+      ],
+      testes: 'Limpe o vidro protetor de saída do laser com haste de algodão limpa e seca (nunca use solventes abrasivos nas lentes ópticas). Se acusar erro de motor poligonal, verifique o flat cable de comunicação com a BICU.'
+    },
+    fusor: {
+      id: 'fusor',
+      nome: 'Unidade Fusora (Fuser Assembly)',
+      icone: '🔥',
+      sub: 'Fusão Térmica · Calor, Pressão e Fixação Permanente',
+      apelidos: 'Fusor, Conjunto de Fusão, Unidade de Fixação',
+      funcao: 'Fixa o pó de toner permanentemente nas fibras do papel usando calor intenso (entre 165°C e 195°C) e pressão controlada. É formado por:\n• Rolo de Aquecimento ou Película de Teflon: Conduz o calor gerado por lâmpada halógena ou elemento cerâmico.\n• Rolo de Pressão (borracha): Esmaga o papel contra a película aquecida.\n• Termistor: Sensor eletrônico que mede a temperatura da fusão em tempo real.\n• Termostato / Fusível Térmico: Dispositivo mecânico de emergência que desarma para evitar incêndio se a temperatura passar do limite.',
+      sintomas: [
+        'Toner sai na mão: O texto desbota ou solta ao passar o dedo (fusor não atingiu a temperatura de cura ou buchas gastas perderam a pressão).',
+        'Códigos de erro SC de fusor (ex: Ricoh SC-541, SC-542, SC-554) por termistor aberto ou termostato desarmado.',
+        'Papel amassando em forma de leque ou saindo sanfonado (pressão desigual nas molas laterais do fusor).',
+        'Recopiando / Imagem fantasma repetida a cada 7,5 a 10 cm (toner residual queimado na película ou unhas separadoras danificadas).'
+      ],
+      testes: 'Meça a resistência da lâmpada de fusão e dos termistores com multímetro (escala de Ohms). Se o termostato tiver desarmado por pico de calor, você pode fazer o rearme mecânico dando uma batida suave com a carcaça de metal sobre uma mesa ou testar a continuidade.'
+    },
+    ipu: {
+      id: 'ipu',
+      nome: 'Placa IPU & Painel de Operação',
+      icone: '📷',
+      sub: 'Image Processing Unit · Digitalização do Scanner e Touchscreen',
+      apelidos: 'IPU, Placa do Scanner, Placa do Painel, Touch Panel Board',
+      funcao: 'Em multifuncionais, a IPU processa o sinal óptico recebido da barra de leitura (sensor CCD ou CIS) do scanner e do alimentador de documentos (ADF). Ela converte os níveis de luz analógicos em sinal digital de alta resolução, aplica correção de cores, gama e contraste. Também gerencia a placa lógica do painel de controle touchscreen.',
+      sintomas: [
+        'Códigos de erro SC de lâmpada de exposição ou inicialização do scanner (ex: SC-120, SC-140).',
+        'Digitalizações e cópias saindo com listras pretas ou brancas verticais em toda a extensão da página.',
+        'Touchscreen do painel descalibrado, operando com toques fantasmas ou com regiões que não respondem ao dedo.',
+        'Lâmpada do scanner fica piscando ou o carrinho do scanner bate no final do curso sem parar (sensor home position inoperante).'
+      ],
+      testes: 'Inspecione cuidadosamente os cabos flat compridos que sobem pela coluna móvel da máquina até o conjunto do scanner e painel. Esses flats sofrem fadiga e micro-fissuras internas nas dobras móveis.'
+    },
+    motores: {
+      id: 'motores',
+      nome: 'Motores, Embreagens & Solenoides',
+      icone: '⚙️',
+      sub: 'Trem de Engrenagens · Tração Mecânica e Sincronismo',
+      apelidos: 'Motor Principal, Motor de Registro, Embreagem (Clutch), Solenoide',
+      funcao: 'Fornecem a tração e sincronismo mecânico:\n• Motor Principal (DC / Brushless): Gira o trem de engrenagens do cilindro, esteira e fusor.\n• Motor ou Embreagem de Registro: Para a folha por uma fração de segundo e solta exatamente no milissegundo em que o laser começou a desenhar a imagem.\n• Solenoide de Puxada: Dispara a lingueta que engata o rolete pick-up para puxar 1 folha da gaveta por vez.',
+      sintomas: [
+        'Puxa folhas sem parar ou puxa várias folhas em sequência: A espuma de amortecimento do solenoide derreteu e virou cola, travando a lingueta aberta.',
+        'Estalos fortes no trem de engrenagens (dentes quebrados ou conjunto travado).',
+        'Folha para exatamente na entrada do registro antes de atingir o cilindro (embreagem de registro gasta ou solenoide travado).'
+      ],
+      testes: 'Remova o solenoide da gaveta e inspecione a borrachinha/espuminha preta. Se estiver grudenta como cola de adesivo, limpe com álcool isopropílico e cole uma camada fina de fita isolante no lugar.'
+    }
+  };
+
+  let compAtual = null;
+
+  window.opAlternarAbaGuia = function(aba) {
+    const btnDef = document.getElementById('tab-btn-defeitos');
+    const btnComp = document.getElementById('tab-btn-componentes');
+    const abaDef = document.getElementById('op-aba-defeitos');
+    const abaComp = document.getElementById('op-aba-componentes');
+    const subEl = document.getElementById('op-badge-sub');
+    const resetBtn = document.getElementById('op-def-btn-reset');
+
+    if (aba === 'componentes') {
+      if (btnDef) { btnDef.style.background = 'transparent'; btnDef.style.color = 'var(--muted)'; }
+      if (btnComp) { btnComp.style.background = 'rgba(79, 142, 247, 0.2)'; btnComp.style.color = '#93c5fd'; }
+      if (abaDef) abaDef.style.display = 'none';
+      if (abaComp) abaComp.style.display = 'flex';
+      if (subEl) subEl.textContent = 'Guia Técnico: Selecione uma placa ou componente para entender seu funcionamento e falhas:';
+      if (resetBtn) resetBtn.style.display = 'none';
+      renderListaComponentes();
+    } else {
+      if (btnDef) { btnDef.style.background = 'rgba(245, 158, 11, 0.18)'; btnDef.style.color = '#f59e0b'; }
+      if (btnComp) { btnComp.style.background = 'transparent'; btnComp.style.color = 'var(--muted)'; }
+      if (abaDef) abaDef.style.display = 'flex';
+      if (abaComp) abaComp.style.display = 'none';
+      if (subEl) subEl.textContent = 'Selecione o sintoma para carregar o passo a passo de testes rápidos:';
+      if (defeitoAtual && resetBtn) resetBtn.style.display = 'inline-block';
+    }
+  };
+
+  function renderListaComponentes(filtro) {
+    const grid = document.getElementById('op-comp-grid');
+    if (!grid) return;
+
+    const termo = (filtro || '').toLowerCase().trim();
+    const chaves = Object.keys(COMPONENTES_GUIA).filter(function(k) {
+      if (!termo) return true;
+      const c = COMPONENTES_GUIA[k];
+      return (
+        c.nome.toLowerCase().includes(termo) ||
+        c.sub.toLowerCase().includes(termo) ||
+        c.apelidos.toLowerCase().includes(termo) ||
+        c.funcao.toLowerCase().includes(termo)
+      );
+    });
+
+    if (!chaves.length) {
+      grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:24px;color:var(--muted);font-size:12px">Nenhuma placa encontrada para a busca "' + filtro + '".</div>';
+      return;
+    }
+
+    grid.innerHTML = chaves.map(function(k) {
+      const c = COMPONENTES_GUIA[k];
+      return (
+        '<div class="op-comp-card" id="card-comp-' + c.id + '" onclick="opComponenteSelecionar(\'' + c.id + '\')">' +
+          '<span style="font-size:22px;line-height:1">' + c.icone + '</span>' +
+          '<div style="flex:1;min-width:0">' +
+            '<div class="op-comp-title" style="font-size:12px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + c.nome + '</div>' +
+            '<div style="font-size:10px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + c.sub + '</div>' +
+          '</div>' +
+        '</div>'
+      );
+    }).join('');
+  }
+
+  window.opFiltrarComponentes = function(val) {
+    renderListaComponentes(val);
+  };
+
+  window.opComponenteSelecionar = function(id) {
+    compAtual = id;
+    const c = COMPONENTES_GUIA[id];
+    if (!c) return;
+
+    document.querySelectorAll('.op-comp-card').forEach(function(el) { el.classList.remove('active'); });
+    const ativo = document.getElementById('card-comp-' + id);
+    if (ativo) ativo.classList.add('active');
+
+    const listaWrap = document.getElementById('op-comp-lista-wrap');
+    const detalheWrap = document.getElementById('op-comp-detalhe-wrap');
+    if (listaWrap) listaWrap.style.display = 'none';
+    if (detalheWrap) detalheWrap.style.display = 'flex';
+
+    document.getElementById('op-comp-det-icone').textContent = c.icone;
+    document.getElementById('op-comp-det-nome').textContent = c.nome;
+    document.getElementById('op-comp-det-sub').textContent = c.sub;
+    document.getElementById('op-comp-det-apelidos').textContent = 'Também conhecida como: ' + c.apelidos;
+    document.getElementById('op-comp-det-funcao').innerHTML = c.funcao.replace(/\n/g, '<br>');
+    document.getElementById('op-comp-det-testes').innerHTML = c.testes;
+
+    const sintList = document.getElementById('op-comp-det-sintomas');
+    if (sintList) {
+      sintList.innerHTML = c.sintomas.map(function(s) {
+        return (
+          '<li style="margin-bottom:6px;line-height:1.45;color:#e2e8f0;font-size:12.5px">' +
+            s +
+          '</li>'
+        );
+      }).join('');
+    }
+  };
+
+  window.opComponenteVoltar = function() {
+    compAtual = null;
+    document.querySelectorAll('.op-comp-card').forEach(function(el) { el.classList.remove('active'); });
+    const listaWrap = document.getElementById('op-comp-lista-wrap');
+    const detalheWrap = document.getElementById('op-comp-detalhe-wrap');
+    if (listaWrap) listaWrap.style.display = 'flex';
+    if (detalheWrap) detalheWrap.style.display = 'none';
+  };
+
+
 })();
 </script>
 
