@@ -1451,17 +1451,6 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 
           <!-- Estado Detalhado do Passo a Passo (dinâmico via JS) -->
           <div id="op-def-detalhe" style="display:none;flex-direction:column;gap:12px">
-            <!-- Header do Defeito Ativo -->
-            <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:12px 14px">
-              <div>
-                <div id="op-def-det-titulo" style="font-size:14px;font-weight:700;color:var(--warn);display:flex;align-items:center;gap:8px"></div>
-                <div id="op-def-det-desc" style="font-size:12.5px;color:var(--muted);margin-top:3px"></div>
-              </div>
-              <div id="op-def-det-progresso" style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--muted);white-space:nowrap;background:rgba(0,0,0,0.25);padding:4px 8px;border-radius:6px">
-                0/5 checados
-              </div>
-            </div>
-
             <!-- Lista de Passos -->
             <div id="op-def-lista-passos" style="display:flex;flex-direction:column;gap:8px;max-height:480px;overflow-y:auto;padding-right:4px">
               <!-- Cards gerados dinamicamente pelo script -->
@@ -1664,6 +1653,27 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 
   <!-- ── ADMIN ── -->
   <div class="view" id="view-admin">
+
+    <!-- ══ BACKUP COMPLETO 90 DIAS ══ -->
+    <div id="admin-backup-90d-panel" style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:22px">💾</span>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:var(--text)">Backup Completo — Últimos 90 dias</div>
+          <div id="admin-backup90-status" style="font-size:11px;color:var(--muted);margin-top:2px">Clique em um botão para baixar todos os dados do sistema</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" onclick="baixarBackup90Dias('xlsx')" id="btn-backup90-xlsx"
+          style="background:rgba(61,214,140,.15);border:1px solid rgba(61,214,140,.4);border-radius:9px;color:var(--accent2);font-family:var(--font);font-size:12px;font-weight:700;padding:9px 18px;cursor:pointer">
+          ⬇ Baixar Excel (.xlsx)
+        </button>
+        <button type="button" onclick="baixarBackup90Dias('json')" id="btn-backup90-json"
+          style="background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.35);border-radius:9px;color:#60a5fa;font-family:var(--font);font-size:12px;font-weight:700;padding:9px 18px;cursor:pointer">
+          ⬇ Baixar JSON
+        </button>
+      </div>
+    </div>
 
     <!-- ══ GESTÃO DE EQUIPE / SAÚDE DA EQUIPE ══ -->
     <div id="admin-team-health-panel" style="margin-bottom:16px"></div>
@@ -4796,7 +4806,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="supabase-compat-shim.js?v=2"></script>
-<script src="app.js?v=31"></script>
+<script src="app.js?v=46"></script>
 <script src="planejamento.js?v=2"></script>
 <script src="pendencias.js?v=4"></script>
 
@@ -5686,7 +5696,8 @@ function pedPrintLabels() {
 
   var doc = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Etiquetas</title>' +
             '<style>' + css + '</style>' +
-            '</head><body>' + labelsHTML + '</body></html>';
+            '</head><body>' + labelsHTML + '
+</body></html>';
 
   var iframe = document.createElement('iframe');
   iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
@@ -6190,8 +6201,8 @@ function pedPrintLabels() {
           titulo: 'Acesse os manuais para ter um diagnóstico mais assertivo',
           desc: 'Consulte a documentação técnica oficial, boletins técnicos (BTH), drivers e firmwares no link:',
           peca: 'Manuais Técnicos',
-          link: 'https://selbetti365.sharepoint.com/:f:/r/sites/labtecnico1/Documentos%20Compartilhados/REPOSITORIO/LabTecnico/MANUAIS,%20DRIVERS,%20FIRMWARES,%20BTH?d=w1dd6795dee1648299468efd69bcd6872&csf=1&web=1&e=En4tG5',
-          linkTexto: 'MANUAIS, DRIVERS, FIRMWARES, BTH'
+          link: 'https://drive.google.com/drive/folders/13wFVPqzLCXr9dMlN6Rli7pcR0EQ5n5t3?usp=sharing',
+          linkTexto: 'ACESSAR PASTA DE MANUAIS (GOOGLE DRIVE)'
         }
       ]
     },
@@ -6399,6 +6410,533 @@ function pedPrintLabels() {
     renderPassos();
   };
 
+      // ── Banco de Dados de Códigos de Erro (por Modelo) ──
+  const LISTA_CODIGOS_ERRO = [
+    // === RICOH MP 501 ===
+    // SC100 – Scanner
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Scanner', codigo: 'SC101-01', descricao: 'Erro de iluminação da lâmpada do scanner' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Scanner', codigo: 'SC102-00', descricao: 'Erro na quantidade de iluminação LED' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Scanner', codigo: 'SC141-00', descricao: 'Erro de detecção do nível preto' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Scanner', codigo: 'SC142-00', descricao: 'Erro de detecção do nível branco' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Scanner', codigo: 'SC144-00', descricao: 'Erro de comunicação SBU' },
+
+    // SC200 – Laser / gravação de imagem
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Laser / Imagem', codigo: 'SC202-00', descricao: 'Erro no motor poligonal' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Laser / Imagem', codigo: 'SC220-00', descricao: 'Erro de sincronismo LD na borda inicial' },
+
+    // SC300 – Carga / revelação / cilindro
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Carga / Revelação / Cilindro', codigo: 'SC303-00', descricao: 'Erro de corrente do sistema de carga' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Carga / Revelação / Cilindro', codigo: 'SC321-00', descricao: 'Unidade de revelação não instalada ou não reconhecida' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Carga / Revelação / Cilindro', codigo: 'SC396-01', descricao: 'Erro 1 do motor do cilindro' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Carga / Revelação / Cilindro', codigo: 'SC396-02', descricao: 'Erro 2 do motor do cilindro' },
+
+    // SC400 – Sistema de imagem
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Sistema de Imagem', codigo: 'SC490-00', descricao: 'Erro no sensor de densidade do toner' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Sistema de Imagem', codigo: 'SC491-01', descricao: 'Incompatibilidade da unidade de cilindro' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Sistema de Imagem', codigo: 'SC491-02', descricao: 'Erro na unidade de cilindro' },
+
+    // SC500 – Alimentação de papel / motores / fusor
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC501-01', descricao: 'Erro no motor de elevação da bandeja 1' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC502-01', descricao: 'Erro no motor de elevação da bandeja 2' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC502-02', descricao: 'Erro de acionamento da bandeja 2' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC520-01', descricao: 'Erro no motor principal' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC540-01', descricao: 'Erro no motor de alívio de pressão do fusor' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC540-02', descricao: 'Erro no posicionamento do mecanismo de pressão do fusor' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC541-00', descricao: 'Termistor central do fusor desconectado' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC543-00', descricao: 'Temperatura excessiva do termistor central' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC549-00', descricao: 'Lâmpada do fusor desconectada' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC553-00', descricao: 'Temperatura excessiva do termistor lateral' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC581-00', descricao: 'Sensor de temperatura desconectado' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC582-00', descricao: 'Sensor de temperatura em curto' },
+
+    // SC600 – Comunicação / controladoras
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Comunicação / Controladora', codigo: 'SC665-02', descricao: 'Erro de conexão BiCU–IOB' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Comunicação / Controladora', codigo: 'SC669',    descricao: 'Erro de comunicação com EEPROM' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Comunicação / Controladora', codigo: 'SC672-10', descricao: 'Falha na inicialização do controlador' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Comunicação / Controladora', codigo: 'SC672-12', descricao: 'Interrupção da comunicação com o controlador' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Comunicação / Controladora', codigo: 'SC672-99', descricao: 'Erro no software do painel de operação' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Comunicação / Controladora', codigo: 'SC689-01', descricao: 'Erro de comunicação EEPROM' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Comunicação / Controladora', codigo: 'SC690-00', descricao: 'Erro nos dados da EEPROM' },
+
+    // SC800 – Memória / armazenamento
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Memória / Armazenamento', codigo: 'SC867-01', descricao: 'Erro de armazenamento ou dispositivo de memória' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Memória / Armazenamento', codigo: 'SC870-01', descricao: 'Erro nos dados do catálogo de endereços' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Memória / Armazenamento', codigo: 'SC870-02', descricao: 'Erro no módulo de criptografia' },
+
+    // SC900 – Sistema / software
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Sistema / Software', codigo: 'SC900-00', descricao: 'Erro no contador eletrônico' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Sistema / Software', codigo: 'SC991-00', descricao: 'Erro recuperável de operação do software' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Sistema / Software', codigo: 'SC997-00', descricao: 'Erro na seleção de função de aplicação' },
+    { modelo: 'Ricoh MP 501', marca: 'Ricoh', categoria: 'Sistema / Software', codigo: 'SC998-00', descricao: 'Erro na inicialização de aplicação' },
+
+    // === RICOH SP 3710SF ===
+    // SC200 – Sistema laser
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Laser / Imagem', codigo: 'SC202', descricao: 'Motor poligonal não atinge a rotação esperada' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Laser / Imagem', codigo: 'SC203', descricao: 'Motor poligonal não desliga corretamente' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Laser / Imagem', codigo: 'SC204', descricao: 'Erro no sinal de bloqueio do motor poligonal' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Laser / Imagem', codigo: 'SC220', descricao: 'Erro de sincronismo do feixe laser' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Laser / Imagem', codigo: 'SC268', descricao: 'Erro no termistor da unidade laser' },
+
+    // SC400 – Transferência de imagem
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Transferência / Imagem', codigo: 'SC491', descricao: 'Fuga de tensão no sistema Bias' },
+
+    // SC500 – Motores / fusor
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC520',    descricao: 'Erro no motor principal' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC530',    descricao: 'Erro no ventilador de refrigeração' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC541',    descricao: 'Erro no termistor do fusor' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC542-01', descricao: 'Falha de elevação da temperatura do fusor' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC542-02', descricao: 'Fusor não atinge a temperatura mínima no tempo previsto' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC542-03', descricao: 'Fusor não atinge a temperatura de recarga' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC543',    descricao: 'Temperatura excessiva do fusor – nível de proteção suave' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC544',    descricao: 'Temperatura excessiva do fusor – proteção crítica' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC545',    descricao: 'Erro no aquecedor principal do fusor' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC546',    descricao: 'Temperatura instável do termistor do fusor' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC547',    descricao: 'Erro no sinal Zero Cross' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC551',    descricao: 'Erro no termistor sem contato' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC552',    descricao: 'Falha de aquecimento pelo termistor sem contato' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC553',    descricao: 'Temperatura excessiva do termistor sem contato' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC554',    descricao: 'Temperatura excessiva crítica do termistor sem contato' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC557',    descricao: 'Frequência do sinal Zero Cross fora do padrão' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC559',    descricao: 'Erro de atolamento repetido no fusor' },
+    { modelo: 'Ricoh SP 3710SF', marca: 'Ricoh', categoria: 'Alimentação / Fusor', codigo: 'SC580',    descricao: 'Erro no termistor ambiente' },
+
+    // === KYOCERA ECOSYS M3655idn ===
+    // 1. Memória, placa principal e sistema eletrônico
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Memória / Placa', codigo: '0100', descricao: 'Erro na memória de backup' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Memória / Placa', codigo: '0120', descricao: 'Erro nos dados do endereço MAC' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Memória / Placa', codigo: '0130', descricao: 'Erro de leitura/gravação da memória NAND' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Memória / Placa', codigo: '0140', descricao: 'Erro nos dados da memória NAND' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Memória / Placa', codigo: '0150', descricao: 'Erro de leitura/gravação da EEPROM' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Memória / Placa', codigo: '0160', descricao: 'Erro nos dados da memória EEPROM' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Memória / Placa', codigo: '0170', descricao: 'Erro de contagem de faturamento' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Memória / Placa', codigo: '0180', descricao: 'Divergência do número de série da máquina' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Memória / Placa', codigo: '0190', descricao: 'Erro no dispositivo de memória da placa de controle' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Sistema / Imagem', codigo: '0800', descricao: 'Erro de processamento de imagem' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Sistema / Relógio', codigo: '0840', descricao: 'Falha no relógio interno RTC' },
+
+    // 2. Alimentação de papel e gavetas opcionais
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Alimentação / Gavetas', codigo: '1010', descricao: 'Erro no motor de elevação da gaveta principal' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Alimentação / Gavetas', codigo: '1020', descricao: 'Erro no motor de elevação da gaveta opcional 1' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Alimentação / Gavetas', codigo: '1030', descricao: 'Erro no motor de elevação da gaveta opcional 2' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Alimentação / Gavetas', codigo: '1040', descricao: 'Erro no motor de elevação da gaveta opcional 3' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Alimentação / Gavetas', codigo: '1050', descricao: 'Erro no motor de elevação da gaveta opcional 4' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Comunicação / Gavetas', codigo: '1800', descricao: 'Erro de comunicação do alimentador de papel 1' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Comunicação / Gavetas', codigo: '1810', descricao: 'Erro de comunicação do alimentador de papel 2' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Comunicação / Gavetas', codigo: '1820', descricao: 'Erro de comunicação do alimentador de papel 3' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Comunicação / Gavetas', codigo: '1830', descricao: 'Erro de comunicação do alimentador de papel 4' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'EEPROM / Gavetas', codigo: '1900', descricao: 'Erro de EEPROM do alimentador de papel 1' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'EEPROM / Gavetas', codigo: '1910', descricao: 'Erro de EEPROM do alimentador de papel 2' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'EEPROM / Gavetas', codigo: '1920', descricao: 'Erro de EEPROM do alimentador de papel 3' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'EEPROM / Gavetas', codigo: '1930', descricao: 'Erro de EEPROM do alimentador de papel 4' },
+
+    // 3. Motores e mecanismos internos
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Motores', codigo: '2000', descricao: 'Erro de partida do motor principal' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Motores', codigo: '2010', descricao: 'Erro de funcionamento contínuo do motor principal' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Motores', codigo: '2200', descricao: 'Erro de acionamento do motor do cilindro' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Motores', codigo: '2210', descricao: 'Erro de funcionamento contínuo do motor do cilindro' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Motores', codigo: '2330', descricao: 'Erro de sobrecorrente do motor de envelopes' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Motores', codigo: '2340', descricao: 'Tempo excedido do motor de envelopes' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Motores', codigo: '2600', descricao: 'Erro no motor do alimentador de papel 1' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Motores', codigo: '2610', descricao: 'Erro no motor do alimentador de papel 2' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Motores', codigo: '2620', descricao: 'Erro no motor do alimentador de papel 3' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Motores', codigo: '2630', descricao: 'Erro no motor do alimentador de papel 4' },
+
+    // 4. Scanner, CIS e unidade de leitura
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Scanner / CIS', codigo: '3100', descricao: 'Erro de posição do carro do scanner', solucao: 'Verificar motor, correia e sensor de posição inicial.' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Scanner / CIS', codigo: '3200', descricao: 'Erro da lâmpada de exposição', solucao: 'Verificar placa LED, iluminação e conexões.' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Scanner / CIS', codigo: '3210', descricao: 'Erro da lâmpada CIS', solucao: 'Verificar CIS, cabo flat e placa de conexão CIS.' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Scanner / CIS', codigo: '3500', descricao: 'Erro de comunicação entre scanner e ASIC', solucao: 'Verificar comunicação da placa CCD com a placa principal.' },
+
+    // 5. Laser, alta tensão e fusor
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Laser / Fusor', codigo: '4000', descricao: 'Erro de estabilização do motor Polygon' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Laser / Fusor', codigo: '4101', descricao: 'Erro de estabilização do sinal BD' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Alta Tensão', codigo: '5100', descricao: 'Erro de corrente de carga (alta tensão)' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Fusor', codigo: '6000', descricao: 'Fio do aquecedor central do fusor interrompido' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Fusor', codigo: '6020', descricao: 'Temperatura excessivamente alta do termistor 2 do fusor' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Fusor', codigo: '6030', descricao: 'Fio do termistor 2 do fusor interrompido' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Fusor', codigo: '6120', descricao: 'Temperatura excessivamente alta do termistor 1' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Fusor', codigo: '6130', descricao: 'Fio do termistor 1 interrompido' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Fusor / Placa', codigo: '6400', descricao: 'Erro do sinal Zero Cross' },
+
+    // 6. Toner, revelador, cilindro e temperatura
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Toner / Imagem', codigo: '7000', descricao: 'Erro no motor do toner', solucao: 'Verificar motor de toner, engrenagens e chicote.' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Toner / Imagem', codigo: '7100', descricao: 'Erro no sensor de toner', solucao: 'Verificar sensor de toner e unidade reveladora.' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Revelador', codigo: '7400', descricao: 'Unidade reveladora não instalada ou não detectada', solucao: 'Verificar instalação do revelador e sensor de presença.' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Cilindro', codigo: '7410', descricao: 'Incompatibilidade do tipo de unidade do cilindro', solucao: 'Verificar unidade de cilindro, EEPROM e contatos.' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Sensores', codigo: '7800', descricao: 'Fio do sensor de temperatura interrompido', solucao: 'Verificar sensor de temperatura e chicote.' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Sensores', codigo: '7810', descricao: 'Fio do sensor de temperatura em curto-circuito', solucao: 'Verificar sensor de temperatura e chicote.' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Cilindro', codigo: '7900', descricao: 'Erro na EEPROM da unidade do cilindro', solucao: 'Verificar placa da unidade de cilindro e comunicação EEPROM.' },
+
+    // 7. ARDF – Alimentador automático de documentos
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'ARDF', codigo: '9000', descricao: 'Sensor de temporização do original não acionado' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'ARDF', codigo: '9001', descricao: 'Atolamento de original pequeno' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'ARDF', codigo: '9002', descricao: 'Atolamento detectado no início do transporte' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'ARDF', codigo: '9010', descricao: 'ARDF aberto durante a alimentação' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'ARDF', codigo: '9030', descricao: 'Detecção de alimentação de múltiplas folhas' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'ARDF', codigo: '9031', descricao: 'Erro no sensor de alimentação múltipla' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'ARDF', codigo: '9060', descricao: 'Tempo excedido do motor de alimentação' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'ARDF', codigo: '9061', descricao: 'Tempo excedido do motor de transporte' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'ARDF', codigo: '9110', descricao: 'Sensor de registro não desligou' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'ARDF', codigo: '9180', descricao: 'Erro no motor reversor do ARDF' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'ARDF', codigo: '9200', descricao: 'Erro de comunicação da placa de alimentação múltipla' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'ARDF', codigo: '9220', descricao: 'Erro de backup da placa de alimentação múltipla' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'ARDF', codigo: '9300', descricao: 'Sensor de temporização traseiro não acionado' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'ARDF', codigo: '9310', descricao: 'Sensor de temporização traseiro não desligou' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'ARDF', codigo: '9400', descricao: 'Sensor de temporização não acionado' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'ARDF', codigo: '9410', descricao: 'Sensor de temporização não desligou' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'ARDF', codigo: '9600', descricao: 'Sensor de saída não acionado' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'ARDF', codigo: '9610', descricao: 'Sensor de saída não desligou' },
+
+    // 8. Erros de comunicação e firmware
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Comunicação / Firmware', codigo: 'F000', descricao: 'Falha de comunicação entre placa principal e painel' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Firmware / Placa', codigo: 'F010', descricao: 'Erro de checksum da placa principal' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', codigo: 'F020', descricao: 'Erro de checksum da memória RAM' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Comunicação', codigo: 'F040', descricao: 'Falha de comunicação entre controlador e mecanismo de impressão' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Firmware / ROM', codigo: 'F050', descricao: 'Erro de checksum da ROM do mecanismo de impressão' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Firmware / Scanner', codigo: 'F051', descricao: 'Erro de checksum da ROM do mecanismo do scanner' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Controle / Scanner', codigo: 'F12X', descricao: 'Anormalidade na seção de controle do scanner' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Controle / Fax', codigo: 'F14X', descricao: 'Anormalidade na seção de controle do fax' },
+
+    // 9. Atolamentos do duplex
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Duplex / Atolamento', codigo: '4401', descricao: 'Sensor duplex 2 não acionado – gaveta 1' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Duplex / Atolamento', codigo: '4402', descricao: 'Sensor duplex 2 não acionado – gaveta 2' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Duplex / Atolamento', codigo: '4403', descricao: 'Sensor duplex 2 não acionado – gaveta 3' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Duplex / Atolamento', codigo: '4404', descricao: 'Sensor duplex 2 não acionado – gaveta 4' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Duplex / Atolamento', codigo: '4405', descricao: 'Sensor duplex 2 não acionado – gaveta 5' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Duplex / Atolamento', codigo: '4409', descricao: 'Sensor duplex 2 não acionado – bandeja multipropósito' },
+    { modelo: 'Kyocera ECOSYS M3655idn', marca: 'Kyocera', categoria: 'Duplex / Atolamento', codigo: '4418', descricao: 'Sensor duplex 2 permanece acionado' },
+    // === EPSON WORKFORCE PRO (WF-M5799, WF-C5790, WF-M5899, WF-C5890) ===
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner / ADF', codigo: '100001', descricao: 'ADF PID – velocidade excessiva', solucao: 'Verificar motor do ADF e controle de velocidade PID.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner / ADF', codigo: '100002', descricao: 'ADF PID – rotação reversa', solucao: 'Verificar conexão e inversão do motor do ADF.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner / ADF', codigo: '100003', descricao: 'ADF PID – motor bloqueado', solucao: 'Mecanismo do ADF travado. Verificar engrenagens e roletes.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner / ADF', codigo: '100005', descricao: 'ADF PID – carga excessiva', solucao: 'Obstrução física no trajeto ou atrito nos roletes do ADF.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner / ADF', codigo: '100006', descricao: 'ADF PID – tempo de acionamento excedido', solucao: 'Tempo limite esgotado para o movimento do motor ADF.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner / ADF', codigo: '100016', descricao: 'Falha na detecção da posição inicial (HP)', solucao: 'Verificar sensor de posição inicial (HP) e atuador mecânico do ADF.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner / ADF', codigo: '100017', descricao: 'Distância de detecção de contato excedida' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner / ADF', codigo: '100020', descricao: 'Falha de medição' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner / ADF', codigo: '100032', descricao: 'Falha na iluminação LED', solucao: 'Verificar barra de LED e cabo flat do scanner.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner / ADF', codigo: '100048', descricao: 'Falha de conexão MAIN-B', solucao: 'Verificar cabos flat e conexões entre a placa principal e MAIN-B.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner / ADF', codigo: '100050', descricao: 'Divergência de versão ROM MAIN-B', solucao: 'Verificar compatibilidade de firmware da placa MAIN-B.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner / ADF', codigo: '100054', descricao: 'Erro de atolamento de papel' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner FB', codigo: '100065', descricao: 'Motor PID FB com velocidade excessiva' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner FB', codigo: '100066', descricao: 'Motor PID FB com rotação reversa' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner FB', codigo: '100067', descricao: 'Motor PID FB bloqueado', solucao: 'Carro do scanner preso. Verificar correia, trilhos e motor do scanner plano.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner FB', codigo: '100069', descricao: 'Motor PID FB com carga excessiva', solucao: 'Verificar atrito no trilho do carro óptico e lubrificação.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner FB', codigo: '100070', descricao: 'Tempo de acionamento do motor FB excedido' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner FB', codigo: '100073', descricao: 'Sensor BS+ do scanner com velocidade excessiva' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner FB', codigo: '100074', descricao: 'Sensor BS+ com rotação reversa' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner FB', codigo: '100075', descricao: 'Sensor BS+ bloqueado' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner FB', codigo: '100077', descricao: 'Sensor BS+ com carga excessiva' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Scanner FB', codigo: '100078', descricao: 'Tempo de acionamento do BS+ excedido' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Carro CR', codigo: '000020', descricao: 'Motor CR – tempo de acionamento excedido', solucao: 'Mecanismo do carro de impressão (CR). Verificar motor e correia.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Carro CR', codigo: '000021', descricao: 'Motor CR – carga excessiva', solucao: 'Limpar fita encoder do carro, lubrificar trilho e checar atrito.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Carro CR', codigo: '000022', descricao: 'Motor CR – velocidade excessiva', solucao: 'Fita encoder suja de tinta ou sensor do encoder com defeito.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Carro CR', codigo: '000023', descricao: 'Motor CR – rotação reversa' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Carro CR', codigo: '000024', descricao: 'Motor CR – bloqueio', solucao: 'Carro travado. Verificar objetos estranhos no caminho do carro.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Carro CR', codigo: '000025', descricao: 'Motor CR – velocidade abaixo do esperado' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Carro CR', codigo: '000027', descricao: 'Motor CR – velocidade excessiva, condição 2' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Carro CR', codigo: '000030', descricao: 'Posicionamento de carga CR – tempo excedido' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Carro CR', codigo: '000031', descricao: 'Posicionamento de carga CR – carga excessiva' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Carro CR', codigo: '000032', descricao: 'Posicionamento de carga CR – velocidade excessiva' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Carro CR', codigo: '000033', descricao: 'Posicionamento de carga CR – rotação reversa' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Alimentação PF', codigo: '000040', descricao: 'Motor PF – tempo de acionamento excedido', solucao: 'Mecanismo de avanço de papel (PF). Verificar motor PF.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Alimentação PF', codigo: '000041', descricao: 'Motor PF – carga excessiva', solucao: 'Verificar disco encoder circular sujo, buchas e roletes travados.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Alimentação PF', codigo: '000042', descricao: 'Motor PF – velocidade excessiva', solucao: 'Sensor do disco encoder ou disco transparente sujo.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Alimentação PF', codigo: '000043', descricao: 'Motor PF – rotação reversa' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Alimentação PF', codigo: '000044', descricao: 'Motor PF – bloqueio', solucao: 'Alimentação travada por papel atolado ou engrenagem danificada.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Alimentação PF', codigo: '000050', descricao: 'Posicionamento PF – tempo excedido' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Alimentação PF', codigo: '000051', descricao: 'Posicionamento PF – carga excessiva' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Alimentação PF', codigo: '000052', descricao: 'Posicionamento PF – velocidade excessiva' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Alimentação PF', codigo: '000053', descricao: 'Posicionamento PF – rotação reversa' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Puxador ASF', codigo: '000060', descricao: 'Motor ASF – tempo excedido', solucao: 'Alimentador automático de folhas (ASF).' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Puxador ASF', codigo: '000061', descricao: 'Motor ASF – carga excessiva' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Puxador ASF', codigo: '000062', descricao: 'Motor ASF – velocidade excessiva' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Puxador ASF', codigo: '000063', descricao: 'Motor ASF – rotação reversa' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Puxador ASF', codigo: '000064', descricao: 'Motor ASF – bloqueio', solucao: 'Mecanismo do alimentador de folhas (ASF) travado.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Puxador ASF', codigo: '000070', descricao: 'Posicionamento ASF – tempo excedido' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Puxador ASF', codigo: '000071', descricao: 'Posicionamento ASF – carga excessiva' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Puxador ASF', codigo: '000072', descricao: 'Posicionamento ASF – velocidade excessiva' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Puxador ASF', codigo: '000073', descricao: 'Posicionamento ASF – rotação reversa' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Segundo ASF', codigo: '000080', descricao: 'Segundo ASF – tempo excedido' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Segundo ASF', codigo: '000081', descricao: 'Segundo ASF – carga excessiva' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Segundo ASF', codigo: '000082', descricao: 'Segundo ASF – velocidade excessiva' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Segundo ASF', codigo: '000083', descricao: 'Segundo ASF – rotação reversa' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Segundo ASF', codigo: '000084', descricao: 'Segundo ASF – bloqueio' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Segundo ASF', codigo: '000090', descricao: 'Segundo ASF – posicionamento excedido' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Segundo ASF', codigo: '000091', descricao: 'Segundo ASF – posicionamento com carga excessiva' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Segundo ASF', codigo: '000092', descricao: 'Segundo ASF – posicionamento com velocidade excessiva' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Segundo ASF', codigo: '000093', descricao: 'Segundo ASF – posicionamento com rotação reversa' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Sistema de Tinta', codigo: '000100', descricao: 'Motor IS – tempo de acionamento excedido', solucao: 'Sistema de tinta / bomba de sucção (Ink System).' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Sistema de Tinta', codigo: '000101', descricao: 'Motor IS – carga excessiva', solucao: 'Verificar bomba de purga ou tubos de tinta obstruídos.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Sistema de Tinta', codigo: '000102', descricao: 'Motor IS – velocidade excessiva' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Sistema de Tinta', codigo: '000103', descricao: 'Motor IS – rotação reversa' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Sistema de Tinta', codigo: '000104', descricao: 'Motor IS – bloqueio', solucao: 'Bomba de tinta ou estação de limpeza travada.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Mecanismo LFT', codigo: '000180', descricao: 'Motor LFT2 – tempo excedido' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Mecanismo LFT', codigo: '000181', descricao: 'Motor LFT2 – carga excessiva' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Mecanismo LFT', codigo: '000182', descricao: 'Motor LFT2 – velocidade excessiva' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Mecanismo LFT', codigo: '000184', descricao: 'Motor LFT2 – bloqueio' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Mecanismo DCP', codigo: '001012', descricao: 'Motor DCP1 – tempo de acionamento excedido' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Eletrônica / Scanner', codigo: '060001', descricao: 'Erro interno causado por falha do scanner', solucao: 'Verificar conexões e cabo flat da unidade de scanner.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Software / Driver', codigo: '060002', descricao: 'Incompatibilidade de driver' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Placa PCD', codigo: '060003', descricao: 'Falha no comando de verificação PCD' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Placa PCD', codigo: '060008', descricao: 'Divergência de versão PCD SOC', solucao: 'Firmware incompatível com a placa controladora.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Chip / Suprimento', codigo: '033006', descricao: 'Erro de leitura da CRCM', solucao: 'Falha na leitura do chip dos cartuchos/bolsas de tinta (CRCM).' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Chip / Suprimento', codigo: '033007', descricao: 'Erro de gravação da CRCM', solucao: 'Falha ao atualizar dados no chip do suprimento.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Chip / Suprimento', codigo: '033008', descricao: 'Erro de acesso à CRCM por firmware' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Chip / CSIC', codigo: '033010', descricao: 'Falha de acesso ao CSIC', solucao: 'Verificar contatos elétricos dos slots de tinta ou chip queimado.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Calibração', codigo: '190000', descricao: 'Erro de calibração' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Segurança / Tampa', codigo: '030004', descricao: 'Parada de emergência por abertura de tampa', solucao: 'Verificar se todas as tampas estão fechadas e sensores íntegros.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Cabeça de Impressão', codigo: '031001', descricao: 'Detecção X-Hot antes da impressão', solucao: 'Superaquecimento na cabeça de impressão (X-Hot). Verificar flat e cabeça.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Cabeça de Impressão', codigo: '031002', descricao: 'Detecção X-Hot após flushing', solucao: 'Aquecimento excessivo dos elementos da cabeça após limpeza/purga.' },
+    { modelo: 'Epson WorkForce Pro', marca: 'Epson', categoria: 'Placa / Transistor', codigo: '031003', descricao: 'Erro de temperatura do transistor', solucao: 'Transistores de disparo da cabeça superaquecidos na placa lógica.' },
+  ];
+  window.LISTA_CODIGOS_ERRO = LISTA_CODIGOS_ERRO;
+
+  // Filtro de modelo selecionado pelo operador ou detectado pelo SELB
+  let _opFiltroModeloErro = 'auto'; // 'auto' (pega do SELB), 'all', 'Ricoh MP 501', 'Ricoh SP 3710SF', 'Kyocera ECOSYS M3655idn'
+
+  
+  // ── VISUALIZADOR DE MANUAIS TÉCNICOS (GOOGLE DRIVE / PDF) ──
+  const DRIVE_FOLDER_PADRAO = 'https://drive.google.com/drive/folders/13wFVPqzLCXr9dMlN6Rli7pcR0EQ5n5t3?usp=sharing';
+
+  // Dicionário com URLs/IDs de manuais específicos por modelo no Google Drive
+  window.MAPA_MANUAIS_MODELOS = {
+  "Brother L5500": "https://drive.google.com/file/d/1TzI8e1Dxs9QsygRt-OXZDJjlq0pqepua/view?usp=sharing",
+  "Brother L5502": "https://drive.google.com/file/d/1TzI8e1Dxs9QsygRt-OXZDJjlq0pqepua/view?usp=sharing",
+  "Brother L5600": "https://drive.google.com/file/d/1TzI8e1Dxs9QsygRt-OXZDJjlq0pqepua/view?usp=sharing",
+  "Brother L5700": "https://drive.google.com/file/d/1TzI8e1Dxs9QsygRt-OXZDJjlq0pqepua/view?usp=sharing",
+  "Brother L5750": "https://drive.google.com/file/d/1TzI8e1Dxs9QsygRt-OXZDJjlq0pqepua/view?usp=sharing",
+  "Brother L5800": "https://drive.google.com/file/d/1TzI8e1Dxs9QsygRt-OXZDJjlq0pqepua/view?usp=sharing",
+  "Brother L5900": "https://drive.google.com/file/d/1TzI8e1Dxs9QsygRt-OXZDJjlq0pqepua/view?usp=sharing",
+  "Brother L6600": "https://drive.google.com/file/d/1TzI8e1Dxs9QsygRt-OXZDJjlq0pqepua/view?usp=sharing",
+  "Brother L6700": "https://drive.google.com/file/d/1TzI8e1Dxs9QsygRt-OXZDJjlq0pqepua/view?usp=sharing",
+  "Brother L6750": "https://drive.google.com/file/d/1TzI8e1Dxs9QsygRt-OXZDJjlq0pqepua/view?usp=sharing",
+  "Brother L6800": "https://drive.google.com/file/d/1TzI8e1Dxs9QsygRt-OXZDJjlq0pqepua/view?usp=sharing",
+  "Brother L6900": "https://drive.google.com/file/d/1TzI8e1Dxs9QsygRt-OXZDJjlq0pqepua/view?usp=sharing",
+  "Epson WF-M5799": "https://drive.google.com/file/d/14hqrDdBYYrdW0NjTOuGzGVHIIgpNRfra/view?usp=sharing",
+  "Epson WF-M5299": "https://drive.google.com/file/d/14hqrDdBYYrdW0NjTOuGzGVHIIgpNRfra/view?usp=sharing",
+  "Epson WF-M5899": "https://drive.google.com/file/d/14hqrDdBYYrdW0NjTOuGzGVHIIgpNRfra/view?usp=sharing",
+  "Epson WorkForce Pro": "https://drive.google.com/file/d/14hqrDdBYYrdW0NjTOuGzGVHIIgpNRfra/view?usp=sharing",
+  "Epson ET-5170": "https://drive.google.com/file/d/1aHyzi7Ul_EUR_Brb1g0mYzIf0CZRiCWO/view?usp=sharing",
+  "Epson ET-5180": "https://drive.google.com/file/d/1aHyzi7Ul_EUR_Brb1g0mYzIf0CZRiCWO/view?usp=sharing",
+  "Epson ET-5150": "https://drive.google.com/file/d/1aHyzi7Ul_EUR_Brb1g0mYzIf0CZRiCWO/view?usp=sharing",
+  "Epson L6490": "https://drive.google.com/file/d/1aHyzi7Ul_EUR_Brb1g0mYzIf0CZRiCWO/view?usp=sharing",
+  "Epson WF-C5810": "https://drive.google.com/drive/folders/1uYOrqP_I4_KKtaxn4j-wZx74DR_DdWj0",
+  "Epson WF-C5890": "https://drive.google.com/drive/folders/1uYOrqP_I4_KKtaxn4j-wZx74DR_DdWj0",
+  "Epson WF-C5310": "https://drive.google.com/drive/folders/1uYOrqP_I4_KKtaxn4j-wZx74DR_DdWj0",
+  "Epson WF-C5390": "https://drive.google.com/drive/folders/1uYOrqP_I4_KKtaxn4j-wZx74DR_DdWj0",
+  "Kyocera ECOSYS M3655idn": "https://drive.google.com/file/d/1JFXXa3kA302RNLOhryfGaOun-wPTME_N/view?usp=sharing",
+  "Kyocera ECOSYS M3660idn": "https://drive.google.com/file/d/1JFXXa3kA302RNLOhryfGaOun-wPTME_N/view?usp=sharing",
+  "Kyocera M3655idn": "https://drive.google.com/file/d/1JFXXa3kA302RNLOhryfGaOun-wPTME_N/view?usp=sharing",
+  "Kyocera M3660idn": "https://drive.google.com/file/d/1JFXXa3kA302RNLOhryfGaOun-wPTME_N/view?usp=sharing",
+  "Kyocera M2135": "https://drive.google.com/file/d/1eQsD08wZ-OOmli32ipJW6Tp9E8WAqKUq/view?usp=sharing",
+  "Kyocera M2635": "https://drive.google.com/file/d/1eQsD08wZ-OOmli32ipJW6Tp9E8WAqKUq/view?usp=sharing",
+  "Kyocera M2735": "https://drive.google.com/file/d/1eQsD08wZ-OOmli32ipJW6Tp9E8WAqKUq/view?usp=sharing",
+  "Kyocera M2040": "https://drive.google.com/file/d/1eQsD08wZ-OOmli32ipJW6Tp9E8WAqKUq/view?usp=sharing",
+  "Kyocera M2540": "https://drive.google.com/file/d/1eQsD08wZ-OOmli32ipJW6Tp9E8WAqKUq/view?usp=sharing",
+  "Kyocera M2640": "https://drive.google.com/file/d/1eQsD08wZ-OOmli32ipJW6Tp9E8WAqKUq/view?usp=sharing",
+  "Lexmark MX321": "https://drive.google.com/file/d/1Z6bNbcvpO94rL6-6u3OhpFXB0be1EqYj/view?usp=sharing",
+  "Lexmark MX421": "https://drive.google.com/file/d/1Z6bNbcvpO94rL6-6u3OhpFXB0be1EqYj/view?usp=sharing",
+  "Lexmark MX421ade": "https://drive.google.com/file/d/1Z6bNbcvpO94rL6-6u3OhpFXB0be1EqYj/view?usp=sharing",
+  "Lexmark MX522": "https://drive.google.com/file/d/1Z6bNbcvpO94rL6-6u3OhpFXB0be1EqYj/view?usp=sharing",
+  "Lexmark XM1242": "https://drive.google.com/file/d/1Z6bNbcvpO94rL6-6u3OhpFXB0be1EqYj/view?usp=sharing",
+  "Lexmark MX610": "https://drive.google.com/file/d/1Z6iUicO4JJoddB__sTi2OzwliqiMtKUl/view?usp=sharing",
+  "Lexmark MX611": "https://drive.google.com/file/d/1Z6iUicO4JJoddB__sTi2OzwliqiMtKUl/view?usp=sharing",
+  "Lexmark MX617": "https://drive.google.com/file/d/1Z6iUicO4JJoddB__sTi2OzwliqiMtKUl/view?usp=sharing",
+  "Lexmark MX622": "https://drive.google.com/file/d/1IE8RpEb9ABj1RUvhWrldn9UjtGRkVGtL/view?usp=sharing",
+  "Lexmark MB2650": "https://drive.google.com/file/d/1IE8RpEb9ABj1RUvhWrldn9UjtGRkVGtL/view?usp=sharing",
+  "Lexmark XM3250": "https://drive.google.com/file/d/1IE8RpEb9ABj1RUvhWrldn9UjtGRkVGtL/view?usp=sharing",
+  "Ricoh MP 501": "https://drive.google.com/file/d/1R6IN1pHb1LH2u-N4k4oFljEdR5G0sxDr/view?usp=sharing",
+  "Ricoh MP 601": "https://drive.google.com/file/d/1R6IN1pHb1LH2u-N4k4oFljEdR5G0sxDr/view?usp=sharing",
+  "Ricoh SP 5300": "https://drive.google.com/file/d/1R6IN1pHb1LH2u-N4k4oFljEdR5G0sxDr/view?usp=sharing",
+  "Ricoh SP 5310": "https://drive.google.com/file/d/1R6IN1pHb1LH2u-N4k4oFljEdR5G0sxDr/view?usp=sharing",
+  "Ricoh SP 3710SF": "https://drive.google.com/file/d/1idPANL29iBOKosbtXbgggA6v3Eu8g7B7/view?usp=sharing",
+  "Ricoh SP 3710": "https://drive.google.com/file/d/1idPANL29iBOKosbtXbgggA6v3Eu8g7B7/view?usp=sharing",
+  "Ricoh P 311": "https://drive.google.com/file/d/1idPANL29iBOKosbtXbgggA6v3Eu8g7B7/view?usp=sharing",
+  "Ricoh P 310": "https://drive.google.com/file/d/1idPANL29iBOKosbtXbgggA6v3Eu8g7B7/view?usp=sharing",
+  "Ricoh M 320": "https://drive.google.com/file/d/1idPANL29iBOKosbtXbgggA6v3Eu8g7B7/view?usp=sharing",
+  "Ricoh SP 330": "https://drive.google.com/file/d/1idPANL29iBOKosbtXbgggA6v3Eu8g7B7/view?usp=sharing",
+  "Ricoh IM 430F": "https://drive.google.com/file/d/1WGvXw9KunIJSBM7oVLLuzX9OTF68xF99/view?usp=sharing",
+  "Ricoh IM 430": "https://drive.google.com/file/d/1WGvXw9KunIJSBM7oVLLuzX9OTF68xF99/view?usp=sharing",
+  "Ricoh IM 550": "https://drive.google.com/file/d/1YpHVCO3iJuWkAvjqMOx4uETY8yEE1nGg/view?usp=sharing",
+  "Ricoh IM 600": "https://drive.google.com/file/d/1YpHVCO3iJuWkAvjqMOx4uETY8yEE1nGg/view?usp=sharing",
+  "Ricoh IM C320F": "https://drive.google.com/file/d/1SxUp_-BrHzMfIsKZmi36TPGZqDAPEqeY/view?usp=sharing",
+  "Ricoh IM C320": "https://drive.google.com/file/d/1SxUp_-BrHzMfIsKZmi36TPGZqDAPEqeY/view?usp=sharing",
+  "Ricoh MP C307": "https://drive.google.com/file/d/1ac2KOMGHjSI13zcDDyy848KttWeat6d5/view?usp=sharing",
+  "Ricoh MP C407": "https://drive.google.com/file/d/1ac2KOMGHjSI13zcDDyy848KttWeat6d5/view?usp=sharing",
+  "Ricoh MP C2003": "https://drive.google.com/file/d/1C15nju60J8Td2csFfztG37sXiSVacLM_/view?usp=sharing",
+  "Ricoh MP C2503": "https://drive.google.com/file/d/1C15nju60J8Td2csFfztG37sXiSVacLM_/view?usp=sharing",
+  "Ricoh MP C2004": "https://drive.google.com/file/d/1bPUtUQ2meMYJZrImkUXqkYCtyqbWUwYy/view?usp=sharing",
+  "Ricoh MP C2504": "https://drive.google.com/file/d/1bPUtUQ2meMYJZrImkUXqkYCtyqbWUwYy/view?usp=sharing",
+  "Ricoh MP C3004": "https://drive.google.com/file/d/16ZDluwHIR5F3VsApKon-3aXutcBbhbrr/view?usp=sharing",
+  "Ricoh MP C3504": "https://drive.google.com/file/d/16ZDluwHIR5F3VsApKon-3aXutcBbhbrr/view?usp=sharing",
+  "Ricoh MP C4504": "https://drive.google.com/file/d/16ZDluwHIR5F3VsApKon-3aXutcBbhbrr/view?usp=sharing",
+  "Ricoh MP C5504": "https://drive.google.com/file/d/16ZDluwHIR5F3VsApKon-3aXutcBbhbrr/view?usp=sharing",
+  "Ricoh MP C6004": "https://drive.google.com/file/d/16ZDluwHIR5F3VsApKon-3aXutcBbhbrr/view?usp=sharing",
+  "Ricoh IM C2000": "https://drive.google.com/file/d/10PGynLfE8FGJdNY2JshsVP5abShA0AZ-/view?usp=sharing",
+  "Ricoh IM C2500": "https://drive.google.com/file/d/10PGynLfE8FGJdNY2JshsVP5abShA0AZ-/view?usp=sharing",
+  "Ricoh IM C3000": "https://drive.google.com/file/d/10PGynLfE8FGJdNY2JshsVP5abShA0AZ-/view?usp=sharing",
+  "Ricoh IM C3500": "https://drive.google.com/file/d/10PGynLfE8FGJdNY2JshsVP5abShA0AZ-/view?usp=sharing",
+  "Ricoh IM C4500": "https://drive.google.com/file/d/10PGynLfE8FGJdNY2JshsVP5abShA0AZ-/view?usp=sharing",
+  "Ricoh IM C5500": "https://drive.google.com/file/d/10PGynLfE8FGJdNY2JshsVP5abShA0AZ-/view?usp=sharing",
+  "Ricoh IM C6000": "https://drive.google.com/file/d/10PGynLfE8FGJdNY2JshsVP5abShA0AZ-/view?usp=sharing",
+  "Samsung M4070": "https://drive.google.com/file/d/1_2XAgFyiym37bcezPVeO9xzw5hXlxHgC/view?usp=sharing",
+  "Samsung ProXpress M4070": "https://drive.google.com/file/d/1_2XAgFyiym37bcezPVeO9xzw5hXlxHgC/view?usp=sharing",
+  "Samsung M4070FR": "https://drive.google.com/file/d/1_2XAgFyiym37bcezPVeO9xzw5hXlxHgC/view?usp=sharing",
+  "Samsung M4070FX": "https://drive.google.com/file/d/1_2XAgFyiym37bcezPVeO9xzw5hXlxHgC/view?usp=sharing"
+};
+
+  function _converterUrlParaDrivePreview(url) {
+    if (!url) return '';
+    // Extrai o ID do arquivo do Drive se houver
+    const mFile = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+    const mId = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    const fileId = mFile ? mFile[1] : (mId ? mId[1] : (!url.includes('/') && url.length > 15 ? url : null));
+
+    if (fileId) {
+      // Abre no leitor técnico do próprio sistema com Lupa / Busca ativa!
+      return 'leitor-manual.html?id=' + fileId;
+    }
+
+    // Se for link de pasta (/folders/ID)
+    const mFolder = url.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+    if (mFolder) {
+      return '__FOLDER__:' + mFolder[1];
+    }
+    return url;
+  }
+
+  // Detecta o modelo do equipamento ativo a partir do nome em #op-equip-name ou do SELB
+  function _opDetectarModeloSelb(rawInput) {
+    // 1) Se recebeu string direta, usa ela; senão tenta pegar do DOM
+    let raw = rawInput || '';
+    if (!raw) {
+      try {
+        const el = document.getElementById('op-equip-name');
+        if (el && el.textContent && el.textContent.trim()) raw = el.textContent.trim();
+      } catch(e) {}
+    }
+    if (!raw && typeof opGetModeloAtual === 'function') {
+      raw = opGetModeloAtual() || '';
+    }
+    if (!raw) return null;
+
+    const s = String(raw).toUpperCase();
+
+    // Brother
+    if (s.includes('BROTHER') || /L[56]\d{3}/.test(s)) {
+      if (/L6[6-9]\d{2}/.test(s) || s.includes('L6600') || s.includes('L6700') || s.includes('L6750') || s.includes('L6800') || s.includes('L6900')) return 'Brother L6600';
+      return 'Brother L5500';
+    }
+    // Epson WorkForce Pro Monochrome
+    if (s.includes('5799') || s.includes('WF-M5') || s.includes('WFM5') || s.includes('5299') || s.includes('5899')) return 'Epson WorkForce Pro';
+    // Epson WorkForce Pro Colorido
+    if (s.includes('WF-C') || s.includes('WFC') || s.includes('C5810') || s.includes('C5890') || s.includes('C5310') || s.includes('C5390')) return 'Epson WF-C5810';
+    // Epson EcoTank / L series
+    if (s.includes('ET-5') || s.includes('L6490') || s.includes('ET5')) return 'Epson ET-5170';
+    // Epson genérico
+    if (s.includes('EPSON') || s.includes('WORKFORCE')) return 'Epson WorkForce Pro';
+    // Kyocera M3655/M3660
+    if (s.includes('3655') || s.includes('3660')) return 'Kyocera ECOSYS M3655idn';
+    // Kyocera M2xxx
+    if (s.includes('M2135') || s.includes('M2635') || s.includes('M2735') || s.includes('M2040') || s.includes('M2540') || s.includes('M2640')) return 'Kyocera M2135';
+    // Kyocera genérico
+    if (s.includes('KYOCERA') || s.includes('ECOSYS')) return 'Kyocera ECOSYS M3655idn';
+    // Lexmark MX610/611/617
+    if (s.includes('MX610') || s.includes('MX611') || s.includes('MX617')) return 'Lexmark MX610';
+    // Lexmark MX622/MB2650/XM3250
+    if (s.includes('MX622') || s.includes('MB2650') || s.includes('XM3250')) return 'Lexmark MX622';
+    // Lexmark MX321/421/522/XM1242
+    if (s.includes('MX321') || s.includes('MX421') || s.includes('MX522') || s.includes('XM1242')) return 'Lexmark MX421';
+    // Lexmark genérico
+    if (s.includes('LEXMARK')) return 'Lexmark MX421';
+    // Samsung M4070
+    if (s.includes('4070') || s.includes('M4070')) return 'Samsung M4070';
+    // Ricoh IM C (coloridos grandes)
+    if (s.includes('IMC') || s.includes('IM C') || s.includes('IM-C')) {
+      if (s.includes('320')) return 'Ricoh IM C320F';
+      return 'Ricoh IM C2000';
+    }
+    // Ricoh MP C (coloridos antigos)
+    if ((s.includes('MPC') || s.includes('MP C')) && (s.includes('307') || s.includes('407'))) return 'Ricoh MP C307';
+    if ((s.includes('MPC') || s.includes('MP C')) && (s.includes('2003') || s.includes('2503'))) return 'Ricoh MP C2003';
+    if ((s.includes('MPC') || s.includes('MP C')) && (s.includes('2004') || s.includes('2504'))) return 'Ricoh MP C2004';
+    if (s.includes('MPC') || s.includes('MP C') || s.includes('C300') || s.includes('C350') || s.includes('C450') || s.includes('C550') || s.includes('C600')) return 'Ricoh MP C3004';
+    // Ricoh IM 430
+    if (s.includes('430')) return 'Ricoh IM 430F';
+    // Ricoh IM 550/600
+    if (s.includes('550') || s.includes('600')) return 'Ricoh IM 550';
+    // Ricoh SP 3710 / P311 / M320
+    if (s.includes('3710') || s.includes('P311') || s.includes('P310') || s.includes('M320') || s.includes('SP330') || s.includes('SP 330')) return 'Ricoh SP 3710SF';
+    // Ricoh MP 501/601 / SP 5300/5310
+    if (s.includes('501') || s.includes('601') || s.includes('5300') || s.includes('5310')) return 'Ricoh MP 501';
+    // Ricoh genérico
+    if (s.includes('RICOH') || s.includes('SAVIN') || s.includes('LANIER') || s.includes('GESTETNER')) return 'Ricoh MP 501';
+
+    return null;
+  }
+
+  window.opAbrirManualPdf = function(modeloOuUrl) {
+    // Se recebeu URL direta, abre imediatamente
+    if (modeloOuUrl && (modeloOuUrl.startsWith('http://') || modeloOuUrl.startsWith('https://'))) {
+      window.open(modeloOuUrl, '_blank', 'noopener,noreferrer');
+      return;
+    }
+
+    // Resolução em cascata do modelo:
+    // 1) argumento explícito (ex: 'Ricoh MP 501' passado pelo botão do item de erro)
+    // 2) filtro de aba ativo (quando o usuário clicou na aba Ricoh MP 501, etc.)
+    // 3) detecção automática do SELB / equip-name no DOM
+    let modelo = modeloOuUrl || null;
+
+    if (!modelo && typeof _opFiltroModeloErro !== 'undefined' && _opFiltroModeloErro && _opFiltroModeloErro !== 'all' && _opFiltroModeloErro !== 'auto') {
+      modelo = _opFiltroModeloErro;
+    }
+
+    if (!modelo) {
+      modelo = _opDetectarModeloSelb();
+    }
+
+    // Busca exata no mapa
+    let urlDestino = '';
+    if (modelo && window.MAPA_MANUAIS_MODELOS) {
+      urlDestino = window.MAPA_MANUAIS_MODELOS[modelo] || '';
+
+      // Busca tolerante: se não achou exato, tenta via detecção sobre o nome do modelo
+      if (!urlDestino) {
+        const modeloDetectado = _opDetectarModeloSelb(modelo);
+        if (modeloDetectado) urlDestino = window.MAPA_MANUAIS_MODELOS[modeloDetectado] || '';
+      }
+
+      // Busca por substring como último recurso
+      if (!urlDestino) {
+        const mNorm = String(modelo).toUpperCase();
+        for (const k in window.MAPA_MANUAIS_MODELOS) {
+          if (mNorm.includes(k.toUpperCase()) || k.toUpperCase().includes(mNorm)) {
+            urlDestino = window.MAPA_MANUAIS_MODELOS[k];
+            break;
+          }
+        }
+      }
+    }
+
+    if (!urlDestino) urlDestino = DRIVE_FOLDER_PADRAO;
+
+    // Abre o manual no Google Drive em nova aba
+    window.open(urlDestino, '_blank', 'noopener,noreferrer');
+  };
+
+  window.opFecharManualPdf = function() {};
+
+  window.opSetFiltroModeloErro = function(mod) {
+    _opFiltroModeloErro = mod;
+  };
+
+  window.opFiltrarCodigosErro = function(termo) {
+    // Busca de códigos removida a pedido do usuário
+  };
+
+
   function renderPassos() {
     if (!defeitoAtual) return;
     const def = DEFEITOS_GUIA[defeitoAtual];
@@ -6429,12 +6967,15 @@ function pedPrintLabels() {
       dicasHtml = '<div class="op-dica-card"><div class="op-dica-card-header"><span class="op-dica-card-title">💡 Dica da Equipe' + modeloTag + '</span><span class="op-dica-card-meta">' + d.data + '</span></div><div class="op-dica-card-texto">' + d.texto.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>' + navHtml + '</div>';
     }
 
-    lista.innerHTML = dicasHtml + def.passos.map(function(p, idx) {
+    const passosHtml = '<div id="op-def-passos-container" style="display:flex;flex-direction:column;gap:8px">' + def.passos.map(function(p, idx) {
       const isChecked = !!passosChecados[defeitoAtual][idx];
       const linkHtml = p.link ? (
-        '<div style="margin-top:10px">' +
-          '<a href="' + p.link + '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:8px;padding:9px 14px;background:rgba(79,142,247,0.18);border:1px solid rgba(79,142,247,0.45);border-radius:10px;color:#93c5fd;font-size:12px;font-weight:700;text-decoration:none;transition:all .15s;cursor:pointer">' +
-            '<span>📂</span> ' + (p.linkTexto || 'Acessar Manuais') + ' <span style="font-size:11px">↗</span>' +
+        '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
+          '<button type="button" onclick="event.stopPropagation(); opAbrirManualPdf()" style="display:inline-flex;align-items:center;gap:8px;padding:10px 18px;background:linear-gradient(135deg, rgba(59,130,246,0.35), rgba(37,99,235,0.25));border:1px solid rgba(59,130,246,0.6);border-radius:10px;color:#93c5fd;font-size:12.5px;font-weight:700;cursor:pointer;transition:all .15s;box-shadow:0 4px 12px rgba(37,99,235,0.25)">' +
+            '<span>📖</span> <b>Visualizar Manual</b> <span style="font-size:11px">↗</span>' +
+          '</button>' +
+          '<a href="' + p.link + '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:6px;padding:9px 14px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12);border-radius:10px;color:#cbd5e1;font-size:12px;font-weight:600;text-decoration:none;transition:all .15s;cursor:pointer">' +
+            '<span>📁</span> Abrir Pasta no Drive <span style="font-size:10px">↗</span>' +
           '</a>' +
         '</div>'
       ) : '';
@@ -6457,7 +6998,8 @@ function pedPrintLabels() {
           '</div>' +
         '</div>'
       );
-    }).join('');
+    }).join('') + '</div>';
+    lista.innerHTML = dicasHtml + passosHtml;
   }
 
   window.opDefeitoLimpar = function() {
@@ -6605,7 +7147,7 @@ function pedPrintLabels() {
         {
           n: '5º',
           texto: 'Limpar o equipamento começando pelo ADF (se houver), passando produto na esponja e esfregando por completo.',
-          obs: 'Se não sair a sujeira, aplicar o produto diretamente no equipamento, tomando cuidado para não o lançar nas saídas de ar.'
+          obs: 'Se não sair a sujeira, aplicar o produto diretamente no equipamento, tomando cuidado para não o lançar nas saídas de ar. Para remover colas, utilize álcool ou tira grude.'
         },
         {
           n: '6º',
@@ -7064,6 +7606,9 @@ function pedPrintLabels() {
 
 })();
 </script>
+
+
+
 
 </body>
 </html>

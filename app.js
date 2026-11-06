@@ -1,4 +1,4 @@
-// ── Detecção de DevTools aberto ──
+﻿// ── Detecção de DevTools aberto ──
 (function(){
   const threshold = 160;
   let devOpen = false;
@@ -4164,6 +4164,214 @@ async function importarBackupArquivo(input){
   }
 }
 
+
+// ════════════════════════════════════════
+// BACKUP COMPLETO — ÚLTIMOS 90 DIAS
+// Baixa history, qualidade_registros, operadores, operator_checkins,
+// garantia, maquinas_perdidas, solicitacoes_pecas e backups
+// em formato Excel (.xlsx) ou JSON completo.
+// ════════════════════════════════════════
+async function baixarBackup90Dias(formato) {
+  const statusEl = document.getElementById('admin-backup90-status');
+  const btnXlsx  = document.getElementById('btn-backup90-xlsx');
+  const btnJson  = document.getElementById('btn-backup90-json');
+
+  function setStatus(msg, cor) {
+    if (statusEl) { statusEl.textContent = msg; statusEl.style.color = cor || 'var(--muted)'; }
+  }
+  function setBusy(busy) {
+    if (btnXlsx) { btnXlsx.disabled = busy; btnXlsx.style.opacity = busy ? '.5' : '1'; }
+    if (btnJson) { btnJson.disabled = busy; btnJson.style.opacity = busy ? '.5' : '1'; }
+  }
+
+  setBusy(true);
+  setStatus('⏳ Coletando dados — isso pode levar alguns segundos…');
+
+  try {
+    const agora    = new Date();
+    const corte    = new Date(agora);
+    corte.setDate(corte.getDate() - 90);
+    const corteIso = corte.toISOString();
+    const corteKey = corte.toISOString().slice(0, 10).replace(/-/g, ' ');
+    const corteMs  = corte.getTime();
+
+    setStatus('⏳ Buscando registros de produção (history)…');
+    const { data: histData, error: histErr } = await _supa
+      .from('history')
+      .select('id,date_key,selb,status,start_epoch,raw')
+      .gte('start_epoch', corteMs)
+      .order('start_epoch', { ascending: false });
+    if (histErr) throw new Error('history: ' + histErr.message);
+
+    setStatus('⏳ Buscando registros de qualidade…');
+    const { data: qualData, error: qualErr } = await _supa
+      .from('qualidade_registros')
+      .select('*')
+      .gte('created_at', corteIso)
+      .order('created_at', { ascending: false });
+    const qualRows = qualErr ? [] : (qualData || []);
+
+    setStatus('⏳ Buscando operadores…');
+    const { data: opData, error: opErr } = await _supa
+      .from('operadores')
+      .select('id,name,sector,active,hidden,raw');
+    if (opErr) throw new Error('operadores: ' + opErr.message);
+
+    setStatus('⏳ Buscando check-ins…');
+    const { data: ciData, error: ciErr } = await _supa
+      .from('operator_checkins')
+      .select('uid,date_key')
+      .gte('date_key', corteKey)
+      .order('date_key', { ascending: false });
+    const ciRows = ciErr ? [] : (ciData || []);
+
+    setStatus('⏳ Buscando garantias…');
+    const { data: garData, error: garErr } = await _supa
+      .from('garantia')
+      .select('*')
+      .order('id', { ascending: false })
+      .limit(2000);
+    const garRows = garErr ? [] : (garData || []);
+
+    setStatus('⏳ Buscando máquinas perdidas…');
+    const { data: maqData, error: maqErr } = await _supa
+      .from('maquinas_perdidas')
+      .select('*')
+      .order('id', { ascending: false })
+      .limit(2000);
+    const maqRows = maqErr ? [] : (maqData || []);
+
+    setStatus('⏳ Buscando solicitações de peças…');
+    const { data: pecData, error: pecErr } = await _supa
+      .from('solicitacoes_pecas')
+      .select('*')
+      .gte('ts', corteMs)
+      .order('ts', { ascending: false });
+    const pecRows = pecErr ? [] : (pecData || []);
+
+    setStatus('⏳ Buscando snapshots de backup…');
+    const { data: bkData, error: bkErr } = await _supa
+      .from('backups')
+      .select('date_key,saved_at,motivo,payload')
+      .gte('date_key', corteKey)
+      .order('date_key', { ascending: false });
+    const bkRows = bkErr ? [] : (bkData || []);
+
+    const fmtDate  = (d) => d.toLocaleDateString('pt-BR').replace(/\//g, '-');
+    const nomeBase = 'backup-labtech-90d_' + fmtDate(corte) + '_a_' + fmtDate(agora);
+    const msToDate = (ms) => ms ? new Date(ms).toLocaleString('pt-BR') : '';
+    const flatRaw  = (row) => {
+      const raw = (row.raw && typeof row.raw === 'object') ? row.raw : {};
+      const { raw: _, ...rest } = row;
+      return { ...rest, ...raw };
+    };
+
+    if (formato === 'xlsx') {
+      if (typeof XLSX === 'undefined') throw new Error('Biblioteca XLSX não carregada. Recarregue a página.');
+      setStatus('⏳ Montando planilha Excel…');
+      const wb = XLSX.utils.book_new();
+
+      // Produção
+      const histCols = ['id','date_key','selb','status','data_hora','uid','name','sector','local','equipamento','duracao','motivo'];
+      const histAoa = [histCols, ...(histData || []).map(r => {
+        const f = flatRaw(r);
+        return [r.id, r.date_key, r.selb||f.selb||'', r.status||f.status||'',
+          msToDate(r.start_epoch||f.startEpoch), f.uid||'', f.name||'',
+          f.sector||'', f.local||'', f.equipamento||'', f.duracao||'', f.motivo||''];
+      })];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(histAoa), 'Producao');
+
+      // Qualidade
+      if (qualRows.length) {
+        const qualAoa = [Object.keys(flatRaw(qualRows[0])), ...qualRows.map(r => Object.values(flatRaw(r)))];
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(qualAoa), 'Qualidade');
+      }
+
+      // Operadores
+      const opCols = ['id','name','sector','active','hidden','local','linha','code','pin'];
+      const opAoa = [opCols, ...(opData || []).map(r => {
+        const f = flatRaw(r);
+        return [r.id, r.name||f.name||'', r.sector||f.sector||'', r.active, r.hidden, f.local||'', f.linha||'', f.code||'', f.pin||''];
+      })];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(opAoa), 'Operadores');
+
+      // Check-ins
+      if (ciRows.length) {
+        const ciAoa = [['uid','date_key'], ...ciRows.map(r => [r.uid, r.date_key])];
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(ciAoa), 'Check-ins');
+      }
+
+      // Garantia
+      if (garRows.length) {
+        const garAoa = [Object.keys(flatRaw(garRows[0])), ...garRows.map(r => Object.values(flatRaw(r)))];
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(garAoa), 'Garantia');
+      }
+
+      // Máquinas Perdidas
+      if (maqRows.length) {
+        const maqAoa = [Object.keys(flatRaw(maqRows[0])), ...maqRows.map(r => Object.values(flatRaw(r)))];
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(maqAoa), 'Maq.Perdidas');
+      }
+
+      // Solicitações de Peças
+      if (pecRows.length) {
+        const pecAoa = [Object.keys(flatRaw(pecRows[0])), ...pecRows.map(r => Object.values(flatRaw(r)))];
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(pecAoa), 'Pecas');
+      }
+
+      // Resumo Backups diários
+      const bkAoa = [['date_key','saved_at','motivo','registros'],
+        ...bkRows.map(b => [b.date_key,
+          b.saved_at ? new Date(b.saved_at).toLocaleString('pt-BR') : '',
+          b.motivo||'',
+          b.payload && b.payload.history ? Object.keys(b.payload.history).length : ''])];
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(bkAoa), 'Backups diarios');
+
+      XLSX.writeFile(wb, nomeBase + '.xlsx');
+      setStatus('✅ Excel baixado — ' + (histData||[]).length + ' registros de produção.', 'var(--accent2)');
+
+    } else {
+      setStatus('⏳ Montando JSON…');
+      const payload = {
+        exportadoEm:         agora.toISOString(),
+        periodoInicio:       corte.toISOString(),
+        periodoFim:          agora.toISOString(),
+        totais: {
+          history:             (histData||[]).length,
+          qualidade_registros: qualRows.length,
+          operadores:          (opData||[]).length,
+          operator_checkins:   ciRows.length,
+          garantia:            garRows.length,
+          maquinas_perdidas:   maqRows.length,
+          solicitacoes_pecas:  pecRows.length,
+          backups:             bkRows.length,
+        },
+        history:             histData||[],
+        qualidade_registros: qualRows,
+        operadores:          opData||[],
+        operator_checkins:   ciRows,
+        garantia:            garRows,
+        maquinas_perdidas:   maqRows,
+        solicitacoes_pecas:  pecRows,
+        backups:             bkRows,
+      };
+      const jsonText = JSON.stringify(payload, null, 2);
+      const blob = new Blob([jsonText], { type: 'application/json;charset=utf-8' });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href = url; a.download = nomeBase + '.json';
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 2000);
+      setStatus('✅ JSON baixado — ' + (histData||[]).length + ' registros de produção.', '#60a5fa');
+    }
+
+  } catch(e) {
+    console.error('[Backup 90d]', e);
+    setStatus('❌ Erro: ' + e.message, 'var(--danger)');
+  } finally {
+    setBusy(false);
+  }
+}
 
 // Converte "HH:MM:SS" para segundos totais do dia
 function timeStrToSec(t){
@@ -20780,8 +20988,8 @@ function _fluxolabRenderGrid() {
       const _urgQ = _fluxolabModeloUrgenteQtd(modeloSelb);
       const _urgCor = _urgQ ? _fluxolabModeloUrgenteCor(modeloSelb) : '';
       const urgChip = _fluxolabUrgBadge(_urgQ, 'sm', _urgCor);
-      const _urgBg = _urgCor === 'laranja' ? 'rgba(255,115,0,.15)' : 'rgba(239,68,68,.12)';
-      const _urgBd = _urgCor === 'laranja' ? 'rgba(255,115,0,.75)' : 'rgba(239,68,68,.75)';
+      const _urgBg = _urgCor === 'laranja' ? 'rgba(234,179,8,.15)' : 'rgba(239,68,68,.12)';
+      const _urgBd = _urgCor === 'laranja' ? 'rgba(234,179,8,.75)' : 'rgba(239,68,68,.75)';
       return '<div style="position:relative;display:flex;align-items:center;justify-content:space-between;gap:6px;background:' + (_urgQ ? _urgBg : chipBg) + ';border:1px solid ' + (_urgQ ? _urgBd : chipBd) + ';border-radius:8px;padding:6px 10px;transition:background .15s,opacity .15s;opacity:' + chipOp + '" onmouseover="this.style.background=\'var(--bg4)\'" onmouseout="this.style.background=\'' + chipBg + '\'">'
         + (urgChip ? '<div style="position:absolute;top:4px;right:' + (adminRemoveBtn ? '36px' : '6px') + ';z-index:2;pointer-events:none">' + urgChip + '</div>' : '')
         + '<div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1">'
@@ -22215,9 +22423,9 @@ function fluxolabRenderModelos() {
       if (matchRows.length > 0) {
         rowsToRender = matchRows;
         if (matchRows.length < info.rows.length) {
-          badgeNote = `<div style="padding:6px 14px;background:rgba(255,115,0,.12);border-bottom:1px solid rgba(255,115,0,.35);color:#ffedd5;font-size:11px;display:flex;align-items:center;justify-content:space-between">
+          badgeNote = `<div style="padding:6px 14px;background:rgba(234,179,8,.12);border-bottom:1px solid rgba(234,179,8,.35);color:#fef9c3;font-size:11px;display:flex;align-items:center;justify-content:space-between">
             <span>⚡ Exibindo apenas os <b>${matchRows.length}</b> pedidos de <b>Troca Técnica</b> deste modelo (total: ${info.rows.length}).</span>
-            <button type="button" onclick="event.stopPropagation();fluxolabFiltrarPorBadge(null)" style="background:none;border:none;color:#ff7700;font-weight:700;text-decoration:underline;cursor:pointer;font-size:11px">Mostrar todos os ${info.rows.length}</button>
+            <button type="button" onclick="event.stopPropagation();fluxolabFiltrarPorBadge(null)" style="background:none;border:none;color:#eab308;font-weight:700;text-decoration:underline;cursor:pointer;font-size:11px">Mostrar todos os ${info.rows.length}</button>
           </div>`;
         }
       }
@@ -22266,22 +22474,18 @@ function fluxolabRenderModelos() {
           val = _escDet(r[key]);
         }
         if (key && key === k.tipo && _urgRow) {
-          const pillBg = _isTroca ? 'rgba(255,115,0,0.30)' : 'rgba(239,68,68,0.30)';
-          const pillBd = _isTroca ? '#ff7700' : '#ef4444';
-          const pillTx = _isTroca ? '#ffffff' : '#fee2e2';
+          const pillBg = _isTroca ? 'rgba(234,179,8,0.25)' : 'rgba(239,68,68,0.30)';
+          const pillBd = _isTroca ? '#eab308' : '#ef4444';
+          const pillTx = _isTroca ? '#fef08a' : '#fee2e2';
           const icone  = _isTroca ? '⚡' : '🚨';
           const tagPill = _isTroca
-            ? '<span style="background:#ff7700;color:#000000;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:900;letter-spacing:.04em;margin-left:4px">TROCA TÉCNICA</span>'
+            ? '<span style="background:#eab308;color:#000000;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:900;letter-spacing:.04em;margin-left:4px">TROCA TÉCNICA</span>'
             : '<span style="background:#ef4444;color:#ffffff;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:900;letter-spacing:.04em;margin-left:4px">A INSTALAR</span>';
-          val = `<span style="display:inline-flex;align-items:center;gap:5px;background:${pillBg};border:1.5px solid ${pillBd};color:${pillTx};padding:3px 9px;border-radius:6px;font-weight:800;font-size:11px;white-space:nowrap;box-shadow:0 0 8px ${_isTroca ? 'rgba(255,115,0,0.45)' : 'rgba(239,68,68,0.45)'}"><span class="fx-urg-icon">${icone}</span> ${val} ${tagPill}</span>`;
+          val = `<span style="display:inline-flex;align-items:center;gap:5px;background:${pillBg};border:1.5px solid ${pillBd};color:${pillTx};padding:3px 9px;border-radius:6px;font-weight:800;font-size:11px;white-space:nowrap;box-shadow:0 0 8px ${_isTroca ? 'rgba(234,179,8,0.45)' : 'rgba(239,68,68,0.45)'}"><span class="fx-urg-icon">${icone}</span> ${val} ${tagPill}</span>`;
         }
         return `<td style="padding:7px 12px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border);vertical-align:top">${val}</td>`;
       }).join('');
-      const _rowStyle = _urgRow
-        ? (_isTroca
-            ? ' style="background:linear-gradient(90deg, rgba(255,115,0,0.26) 0%, rgba(255,140,0,0.10) 45%, rgba(255,115,0,0.02) 100%);box-shadow:inset 6px 0 0 #ff6b00"'
-            : ' style="background:linear-gradient(90deg, rgba(239,68,68,0.24) 0%, rgba(220,38,38,0.10) 45%, rgba(239,68,68,0.02) 100%);box-shadow:inset 6px 0 0 #ef4444"')
-        : '';
+      const _rowStyle = '';
       return `<tr${_rowStyle}>${tds}</tr>`;
     }).join('');
     return `<div style="background:var(--bg1);overflow-x:auto">
@@ -22665,25 +22869,18 @@ function fluxolabRenderModelos() {
 
     if (_urgQtd > 0) {
       if (_trocaUrgRows.length > 0 && _instalarUrgRows.length === 0) {
-        // Exclusivo TROCA TÉCNICA -> Laranja Elétrico vibrante
         _urgCor = 'laranja';
         _urgBadge = _fluxolabUrgBadge(_trocaUrgRows.length, null, 'laranja');
-        rowBgFinal = 'linear-gradient(90deg, rgba(255,115,0,0.32) 0%, rgba(255,140,0,0.14) 40%, rgba(255,115,0,0.03) 100%)';
-        rowInset = 'box-shadow:inset 8px 0 0 #ff6b00;';
       } else if (_instalarUrgRows.length > 0 && _trocaUrgRows.length === 0) {
-        // Exclusivo A INSTALAR -> Vermelho Carmim intenso
         _urgCor = 'red';
         _urgBadge = _fluxolabUrgBadge(_instalarUrgRows.length, null, 'red');
-        rowBgFinal = 'linear-gradient(90deg, rgba(239,68,68,0.30) 0%, rgba(220,38,38,0.12) 40%, rgba(239,68,68,0.03) 100%)';
-        rowInset = 'box-shadow:inset 8px 0 0 #ef4444;';
       } else {
-        // Misto: tem Troca Técnica e A Instalar
         _urgCor = 'misto';
         _urgBadge = _fluxolabUrgBadge(_instalarUrgRows.length, null, 'red') + ' ' + _fluxolabUrgBadge(_trocaUrgRows.length, null, 'laranja');
-        rowBgFinal = 'linear-gradient(90deg, rgba(239,68,68,0.28) 0%, rgba(255,115,0,0.16) 40%, rgba(239,68,68,0.03) 100%)';
-        rowInset = 'box-shadow:inset 8px 0 0 #ef4444, inset 16px 0 0 #ff6b00;';
       }
-    } else if (foraDoPlano) {
+    }
+
+    if (foraDoPlano) {
       rowBgFinal = 'rgba(59,130,246,.08)';
       rowInset = 'box-shadow:inset 4px 0 0 #3b82f6;';
     }
@@ -22824,7 +23021,7 @@ function fluxolabRenderModelos() {
       ${_sumCard('nolab',      'No LAB',         _sumTotalLAB,  '#22d3ee',      '🔬')}
       ${_sumCard('faltantes',  'Faltantes',      _sumFaltantes, _sumFaltantes > 0 ? '#ef4444' : '#22c55e', '⚠')}
       ${_sumCard('foraplano',  'Fora do plano',  _sumForaPlano, _sumForaPlano > 0 ? '#60a5fa' : '#22c55e', '●')}
-      ${_sumCard('troca',      'Troca Técnica',  _sumTrocaTec,  '#ff7700',      '⚡')}
+      ${_sumCard('troca',      'Troca Técnica',  _sumTrocaTec,  '#eab308',      '⚡')}
       ${_sumCard('urgencias',  'Urgências',      _sumUrgencias, _sumUrgencias > 0 ? '#ef4444' : '#22c55e', '🚨')}
     </div>
     ${filterBanner}
@@ -23429,9 +23626,9 @@ function fluxolabRenderCaindoHoje() {
            <span style="font-size:18px;font-weight:900;color:${color};font-family:var(--mono);line-height:1">${fmtNum(val)}d</span>
          </td>`;
 
-    const mainRow = `<tr style="background:${_urgQtd ? 'rgba(239,68,68,.10)' : rowBg};${_urgQtd ? 'box-shadow:inset 4px 0 0 #ef4444;' : ''}transition:background .12s;cursor:pointer"
+    const mainRow = `<tr style="background:${rowBg};transition:background .12s;cursor:pointer"
       onclick="(function(el,id,nk){var t=document.getElementById(id);var open=t.style.display!=='none';t.style.display=open?'none':'';var a=el.querySelector('.caindo-arr');if(a)a.style.transform=open?'':'rotate(180deg)';if(open)window._fluxolabCaindoExpanded.delete(nk);else window._fluxolabCaindoExpanded.add(nk);})(this,'${detId}','${normKey}')"
-      onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background='${_urgQtd ? 'rgba(239,68,68,.10)' : rowBg}'">
+      onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background='${rowBg}'">
       <td style="padding:10px 16px;border-bottom:1px solid var(--border);min-width:220px;max-width:340px">
         <div style="display:flex;align-items:center;gap:10px">
           <span class="caindo-arr" style="color:var(--muted);font-size:12px;transition:transform .2s;flex-shrink:0;${isOpen ? 'transform:rotate(180deg)' : ''}">▾</span>
@@ -23789,15 +23986,15 @@ function _fluxolabModeloUrgenteQtd(modeloTexto){
 function _fluxolabUrgBadge(qtd, size, corTipo){
   if (!qtd) return '';
   const sm = size === 'sm';
-  const isLaranja = corTipo === 'laranja' || corTipo === 'orange' || corTipo === 'troca';
+  const isLaranja = corTipo === 'laranja' || corTipo === 'orange' || corTipo === 'troca' || corTipo === 'amarelo' || corTipo === 'yellow';
   const icon = isLaranja ? '⚡' : '🚨';
   const tagText = isLaranja ? 'TROCA TÉCNICA' : 'A INSTALAR';
-  const bg = isLaranja ? 'rgba(255,115,0,.30)' : 'rgba(239,68,68,.30)';
-  const border = isLaranja ? '1.5px solid #ff7700' : '1.5px solid #ef4444';
-  const color = isLaranja ? '#fff7ed' : '#fee2e2';
-  const tagBg = isLaranja ? '#ff7700' : '#ef4444';
+  const bg = isLaranja ? 'rgba(234,179,8,.25)' : 'rgba(239,68,68,.30)';
+  const border = isLaranja ? '1.5px solid #eab308' : '1.5px solid #ef4444';
+  const color = isLaranja ? '#fef08a' : '#fee2e2';
+  const tagBg = isLaranja ? '#eab308' : '#ef4444';
   const tagColor = isLaranja ? '#000000' : '#ffffff';
-  const shadow = isLaranja ? 'box-shadow:0 0 10px rgba(255,115,0,.45);' : 'box-shadow:0 0 10px rgba(239,68,68,.45);';
+  const shadow = isLaranja ? 'box-shadow:0 0 10px rgba(234,179,8,.40);' : 'box-shadow:0 0 10px rgba(239,68,68,.45);';
   const tagPill = sm ? '' : ' <span style="background:' + tagBg + ';color:' + tagColor + ';padding:1.5px 6px;border-radius:4px;font-size:9.5px;font-weight:900;letter-spacing:.04em;margin-left:4px">' + tagText + '</span>';
 
   const iconAnimated = '<span class="fx-urg-icon" style="display:inline-block">' + icon + '</span>';
@@ -30709,10 +30906,20 @@ window.fluxolabAbrirEstagnados = function() {
     host.insertBefore(bar, host.firstChild);
   }
 
+  function injectBackupPanel(host) {
+    if (document.getElementById('admin-backup-90d-panel')) return;
+    var panel = document.createElement('div');
+    panel.id = 'admin-backup-90d-panel';
+    panel.style.cssText = 'background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:16px 20px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px';
+    panel.innerHTML = '<div style="display:flex;align-items:center;gap:10px"><span style="font-size:22px">💾</span><div><div style="font-size:13px;font-weight:700;color:var(--text)">Backup Completo — Últimos 90 dias</div><div id="admin-backup90-status" style="font-size:11px;color:var(--muted);margin-top:2px">Clique em um botão para baixar todos os dados do sistema</div></div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" id="btn-backup90-xlsx" onclick="baixarBackup90Dias(\'xlsx\')" style="background:rgba(61,214,140,.15);border:1px solid rgba(61,214,140,.4);border-radius:9px;color:var(--accent2);font-family:var(--font);font-size:12px;font-weight:700;padding:9px 18px;cursor:pointer">⬇ Baixar Excel (.xlsx)</button><button type="button" id="btn-backup90-json" onclick="baixarBackup90Dias(\'json\')" style="background:rgba(96,165,250,.12);border:1px solid rgba(96,165,250,.35);border-radius:9px;color:#60a5fa;font-family:var(--font);font-size:12px;font-weight:700;padding:9px 18px;cursor:pointer">⬇ Baixar JSON</button></div>';
+    host.insertBefore(panel, host.firstChild);
+  }
+
   function run(){
     var host = document.getElementById('view-admin');
     if (!host) return false;
     injectCss();
+    injectBackupPanel(host);
     buildUsersSection(host);
     buildToolbar(host);
     PANELS.forEach(function(p){ enhance(p[0], p[1], p[2]); });

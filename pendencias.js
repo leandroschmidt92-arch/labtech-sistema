@@ -981,9 +981,7 @@ function pendRenderChecklistDetalhes(stats) {
   const trs = stats.rows.map(r => {
     const _urgDet = typeof _fluxolabRowUrgente === 'function' ? _fluxolabRowUrgente(r) : false;
     const _isTrocaDet = _urgDet && typeof _fluxolabIsTrocaTecnica === 'function' ? _fluxolabIsTrocaTecnica(r, kTipoDet) : false;
-    const _rowStyleDet = _urgDet
-      ? (`style="background:linear-gradient(90deg,${_isTrocaDet ? 'rgba(255,115,0,0.20)' : 'rgba(239,68,68,0.18)'} 0%,transparent 100%);box-shadow:inset 5px 0 0 ${_isTrocaDet ? '#ff6b00' : '#ef4444'}"`)
-      : '';
+    const _rowStyleDet = '';
     const tds = headers.map(([label, key]) => {
       let val = '—';
       if (key && (key === kDiasUteis || key === kDiasAb)) {
@@ -994,14 +992,14 @@ function pendRenderChecklistDetalhes(stats) {
       }
       // Highlight Tipo cell with colored pill
       if (key && key === kTipoDet && _urgDet) {
-        const pBg = _isTrocaDet ? 'rgba(255,115,0,0.28)' : 'rgba(239,68,68,0.28)';
-        const pBd = _isTrocaDet ? '#ff7700' : '#ef4444';
-        const pTx = _isTrocaDet ? '#fff7ed' : '#fee2e2';
+        const pBg = _isTrocaDet ? 'rgba(234,179,8,0.25)' : 'rgba(239,68,68,0.28)';
+        const pBd = _isTrocaDet ? '#eab308' : '#ef4444';
+        const pTx = _isTrocaDet ? '#fef08a' : '#fee2e2';
         const pIco = _isTrocaDet ? '⚡' : '🚨';
         const pTag = _isTrocaDet
-          ? `<span style="background:#ff7700;color:#000;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:900;margin-left:3px">TROCA TÉCNICA</span>`
+          ? `<span style="background:#eab308;color:#000;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:900;margin-left:3px">TROCA TÉCNICA</span>`
           : `<span style="background:#ef4444;color:#fff;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:900;margin-left:3px">A INSTALAR</span>`;
-        val = `<span style="display:inline-flex;align-items:center;gap:4px;background:${pBg};border:1.5px solid ${pBd};color:${pTx};padding:2px 7px;border-radius:5px;font-weight:800;font-size:11px;white-space:nowrap;box-shadow:0 0 6px ${_isTrocaDet ? 'rgba(255,115,0,0.4)' : 'rgba(239,68,68,0.4)'}"><span class="fx-urg-icon">${pIco}</span> ${val}${pTag}</span>`;
+        val = `<span style="display:inline-flex;align-items:center;gap:4px;background:${pBg};border:1.5px solid ${pBd};color:${pTx};padding:2px 7px;border-radius:5px;font-weight:800;font-size:11px;white-space:nowrap;box-shadow:0 0 6px ${_isTrocaDet ? 'rgba(234,179,8,0.4)' : 'rgba(239,68,68,0.4)'}"><span class="fx-urg-icon">${pIco}</span> ${val}${pTag}</span>`;
       }
       return `<td style="padding:6px 10px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border);vertical-align:top">${val}</td>`;
     }).join('');
@@ -1518,9 +1516,7 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
     const pedGroupBorder = (pedAtual && pedAnterior && pendNormPedido(pedAtual) !== pendNormPedido(pedAnterior))
       ? 'border-top:2px solid rgba(79,142,247,.45);' : '';
     const _urgTrocaPend = urgCor === 'laranja';
-    const rowBg = dispIdx % 2 === 0
-      ? (urgQtd ? (_urgTrocaPend ? 'rgba(255,115,0,0.10)' : 'rgba(239,68,68,0.09)') : 'rgba(255,255,255,0.015)')
-      : (urgQtd ? (_urgTrocaPend ? 'rgba(255,115,0,0.06)' : 'rgba(239,68,68,0.05)') : 'transparent');
+    const rowBg = dispIdx % 2 === 0 ? 'rgba(255,255,255,0.015)' : 'transparent';
     const canExpand = !listaDetalhada && isFilled && statsChk.count > 1;
     const isExpanded = canExpand && (_pendExpandedRows[tableName] || new Set()).has(idx);
     const visibleColCount = PEND_COL_DEFS.filter(c => !pendIsColHidden(tableName, c.k)).length;
@@ -1534,7 +1530,7 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
     const hObs = savedSizes[idObs] || '36px';
     const idPecas = `pnda-${tableName}-r${idx}-pecas`;
     const hPecas = savedSizes[idPecas] || '36px';
-    const rowBorderLeft = urgQtd ? (`border-left:4px solid ${_urgTrocaPend ? '#ff7700' : '#ef4444'};`) : '';
+    const rowBorderLeft = '';
     const virtualBg = isVirtual ? 'opacity:.78;' : '';
 
     const chkHtml = !isFilled ? '' : (
