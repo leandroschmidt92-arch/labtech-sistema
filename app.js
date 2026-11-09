@@ -1,4 +1,4 @@
-﻿// ── Detecção de DevTools aberto ──
+// ── Detecção de DevTools aberto ──
 (function(){
   const threshold = 160;
   let devOpen = false;
@@ -15900,6 +15900,8 @@ function _qualIngestRow(r){
             responsavel:r.responsavel, uid:r.uid, ts:r.ts, dateKey:r.date_key };
   }
   rec.id = r.id || rec.id;
+  if(r.fotos && !rec.fotos) rec.fotos = r.fotos;
+  if(r.pasta_drive && !rec.pasta_drive) rec.pasta_drive = r.pasta_drive;
   if(!rec.data){
     const d = rec.ts ? new Date(rec.ts) : (r.created_at ? new Date(r.created_at) : new Date());
     rec.data = d.toLocaleDateString('pt-BR');
@@ -15973,6 +15975,8 @@ async function _initQualListener(){
         };
       }
       rec.id = r.id || rec.id;
+  if(r.fotos && !rec.fotos) rec.fotos = r.fotos;
+  if(r.pasta_drive && !rec.pasta_drive) rec.pasta_drive = r.pasta_drive;
       if(!rec.data){
         const d = rec.ts ? new Date(rec.ts) : (r.created_at ? new Date(r.created_at) : new Date());
         rec.data = d.toLocaleDateString('pt-BR');
@@ -16001,6 +16005,8 @@ async function _initQualListener(){
       }
       if(!rec || typeof rec !== 'object') rec = { ...r };
       rec.id = r.id || rec.id;
+  if(r.fotos && !rec.fotos) rec.fotos = r.fotos;
+  if(r.pasta_drive && !rec.pasta_drive) rec.pasta_drive = r.pasta_drive;
       if(!rec.data){
         const d = rec.ts ? new Date(rec.ts) : (r.created_at ? new Date(r.created_at) : new Date());
         rec.data = d.toLocaleDateString('pt-BR');
@@ -16188,6 +16194,351 @@ function qualAutoFillSelb(){
 }
 
 // ── Salva um novo registro de qualidade ──
+// ════════════════════════════════════════════════════════════════
+// 📸 GOOGLE DRIVE — GESTÃO DE FOTOS DA QUALIDADE
+// ════════════════════════════════════════════════════════════════
+const QUAL_GOOGLE_DRIVE_WEBHOOK = 'https://script.google.com/macros/s/AKfycbygSggZ8ocDnEKvXswjdt6YUvFPZiVIFqA4S2eTxHKEGYol3AeJEpFPtDTl3ReNIAZQ/exec';
+window._qualFotosSelecionadas = []; // [{ nome, base64, mimeType, previewUrl }]
+
+// Comprime imagem usando Canvas para upload super rápido (~150KB por foto)
+function _qualComprimirImagem(file, maxDim, qualidade) {
+  maxDim = maxDim || 1280;
+  qualidade = qualidade || 0.75;
+  return new Promise((resolve, reject) => {
+    if (!file || !file.type.startsWith('image/')) {
+      return reject(new Error('Arquivo não é uma imagem'));
+    }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Erro ao ler arquivo'));
+    reader.onload = e => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Erro ao carregar imagem'));
+      img.onload = () => {
+        let w = img.width;
+        let h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) {
+            h = Math.round((h * maxDim) / w);
+            w = maxDim;
+          } else {
+            w = Math.round((w * maxDim) / h);
+            h = maxDim;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL('image/jpeg', qualidade);
+        resolve({
+          base64: dataUrl.split(',')[1],
+          mimeType: 'image/jpeg',
+          previewUrl: dataUrl
+        });
+      };
+      img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Handler de seleção de fotos (câmera ou galeria)
+window.qualOnFotosSelecionadas = async function(event) {
+  const files = Array.from(event.target.files || []);
+  if (!files.length) return;
+
+  const statusEl = document.getElementById("qual-reg-fotos-status");
+  if (statusEl) {
+    statusEl.style.color = "#38bdf8";
+    statusEl.style.background = "rgba(56,189,248,0.12)";
+    statusEl.style.borderColor = "rgba(56,189,248,0.35)";
+    statusEl.innerHTML = "⏳ Processando e comprimindo " + files.length + " foto(s)...";
+  }
+
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    try {
+      const comp = await _qualComprimirImagem(f);
+      window._qualFotosSelecionadas.push({
+        nome: f.name ? f.name.replace(/\.[^/.]+$/, "") : ("foto_" + Date.now() + "_" + (i + 1)),
+        base64: comp.base64,
+        mimeType: comp.mimeType,
+        previewUrl: comp.previewUrl
+      });
+    } catch(err) {
+      console.warn("[Qualidade] Erro ao comprimir imagem:", err);
+    }
+  }
+
+  event.target.value = "";
+  qualRenderizarPreviewFotos();
+};
+
+window.qualRenderizarPreviewFotos = function() {
+  const countBadge = document.getElementById("qual-reg-fotos-count");
+  const btnLimpar = document.getElementById("qual-reg-fotos-btn-limpar");
+  const previewBox = document.getElementById("qual-reg-fotos-preview");
+  const statusEl = document.getElementById("qual-reg-fotos-status");
+  const total = (window._qualFotosSelecionadas || []).length;
+
+  if (countBadge) {
+    countBadge.textContent = total;
+    countBadge.style.display = total > 0 ? "inline-block" : "none";
+  }
+  if (btnLimpar) {
+    btnLimpar.style.display = total > 0 ? "inline-block" : "none";
+  }
+
+  if (statusEl) {
+    if (total === 0) {
+      statusEl.style.color = "var(--muted)";
+      statusEl.style.background = "rgba(255,255,255,0.03)";
+      statusEl.style.borderColor = "rgba(255,255,255,0.12)";
+      statusEl.innerHTML = "📷 Nenhuma foto anexada (opcional). Você pode tirar fotos com o celular ou anexar da galeria se desejar registrar o equipamento.";
+    } else {
+      statusEl.style.color = "#34d399";
+      statusEl.style.background = "rgba(16,185,129,0.12)";
+      statusEl.style.borderColor = "rgba(16,185,129,0.35)";
+      statusEl.innerHTML = "✓ <b>" + total + " foto(s) anexada(s) com sucesso.</b> Pronta(s) para o Google Drive ao salvar o registro.";
+    }
+  }
+
+  if (!previewBox) return;
+
+  if (total === 0) {
+    previewBox.innerHTML = "";
+    return;
+  }
+
+  previewBox.innerHTML = window._qualFotosSelecionadas.map((item, idx) => `
+    <div style="position:relative;width:68px;height:68px;border-radius:8px;overflow:hidden;border:1px solid rgba(255,255,255,0.25);background:#000;box-shadow:0 4px 10px rgba(0,0,0,0.4);cursor:pointer;transition:transform .15s" onclick="qualVisualizarFotoAmpliada(\'${item.previewUrl}\', \'Foto #${idx + 1} (Anexo pendente)\')" title="Clique para ampliar esta foto">
+      <img src="${item.previewUrl}" style="width:100%;height:100%;object-fit:cover" alt="Foto ${idx + 1}">
+      <button type="button" onclick="event.stopPropagation();qualRemoverFoto(${idx})" title="Remover foto" style="position:absolute;top:2px;right:2px;background:rgba(239,68,68,0.9);color:#fff;border:none;border-radius:50%;width:18px;height:18px;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0;line-height:1">✕</button>
+      <span style="position:absolute;bottom:2px;left:3px;font-size:9px;font-weight:700;color:#fff;background:rgba(0,0,0,0.65);padding:1px 4px;border-radius:3px">🔍 #${idx + 1}</span>
+    </div>
+  `).join("");
+};
+
+window.qualRemoverFoto = function(index) {
+  if (index >= 0 && index < window._qualFotosSelecionadas.length) {
+    window._qualFotosSelecionadas.splice(index, 1);
+    qualRenderizarPreviewFotos();
+  }
+};
+
+window.qualLimparFotos = function() {
+  window._qualFotosSelecionadas = [];
+  qualRenderizarPreviewFotos();
+};
+
+// Envia fotos para o Webhook do Google Drive
+async function _qualUploadFotosParaDrive(selb, dataStr) {
+  if (!window._qualFotosSelecionadas || !window._qualFotosSelecionadas.length) {
+    return { fotos: [], pastaUrl: "" };
+  }
+
+  const payload = {
+    selb: selb,
+    data: dataStr,
+    arquivos: window._qualFotosSelecionadas.map((f, idx) => ({
+      nome: selb + "_foto_" + (idx + 1),
+      mimeType: f.mimeType,
+      base64: f.base64
+    }))
+  };
+
+  const resp = await fetch(QUAL_GOOGLE_DRIVE_WEBHOOK, {
+    method: "POST",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(payload)
+  });
+
+  const resJson = await resp.json();
+  if (resJson.status !== "ok") {
+    throw new Error(resJson.message || "Falha ao salvar fotos no Drive");
+  }
+
+  return {
+    fotos: resJson.fotos || [],
+    pastaUrl: resJson.pastaUrl || ""
+  };
+}
+
+// Modal para visualização das fotos registradas
+
+// Lightbox para ampliar qualquer foto (ao clicar na miniatura ou na tabela)
+window.qualVisualizarFotoAmpliada = function(imgSrc, titulo, driveUrl) {
+  const modal = document.getElementById('modal-qual-foto-lightbox');
+  const img = document.getElementById('modal-qual-foto-lightbox-img');
+  const tit = document.getElementById('modal-qual-foto-lightbox-tit');
+  const btnDrive = document.getElementById('modal-qual-foto-lightbox-drive');
+  if (!modal || !img) {
+    console.warn('[Qualidade] Elementos do lightbox não encontrados no DOM.');
+    return;
+  }
+
+  img.src = imgSrc || '';
+  if (tit) tit.textContent = titulo || 'Visualização da Foto';
+  if (btnDrive) {
+    if (driveUrl) {
+      btnDrive.href = driveUrl;
+      btnDrive.style.display = 'inline-flex';
+    } else {
+      btnDrive.style.display = 'none';
+    }
+  }
+  modal.style.setProperty('display', 'flex', 'important');
+  modal.style.zIndex = '1000000';
+  modal.classList.remove('hidden');
+};
+
+window.qualFecharFotoLightbox = function() {
+  const modal = document.getElementById('modal-qual-foto-lightbox');
+  const img = document.getElementById('modal-qual-foto-lightbox-img');
+  if (modal) {
+    modal.style.display = 'none';
+    modal.classList.add('hidden');
+  }
+  if (img) img.src = '';
+};
+
+// Listener global para fechar modais com a tecla ESC
+if (!window._qualEscListenerRegistrado) {
+  window._qualEscListenerRegistrado = true;
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      const lb = document.getElementById('modal-qual-foto-lightbox');
+      if (lb && lb.style.display === 'flex') {
+        qualFecharFotoLightbox();
+        return;
+      }
+      const mf = document.getElementById('modal-qual-fotos');
+      if (mf && mf.style.display === 'flex') {
+        qualFecharModalFotos();
+      }
+    }
+  });
+}
+
+// Modal para visualização das fotos registradas (busca por id, _id ou selb)
+window.qualAbrirModalFotos = async function(regIdOrSelb) {
+  console.log('[Qualidade] qualAbrirModalFotos acionado para:', regIdOrSelb);
+  let reg = null;
+
+  // 1. Tenta encontrar no cache da memória local
+  if (window._qualRegistros) {
+    if (window._qualRegistros[regIdOrSelb]) {
+      reg = window._qualRegistros[regIdOrSelb];
+    } else {
+      const all = Object.values(window._qualRegistros);
+      reg = all.find(r => r._id === regIdOrSelb || r.id === regIdOrSelb)
+         || all.find(r => r.selb && String(r.selb).toUpperCase().trim() === String(regIdOrSelb).toUpperCase().trim());
+    }
+  }
+
+  // 2. Se não encontrou no cache local (ex: feito em outro computador ou antes do sync), busca direto no Supabase na nuvem
+  if (!reg && typeof _supaAuthed === 'function') {
+    try {
+      const selbClean = String(regIdOrSelb || '').trim();
+      let query = _supaAuthed().from('qualidade_registros').select('*');
+      if (selbClean.length > 20) {
+        query = query.eq('id', selbClean);
+      } else {
+        query = query.eq('selb', selbClean.toUpperCase()).order('ts', { ascending: false });
+      }
+      const { data: supaData, error: supaErr } = await query.limit(1);
+      if (!supaErr && supaData && supaData.length > 0) {
+        const supaRow = supaData[0];
+        if (typeof _qualIngestRow === 'function') {
+          _qualIngestRow(supaRow);
+        }
+        reg = (window._qualRegistros && window._qualRegistros[supaRow.id]) || supaRow.raw || supaRow;
+      }
+    } catch(errFetch) {
+      console.warn('[Qualidade] Erro ao buscar registro no Supabase:', errFetch);
+    }
+  }
+
+  const modal = document.getElementById('modal-qual-fotos');
+  const titEl = document.getElementById('modal-qual-fotos-titulo');
+  const subEl = document.getElementById('modal-qual-fotos-sub');
+  const btnDrive = document.getElementById('modal-qual-fotos-btn-drive');
+  const grid = document.getElementById('modal-qual-fotos-grid');
+
+  if (!modal || !grid) {
+    console.error('[Qualidade] Elementos #modal-qual-fotos ou #modal-qual-fotos-grid não encontrados!');
+    return;
+  }
+
+  if (!reg) {
+    console.warn('[Qualidade] Registro não encontrado:', regIdOrSelb);
+    alert('Aviso: As fotos deste registro ainda não foram encontradas na nuvem. Verifique se o registro foi salvo com fotos anexadas.');
+    return;
+  }
+
+  let fotos = reg.fotos || (reg.raw && reg.raw.fotos) || [];
+  if (typeof fotos === 'string') {
+    try { fotos = JSON.parse(fotos); } catch(e) { fotos = []; }
+  }
+  const pastaUrl = reg.pasta_drive || (reg.raw && reg.raw.pasta_drive) || '';
+
+  if (titEl) titEl.innerHTML = '📷 Fotos do Equipamento — <b style="color:var(--accent)">' + (reg.selb || '—') + '</b>';
+  if (subEl) subEl.textContent = (reg.equipamento || '—') + ' · Liberado em ' + (reg.data || '') + ' por ' + (reg.responsavel || 'Qualidade');
+
+  if (btnDrive) {
+    if (pastaUrl) {
+      btnDrive.href = pastaUrl;
+      btnDrive.style.display = 'inline-flex';
+    } else {
+      btnDrive.style.display = 'none';
+    }
+  }
+
+  if (!fotos.length) {
+    grid.innerHTML = '<div style="grid-column:1/-1;padding:30px;text-align:center;color:var(--muted);font-size:13px">Nenhuma foto registrada para este equipamento.</div>';
+  } else {
+    grid.innerHTML = fotos.map((f, i) => {
+      // Extrai o ID do arquivo no Google Drive para usar a CDN pública de imagens lh3.googleusercontent.com (evita bloqueio de cookies)
+      let fileId = f.id || '';
+      if (!fileId && f.url) {
+        const m = f.url.match(/\/d\/([a-zA-Z0-9_-]+)/) || f.url.match(/id=([a-zA-Z0-9_-]+)/);
+        if (m) fileId = m[1];
+      }
+      const directImgUrl = fileId ? ('https://lh3.googleusercontent.com/d/' + fileId) : (f.viewUrl || f.url || '');
+      const urlAmpliada = directImgUrl.replace(/'/g, "\\'");
+      const urlDrive = (f.url || '').replace(/'/g, "\\'");
+      const titFoto = ((reg.selb || 'SELB') + ' — Foto ' + (i + 1)).replace(/'/g, "\\'");
+
+      return '<div style="background:var(--bg3);border:1px solid var(--border);border-radius:12px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 4px 15px rgba(0,0,0,0.3)">'
+        + '<div style="position:relative;width:100%;height:180px;background:#000;overflow:hidden;cursor:pointer" onclick="qualVisualizarFotoAmpliada(\'' + urlAmpliada + '\', \'' + titFoto + '\', \'' + urlDrive + '\')" title="Clique para ampliar esta foto na tela">'
+        + '<img src="' + directImgUrl + '" style="width:100%;height:100%;object-fit:cover" alt="Foto ' + (i + 1) + '" onerror="if(this.src!=\'' + (f.url||'') + '\')this.src=\'https://drive.google.com/thumbnail?id=' + fileId + '&sz=w800\';">'
+        + '<span style="position:absolute;bottom:6px;right:6px;background:rgba(0,0,0,0.75);color:#fff;font-size:10.5px;padding:3px 7px;border-radius:5px;font-weight:600;display:inline-flex;align-items:center;gap:4px">🔍 Ampliar</span>'
+        + '</div>'
+        + '<div style="padding:10px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px">'
+        + '<span style="font-size:11.5px;font-weight:700;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Foto ' + (i + 1) + '</span>'
+        + '<a href="' + f.url + '" target="_blank" rel="noopener noreferrer" style="font-size:11px;font-weight:700;color:#60a5fa;text-decoration:none;display:inline-flex;align-items:center;gap:4px">'
+        + 'Ver no Drive ↗'
+        + '</a>'
+        + '</div>'
+        + '</div>';
+    }).join('');
+  }
+
+  modal.style.setProperty('display', 'flex', 'important');
+  modal.style.zIndex = '999999';
+  modal.classList.remove('hidden');
+};
+
+window.qualFecharModalFotos = function() {
+  const modal = document.getElementById('modal-qual-fotos');
+  if (modal) {
+    modal.style.display = 'none';
+    modal.classList.add('hidden');
+  }
+};
+
+// ── Salvar registro de qualidade ──
 async function salvarQualRegistro(){
   const selb     = (document.getElementById('qual-reg-selb')?.value || '').toUpperCase().trim();
   const contador_pb = (document.getElementById('qual-reg-contador-pb')?.value || '').trim();
@@ -16247,8 +16598,6 @@ async function salvarQualRegistro(){
   const todayStr = now.toLocaleDateString('pt-BR');
 
   // ── Trava de duplicidade: bloqueia o mesmo SELB nos últimos 5 dias ──────────
-  // Verifica apenas no cache local (_qualRegistros, últimos 480 registros).
-  // AUDITORIA pode repetir (é intencional). Todos os outros registros não.
   const isAuditoria = obs.toUpperCase() === 'AUDITORIA';
   if (!isAuditoria) {
     const _5diasAtras = now.getTime() - (5 * 24 * 60 * 60 * 1000);
@@ -16257,7 +16606,7 @@ async function salvarQualRegistro(){
     );
     if (_recDup) {
       if (errEl) {
-        errEl.textContent = `⚠️ O SELB "${selb}" já foi registrado em ${_recDup.data || '—'} (últimos 5 dias). Para registrar novamente, use a observação AUDITORIA.`;
+        errEl.textContent = '⚠️ O SELB "' + selb + '" já foi registrado em ' + (_recDup.data || '—') + ' (últimos 5 dias). Para registrar novamente, use a observação AUDITORIA.';
         errEl.style.display = 'block';
       }
       document.getElementById('qual-reg-selb')?.focus();
@@ -16268,9 +16617,9 @@ async function salvarQualRegistro(){
   if(errEl) errEl.style.display = 'none';
   const registro = {
     selb,
-    equipamento : equip || getEquipName(selb) || '—',
-    serie       : serie || getEquipSerie(selb) || '',
-    sku         : sku || getEquipSku(selb) || '',
+    equipamento : equip || (typeof getEquipName === 'function' ? getEquipName(selb) : '') || '—',
+    serie       : serie || (typeof getEquipSerie === 'function' ? getEquipSerie(selb) : '') || '',
+    sku         : sku || (typeof getEquipSku === 'function' ? getEquipSku(selb) : '') || '',
     contador_pb : Number(contador_pb),
     contador    : Number(contador_pb), // retrocompatibilidade
     contador_color : contador_color !== '' ? Number(contador_color) : null,
@@ -16284,9 +16633,22 @@ async function salvarQualRegistro(){
     teve_checklist: !!(equip && typeof fluxolabModeloTemChecklist === 'function' && fluxolabModeloTemChecklist(equip)),
   };
 
-  const btn = document.querySelector('#view-qualidade button[onclick*="salvarQualRegistro"]') || document.querySelector('#view-gaiola-lab .bp');
+  const btn = document.getElementById('qual-reg-btn-salvar') || document.querySelector('#view-qualidade button[onclick*="salvarQualRegistro"]') || document.querySelector('#view-gaiola-lab .bp');
+
   try {
-    if(btn){ btn.disabled = true; btn.textContent = 'Salvando...'; }
+    let fotosDrive = [];
+    let pastaDrive = '';
+
+    if (window._qualFotosSelecionadas && window._qualFotosSelecionadas.length > 0) {
+      if(btn){ btn.disabled = true; btn.textContent = '⏳ Enviando fotos para o Drive...'; }
+      const uploadRes = await _qualUploadFotosParaDrive(selb, now.toLocaleDateString('pt-BR'));
+      fotosDrive = uploadRes.fotos || [];
+      pastaDrive = uploadRes.pastaUrl || '';
+    }
+
+    if(btn){ btn.disabled = true; btn.textContent = '💾 Gravando registro...'; }
+    registro.fotos = fotosDrive;
+    registro.pasta_drive = pastaDrive;
     const _qrObj = { id: _genUuid(), selb: registro.selb||null, equipamento: registro.equipamento||null, serie: registro.serie||null, sku: registro.sku||null, contador_pb: registro.contador_pb??null, contador_color: registro.contador_color??null, obs: registro.obs||null, responsavel: registro.responsavel||null, uid: registro.uid||null, ts: registro.ts||Date.now(), date_key: registro.dateKey||null, raw: registro };
     const { error: _eQR } = await _supaAuthed().from('qualidade_registros').insert(_qrObj);
     if(_eQR){
@@ -16331,6 +16693,7 @@ async function salvarQualRegistro(){
     if(cColInput) cColInput.value = '';
     const obsInput = document.getElementById('qual-reg-obs');
     if(obsInput) obsInput.value = '';
+    if(typeof qualLimparFotos === 'function') qualLimparFotos();
 
     if(btn){ btn.disabled = false; btn.textContent = '💾 Salvar'; }
   } catch(e){
@@ -16341,6 +16704,7 @@ async function salvarQualRegistro(){
     if(btn){ btn.disabled = false; btn.textContent = '💾 Salvar'; }
   }
 }
+
 
 // ── Remove registro ──
 async function excluirQualRegistro(id){
@@ -16897,7 +17261,7 @@ function renderQualRegistros(){
     return `
     <tr data-selb="${r.selb || ''}" style="${chamado ? 'border-left:3px solid #f5a623;background:linear-gradient(90deg,rgba(245,166,35,0.18) 0%,rgba(245,166,35,0.04) 100%);box-shadow:inset 0 0 0 1px rgba(245,166,35,0.25)' : (r.etiqueta_impressa ? 'border-left:3px solid #4ade80;background:linear-gradient(90deg,rgba(74,222,128,0.22) 0%,rgba(74,222,128,0.08) 100%);box-shadow:inset 0 0 0 1px rgba(74,222,128,0.25)' : 'border-left:3px solid rgba(74,222,128,0.55);background:linear-gradient(90deg,rgba(74,222,128,0.04) 0%,transparent 60%)')}">
       <td style="font-family:var(--mono);font-size:12px;white-space:nowrap">${r.data || '—'}<br><span style="color:var(--muted);font-size:10px">${r.hora || ''}</span></td>
-      <td style="font-family:var(--mono);font-weight:700;color:var(--accent);white-space:nowrap">${r.selb || '—'}${r.selb ? `<button onclick="(function(btn,val){navigator.clipboard.writeText(val).then(function(){var o=btn.textContent;btn.textContent='✓';btn.style.color='var(--accent2)';setTimeout(function(){btn.textContent=o;btn.style.color='';},1500)}).catch(function(){});})(this,'${r.selb}')" title="Copiar SELB" style="margin-left:6px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:var(--muted);font-size:10px;font-weight:600;padding:1px 5px;cursor:pointer;transition:all .15s">⧉</button>${canPrintLabel ? `<button onclick="equipImprimirSelb('${(r.selb||'').replace(/'/g,"\\'")}')" title="Imprimir etiqueta SELB (padrão selbetti)" style="margin-left:6px;background:rgba(28,107,69,0.15);border:1px solid rgba(28,107,69,0.45);border-radius:6px;color:#2f9e63;font-size:12px;font-weight:700;padding:4px 10px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:5px">🖨️ Imprimir Selb</button>` : ''}` : ''}</td>
+      <td style="font-family:var(--mono);font-weight:700;color:var(--accent);white-space:nowrap">${r.selb || '—'}${r.selb ? `${(() => { const fa = r.fotos || (r.raw && r.raw.fotos) || []; if (!fa.length) return ""; return `<button type="button" class="qual-selb-badge-foto" onclick="qualAbrirModalFotos(\'${r._id}\')" title="Visualizar ${fa.length} foto(s) anexada(s)" style="margin-left:6px;background:rgba(59,130,246,0.18);border:1px solid rgba(59,130,246,0.5);border-radius:6px;color:#60a5fa;font-size:11px;font-weight:700;padding:2px 7px;cursor:pointer;display:inline-flex;align-items:center;gap:4px">📷 ${fa.length}</button>`; })()}<button onclick="(function(btn,val){navigator.clipboard.writeText(val).then(function(){var o=btn.textContent;btn.textContent='✓';btn.style.color='var(--accent2)';setTimeout(function(){btn.textContent=o;btn.style.color='';},1500)}).catch(function(){});})(this,'${r.selb}')" title="Copiar SELB" style="margin-left:6px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:var(--muted);font-size:10px;font-weight:600;padding:1px 5px;cursor:pointer;transition:all .15s">⧉</button>${canPrintLabel ? `<button onclick="equipImprimirSelb('${(r.selb||'').replace(/'/g,"\\'")}')" title="Imprimir etiqueta SELB (padrão selbetti)" style="margin-left:6px;background:rgba(28,107,69,0.15);border:1px solid rgba(28,107,69,0.45);border-radius:6px;color:#2f9e63;font-size:12px;font-weight:700;padding:4px 10px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:5px">🖨️ Imprimir Selb</button>` : ''}` : ''}</td>
       <td style="font-size:12px;color:var(--muted);max-width:240px">
         ${r.equipamento || '—'}
         ${showChkBadge ? `<br><span title="Checklist atribuído a este registro (prioridade: mais antigos do dia)" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:800;color:#22d3ee;background:rgba(34,211,238,.15);border:1px solid rgba(34,211,238,.5);border-radius:7px;padding:4px 10px;margin-top:5px">📋 Checklist</span>` : ''}
@@ -16961,6 +17325,15 @@ function renderQualRegistros(){
           ${canPrintLabel ? `<button onclick="abrirFolhaLiberacao('${r._id}')"
             title="Imprimir folha de liberação (revisão laboratório)"
             style="background:rgba(56,161,105,0.12);border:1px solid rgba(56,161,105,0.4);border-radius:7px;color:#38a169;font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer">📄 Imprimir Folha</button>` : ''}
+          ${(() => {
+            const fotosArr = r.fotos || (r.raw && r.raw.fotos) || [];
+            if (!fotosArr.length) return '';
+            return `<button onclick="qualAbrirModalFotos('${r._id}')"
+              title="Visualizar ${fotosArr.length} foto(s) no Google Drive"
+              style="background:rgba(59,130,246,0.18);border:1px solid rgba(59,130,246,0.5);border-radius:7px;color:#60a5fa;font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer;display:inline-flex;align-items:center;gap:4px">
+              📷 ${fotosArr.length} foto${fotosArr.length > 1 ? 's' : ''}
+            </button>`;
+          })()}
           ${isAdmin && r.etiqueta_impressa ? `<button onclick="reverterEtiquetaImpressa('${r._id}')"
             title="Reverter — etiqueta impressa por engano"
             style="background:rgba(242,87,87,.1);border:1px solid rgba(242,87,87,.4);border-radius:7px;color:var(--danger);font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer">↺ Reverter</button>` : ''}
