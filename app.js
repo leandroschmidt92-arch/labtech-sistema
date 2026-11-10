@@ -16202,8 +16202,8 @@ window._qualFotosSelecionadas = []; // [{ nome, base64, mimeType, previewUrl }]
 
 // Comprime imagem usando Canvas para upload super rápido (~150KB por foto)
 function _qualComprimirImagem(file, maxDim, qualidade) {
-  maxDim = maxDim || 1280;
-  qualidade = qualidade || 0.75;
+  maxDim = maxDim || 1024;
+  qualidade = qualidade || 0.65;
   return new Promise((resolve, reject) => {
     if (!file || !file.type.startsWith('image/')) {
       return reject(new Error('Arquivo não é uma imagem'));
@@ -16333,39 +16333,217 @@ window.qualLimparFotos = function() {
 };
 
 // Envia fotos para o Webhook do Google Drive
-async function _qualUploadFotosParaDrive(selb, dataStr, arquivosParaUpload, startIndex) {
+window._qualUploadsAtivos = window._qualUploadsAtivos || {};
+
+// Protege contra fechamento acidental da aba enquanto ainda há fotos subindo
+if (!window._qualBeforeUnloadRegistrado) {
+  window._qualBeforeUnloadRegistrado = true;
+  window.addEventListener('beforeunload', function(e) {
+    if (window._qualUploadsAtivos && Object.keys(window._qualUploadsAtivos).length > 0) {
+      e.preventDefault();
+      e.returnValue = 'Ainda há fotos sendo enviadas para o Google Drive. Deseja realmente sair?';
+      return e.returnValue;
+    }
+  });
+}
+
+async function _qualEnviarLoteDrive(selb, dataStr, arquivosLote, tentativa) {
+  tentativa = tentativa || 1;
+  const payload = {
+    selb: selb,
+    data: dataStr,
+    arquivos: arquivosLote
+  };
+  try {
+    const resp = await fetch(QUAL_GOOGLE_DRIVE_WEBHOOK, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload)
+    });
+    const resJson = await resp.json();
+    if (resJson.status !== "ok") {
+      throw new Error(resJson.message || "Falha ao salvar fotos no Drive");
+    }
+    return {
+      fotos: resJson.fotos || [],
+      pastaUrl: resJson.pastaUrl || ""
+    };
+  } catch (err) {
+    if (tentativa < 2) {
+      console.warn('[Qualidade] Repetindo lote de upload após erro:', err);
+      return _qualEnviarLoteDrive(selb, dataStr, arquivosLote, tentativa + 1);
+    }
+    throw err;
+  }
+}
+
+// Envia fotos em lotes pequenos e paralelos para ser muito mais rápido e reportar progresso
+async function _qualUploadFotosParaDrive(selb, dataStr, arquivosParaUpload, startIndex, onProgress) {
   const lista = arquivosParaUpload || window._qualFotosSelecionadas || [];
   if (!lista.length) {
     return { fotos: [], pastaUrl: "" };
   }
   startIndex = startIndex || 0;
 
-  const payload = {
-    selb: selb,
-    data: dataStr,
-    arquivos: lista.map((f, idx) => ({
-      nome: selb + "_foto_" + (startIndex + idx + 1),
-      mimeType: f.mimeType,
-      base64: f.base64
-    }))
-  };
+  const itens = lista.map((f, idx) => ({
+    nome: selb + "_foto_" + (startIndex + idx + 1),
+    mimeType: f.mimeType,
+    base64: f.base64
+  }));
 
-  const resp = await fetch(QUAL_GOOGLE_DRIVE_WEBHOOK, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify(payload)
-  });
+  // Divide em lotes de 2 fotos para resposta rápida e paralelismo seguro
+  const TAMANHO_LOTE = 2;
+  const lotes = [];
+  for (let i = 0; i < itens.length; i += TAMANHO_LOTE) {
+    lotes.push(itens.slice(i, i + TAMANHO_LOTE));
+  }
 
-  const resJson = await resp.json();
-  if (resJson.status !== "ok") {
-    throw new Error(resJson.message || "Falha ao salvar fotos no Drive");
+  const resultadosPorLote = new Array(lotes.length);
+  let enviadas = 0;
+  let pastaUrlFinal = "";
+
+  // Envia o 1º lote sozinho primeiro para criar/garantir a pasta do SELB sem duplicar pasta no Drive
+  const resPrimeiro = await _qualEnviarLoteDrive(selb, dataStr, lotes[0]);
+  resultadosPorLote[0] = resPrimeiro.fotos || [];
+  if (resPrimeiro.pastaUrl) pastaUrlFinal = resPrimeiro.pastaUrl;
+  enviadas += lotes[0].length;
+  if (typeof onProgress === 'function') onProgress(enviadas, itens.length);
+
+  // Envia os demais lotes em paralelo (até 3 simultâneos)
+  if (lotes.length > 1) {
+    let proximoIdx = 1;
+    const CONCORRENCIA = Math.min(3, lotes.length - 1);
+    const workers = [];
+    for (let w = 0; w < CONCORRENCIA; w++) {
+      workers.push((async () => {
+        while (proximoIdx < lotes.length) {
+          const idxAtual = proximoIdx++;
+          const resLote = await _qualEnviarLoteDrive(selb, dataStr, lotes[idxAtual]);
+          resultadosPorLote[idxAtual] = resLote.fotos || [];
+          if (!pastaUrlFinal && resLote.pastaUrl) pastaUrlFinal = resLote.pastaUrl;
+          enviadas += lotes[idxAtual].length;
+          if (typeof onProgress === 'function') onProgress(enviadas, itens.length);
+        }
+      })());
+    }
+    await Promise.all(workers);
+  }
+
+  const todasFotos = [];
+  for (let i = 0; i < resultadosPorLote.length; i++) {
+    if (Array.isArray(resultadosPorLote[i])) {
+      todasFotos.push(...resultadosPorLote[i]);
+    }
   }
 
   return {
-    fotos: resJson.fotos || [],
-    pastaUrl: resJson.pastaUrl || ""
+    fotos: todasFotos,
+    pastaUrl: pastaUrlFinal
   };
 }
+
+// Executa o upload completo em segundo plano e atualiza registro no Supabase + tabela ao finalizar
+window._qualIniciarUploadEmSegundoPlano = async function(regId, selb, dataStr, fotosParaEnviar, fotosExistentes) {
+  fotosExistentes = Array.isArray(fotosExistentes) ? fotosExistentes : [];
+  window._qualUploadsAtivos[regId] = {
+    enviadas: 0,
+    total: fotosParaEnviar.length,
+    selb: selb
+  };
+
+  if (typeof renderQualRegistros === 'function') renderQualRegistros();
+
+  try {
+    const uploadRes = await _qualUploadFotosParaDrive(
+      selb,
+      dataStr,
+      fotosParaEnviar,
+      fotosExistentes.length,
+      function(enviadas, total) {
+        if (window._qualUploadsAtivos[regId]) {
+          window._qualUploadsAtivos[regId].enviadas = enviadas;
+          window._qualUploadsAtivos[regId].total = total;
+        }
+        const badgeEl = document.getElementById('qual-upload-badge-' + regId);
+        if (badgeEl) {
+          badgeEl.textContent = '⏳ Enviando ' + enviadas + '/' + total + '...';
+        }
+      }
+    );
+
+    const fotosNovas = uploadRes.fotos || [];
+    const pastaUrl = uploadRes.pastaUrl || '';
+
+    // Busca versão mais recente do registro (caso alguém tenha alterado pedido/etiqueta enquanto subia)
+    let regAtual = (window._qualRegistros && window._qualRegistros[regId]) || null;
+    if (typeof _supaAuthed === 'function') {
+      try {
+        const { data: freshRow } = await _supaAuthed()
+          .from('qualidade_registros')
+          .select('id, raw')
+          .eq('id', regId)
+          .maybeSingle();
+        if (freshRow && freshRow.raw) {
+          regAtual = typeof freshRow.raw === 'string' ? JSON.parse(freshRow.raw) : freshRow.raw;
+        }
+      } catch (eFetch) {
+        console.warn('[Qualidade] Aviso ao recarregar registro pós-upload:', eFetch);
+      }
+    }
+
+    if (regAtual) {
+      const baseFotos = Array.isArray(regAtual.fotos) && regAtual.fotos.length ? regAtual.fotos : fotosExistentes;
+      const fotosFinais = [...baseFotos, ...fotosNovas];
+      const pastaFinal = regAtual.pasta_drive || pastaUrl || '';
+
+      regAtual.fotos = fotosFinais;
+      regAtual.pasta_drive = pastaFinal;
+      delete regAtual.fotos_enviando;
+      delete regAtual.fotos_enviadas;
+      delete regAtual.fotos_total;
+
+      if (regAtual.raw && typeof regAtual.raw === 'object') {
+        regAtual.raw.fotos = fotosFinais;
+        regAtual.raw.pasta_drive = pastaFinal;
+        delete regAtual.raw.fotos_enviando;
+      }
+
+      if (typeof _supaAuthed === 'function') {
+        const rawToSave = { ...regAtual };
+        delete rawToSave.raw;
+        delete rawToSave._id;
+        const { error: upErr } = await _supaAuthed()
+          .from('qualidade_registros')
+          .update({ raw: rawToSave })
+          .eq('id', regId);
+        if (upErr) throw upErr;
+      }
+
+      if (window._qualRegistros) {
+        regAtual.id = regId;
+        window._qualRegistros[regId] = regAtual;
+      }
+    }
+
+    delete window._qualUploadsAtivos[regId];
+    if (typeof renderQualRegistros === 'function') renderQualRegistros();
+    console.log('[Qualidade] Upload em segundo plano concluído para', selb, fotosNovas.length, 'fotos.');
+  } catch (err) {
+    console.error('[Qualidade] Falha no upload em segundo plano para', selb, err);
+    delete window._qualUploadsAtivos[regId];
+    if (window._qualRegistros && window._qualRegistros[regId]) {
+      delete window._qualRegistros[regId].fotos_enviando;
+      if (typeof _supaAuthed === 'function') {
+        const rawErr = { ...window._qualRegistros[regId] };
+        delete rawErr.raw;
+        delete rawErr._id;
+        _supaAuthed().from('qualidade_registros').update({ raw: rawErr }).eq('id', regId).catch(() => {});
+      }
+    }
+    if (typeof renderQualRegistros === 'function') renderQualRegistros();
+    alert('⚠️ Erro ao enviar fotos do SELB ' + selb + ' para o Google Drive: ' + (err.message || err) + '\n\nVocê pode clicar em "📷 Anexar fotos" nesse registro para tentar enviar novamente.');
+  }
+};
 
 // Lightbox para ampliar qualquer foto (ao clicar na miniatura ou na tabela)
 window.qualVisualizarFotoAmpliada = function(imgSrc, titulo, driveUrl) {
@@ -16587,78 +16765,25 @@ window.qualSalvarFotosAnexadas = async function() {
     alert('Erro: Nenhum registro selecionado.');
     return;
   }
-  const novas = window._qualNovasFotosAnexo || [];
+  const regId = reg.id || reg._id;
+  if (window._qualUploadsAtivos && window._qualUploadsAtivos[regId]) {
+    alert('⏳ As fotos deste SELB já estão sendo enviadas no momento. Aguarde concluir para anexar mais.');
+    return;
+  }
+  const novas = [...(window._qualNovasFotosAnexo || [])];
   if (!novas.length) {
     alert('Selecione ou tire pelo menos 1 foto para anexar.');
     return;
   }
 
-  const btnSalvar = document.getElementById('modal-qual-anexo-btn-salvar');
-  const errEl = document.getElementById('modal-qual-anexo-err');
-  if (errEl) errEl.style.display = 'none';
+  const selb = (reg.selb || '').toUpperCase().trim();
+  const dataStr = reg.data || new Date().toLocaleDateString('pt-BR');
+  const fotosExistentes = [...(reg.fotos || (reg.raw && reg.raw.fotos) || [])];
 
-  if (btnSalvar) {
-    btnSalvar.disabled = true;
-    btnSalvar.textContent = '⏳ Enviando fotos para o Drive...';
-  }
-
-  try {
-    const selb = (reg.selb || '').toUpperCase().trim();
-    const dataStr = reg.data || new Date().toLocaleDateString('pt-BR');
-    const fotosExistentes = reg.fotos || (reg.raw && reg.raw.fotos) || [];
-
-    // 1. Upload das novas fotos para a pasta do SELB no Google Drive
-    const uploadRes = await _qualUploadFotosParaDrive(selb, dataStr, novas, fotosExistentes.length);
-    const fotosNovasDrive = uploadRes.fotos || [];
-    const pastaDrive = reg.pasta_drive || uploadRes.pastaUrl || '';
-
-    // 2. Mescla fotos antigas com as novas
-    const fotosAtualizadas = [...fotosExistentes, ...fotosNovasDrive];
-
-    // 3. Atualiza objeto do registro
-    reg.fotos = fotosAtualizadas;
-    reg.pasta_drive = pastaDrive;
-    if (!reg.raw) reg.raw = { ...reg };
-    reg.raw.fotos = fotosAtualizadas;
-    reg.raw.pasta_drive = pastaDrive;
-
-    // 4. Salva no Supabase
-    if (typeof _supaAuthed === 'function') {
-      const regId = reg.id || reg._id;
-      const { error: supaErr } = await _supaAuthed()
-        .from('qualidade_registros')
-        .update({ raw: reg.raw })
-        .eq('id', regId);
-
-      if (supaErr) throw supaErr;
-    }
-
-    // 5. Atualiza cache local
-    if (window._qualRegistros && reg.id) {
-      window._qualRegistros[reg.id] = reg;
-    }
-
-    // 6. Atualiza tabela
-    if (typeof renderQualRegistros === 'function') {
-      renderQualRegistros();
-    }
-
-    // Fecha modal
-    qualFecharModalAnexarFotos();
-    alert('✓ ' + fotosNovasDrive.length + ' foto(s) anexada(s) com sucesso ao SELB ' + selb + '!');
-  } catch(e) {
-    console.error('[Qualidade] Erro ao salvar fotos anexadas:', e);
-    if (errEl) {
-      errEl.textContent = 'Erro ao anexar fotos: ' + (e.message || e);
-      errEl.style.display = 'block';
-    }
-    if (btnSalvar) {
-      btnSalvar.disabled = false;
-      btnSalvar.textContent = '💾 Enviar Fotos para o Drive';
-    }
-  }
+  // Fecha o modal imediatamente e inicia upload rápido em segundo plano
+  qualFecharModalAnexarFotos();
+  window._qualIniciarUploadEmSegundoPlano(regId, selb, dataStr, novas, fotosExistentes);
 };
-
 
 window.qualAbrirModalFotos = async function(regIdOrSelb) {
   console.log('[Qualidade] qualAbrirModalFotos acionado para:', regIdOrSelb);
@@ -16943,20 +17068,19 @@ async function salvarQualRegistro(){
   };
 
   try {
-    let fotosDrive = [];
-    let pastaDrive = '';
-
-    if (window._qualFotosSelecionadas && window._qualFotosSelecionadas.length > 0) {
-      if(btn){ btn.textContent = '⏳ Enviando fotos para o Drive...'; }
-      const uploadRes = await _qualUploadFotosParaDrive(selb, now.toLocaleDateString('pt-BR'));
-      fotosDrive = uploadRes.fotos || [];
-      pastaDrive = uploadRes.pastaUrl || '';
-    }
+    const fotosParaEnviar = [...(window._qualFotosSelecionadas || [])];
+    const regId = _genUuid();
 
     if(btn){ btn.textContent = '💾 Gravando registro...'; }
-    registro.fotos = fotosDrive;
-    registro.pasta_drive = pastaDrive;
-    const _qrObj = { id: _genUuid(), selb: registro.selb||null, equipamento: registro.equipamento||null, serie: registro.serie||null, sku: registro.sku||null, contador_pb: registro.contador_pb??null, contador_color: registro.contador_color??null, obs: registro.obs||null, responsavel: registro.responsavel||null, uid: registro.uid||null, ts: registro.ts||Date.now(), date_key: registro.dateKey||null, raw: registro };
+    registro.id = regId;
+    registro.fotos = [];
+    registro.pasta_drive = '';
+    if (fotosParaEnviar.length > 0) {
+      registro.fotos_enviando = true;
+      registro.fotos_total = fotosParaEnviar.length;
+    }
+
+    const _qrObj = { id: regId, selb: registro.selb||null, equipamento: registro.equipamento||null, serie: registro.serie||null, sku: registro.sku||null, contador_pb: registro.contador_pb??null, contador_color: registro.contador_color??null, obs: registro.obs||null, responsavel: registro.responsavel||null, uid: registro.uid||null, ts: registro.ts||Date.now(), date_key: registro.dateKey||null, raw: registro };
     const { error: _eQR } = await _supaAuthed().from('qualidade_registros').insert(_qrObj);
     if(_eQR){
       console.error('[Qualidade] Erro ao inserir registro no Supabase:', _eQR);
@@ -16967,7 +17091,10 @@ async function salvarQualRegistro(){
     if(typeof _qualRegistros !== 'undefined'){
       _qualRegistros[_qrObj.id] = registro;
     }
-    if(typeof renderQualRegistros === 'function'){
+    if (fotosParaEnviar.length > 0 && typeof window._qualIniciarUploadEmSegundoPlano === 'function') {
+      // Não usa await: envia fotos em segundo plano e libera o formulário imediatamente!
+      window._qualIniciarUploadEmSegundoPlano(_qrObj.id, selb, registro.data, fotosParaEnviar, []);
+    } else if(typeof renderQualRegistros === 'function'){
       renderQualRegistros();
     }
 
@@ -17568,7 +17695,7 @@ function renderQualRegistros(){
     return `
     <tr data-selb="${r.selb || ''}" style="${chamado ? 'border-left:3px solid #f5a623;background:linear-gradient(90deg,rgba(245,166,35,0.18) 0%,rgba(245,166,35,0.04) 100%);box-shadow:inset 0 0 0 1px rgba(245,166,35,0.25)' : (r.etiqueta_impressa ? 'border-left:3px solid #4ade80;background:linear-gradient(90deg,rgba(74,222,128,0.22) 0%,rgba(74,222,128,0.08) 100%);box-shadow:inset 0 0 0 1px rgba(74,222,128,0.25)' : 'border-left:3px solid rgba(74,222,128,0.55);background:linear-gradient(90deg,rgba(74,222,128,0.04) 0%,transparent 60%)')}">
       <td style="font-family:var(--mono);font-size:12px;white-space:nowrap">${r.data || '—'}<br><span style="color:var(--muted);font-size:10px">${r.hora || ''}</span></td>
-      <td style="font-family:var(--mono);font-weight:700;color:var(--accent);white-space:nowrap">${r.selb || '—'}${r.selb ? `${(() => { const fa = r.fotos || (r.raw && r.raw.fotos) || []; if (!fa.length) return ""; return `<button type="button" class="qual-selb-badge-foto" onclick="qualAbrirModalFotos(\'${r._id}\')" title="Visualizar ${fa.length} foto(s) anexada(s)" style="margin-left:6px;background:rgba(59,130,246,0.18);border:1px solid rgba(59,130,246,0.5);border-radius:6px;color:#60a5fa;font-size:11px;font-weight:700;padding:2px 7px;cursor:pointer;display:inline-flex;align-items:center;gap:4px">📷 ${fa.length}</button>`; })()}<button onclick="(function(btn,val){navigator.clipboard.writeText(val).then(function(){var o=btn.textContent;btn.textContent='✓';btn.style.color='var(--accent2)';setTimeout(function(){btn.textContent=o;btn.style.color='';},1500)}).catch(function(){});})(this,'${r.selb}')" title="Copiar SELB" style="margin-left:6px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:var(--muted);font-size:10px;font-weight:600;padding:1px 5px;cursor:pointer;transition:all .15s">⧉</button><button type="button" onclick="qualAbrirModalAnexarFotos('${r._id}')" title="Anexar ou adicionar fotos a este registro" style="margin-left:6px;background:rgba(16,185,129,0.16);border:1px solid rgba(16,185,129,0.45);border-radius:6px;color:#34d399;font-size:11px;font-weight:700;padding:3px 8px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px">📷 Anexar fotos</button>` : ''}</td>
+      <td style="font-family:var(--mono);font-weight:700;color:var(--accent);white-space:nowrap">${r.selb || '—'}${r.selb ? `${(() => { const fa = r.fotos || (r.raw && r.raw.fotos) || []; const up = window._qualUploadsAtivos && window._qualUploadsAtivos[r._id]; let h = ""; if (fa.length) { h += `<button type="button" class="qual-selb-badge-foto" onclick="qualAbrirModalFotos(\'${r._id}\')" title="Visualizar ${fa.length} foto(s) anexada(s)" style="margin-left:6px;background:rgba(59,130,246,0.18);border:1px solid rgba(59,130,246,0.5);border-radius:6px;color:#60a5fa;font-size:11px;font-weight:700;padding:2px 7px;cursor:pointer;display:inline-flex;align-items:center;gap:4px">📷 ${fa.length}</button>`; } if (up) { h += `<span id="qual-upload-badge-${r._id}" title="Enviando fotos para o Google Drive em segundo plano" style="margin-left:6px;background:rgba(245,158,11,0.18);border:1px solid rgba(245,158,11,0.5);border-radius:6px;color:#fbbf24;font-size:11px;font-weight:700;padding:2px 8px;display:inline-flex;align-items:center;gap:4px">⏳ Enviando ${up.enviadas}/${up.total}...</span>`; } else if (r.fotos_enviando) { h += `<span style="margin-left:6px;background:rgba(245,158,11,0.14);border:1px solid rgba(245,158,11,0.4);border-radius:6px;color:#fbbf24;font-size:11px;font-weight:700;padding:2px 8px;display:inline-flex;align-items:center;gap:4px">⏳ Enviando fotos...</span>`; } return h; })()}<button onclick="(function(btn,val){navigator.clipboard.writeText(val).then(function(){var o=btn.textContent;btn.textContent='✓';btn.style.color='var(--accent2)';setTimeout(function(){btn.textContent=o;btn.style.color='';},1500)}).catch(function(){});})(this,'${r.selb}')" title="Copiar SELB" style="margin-left:6px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:var(--muted);font-size:10px;font-weight:600;padding:1px 5px;cursor:pointer;transition:all .15s">⧉</button><button type="button" onclick="qualAbrirModalAnexarFotos('${r._id}')" title="Anexar ou adicionar fotos a este registro" style="margin-left:6px;background:rgba(16,185,129,0.16);border:1px solid rgba(16,185,129,0.45);border-radius:6px;color:#34d399;font-size:11px;font-weight:700;padding:3px 8px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px">📷 Anexar fotos</button>` : ''}</td>
       <td style="font-size:12px;color:var(--muted);max-width:240px">
         ${r.equipamento || '—'}
         ${showChkBadge ? `<br><span title="Checklist atribuído a este registro (prioridade: mais antigos do dia)" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:800;color:#22d3ee;background:rgba(34,211,238,.15);border:1px solid rgba(34,211,238,.5);border-radius:7px;padding:4px 10px;margin-top:5px">📋 Checklist</span>` : ''}
