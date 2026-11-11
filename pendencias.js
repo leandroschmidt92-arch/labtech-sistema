@@ -41,7 +41,7 @@ const PEND_COL_DEFS = [
   { k: 'media',    label: '⏱ Dias Úteis Andamento', rz: 'media',  w: '110px', min: '80px' },
   { k: 'diasab',   label: 'Dias em Aberto', rz: 'diasab', w: '96px', min: '70px' },
   { k: 'qtd_wms',  label: 'Qtd WMS',    rz: 'qtd',    w: '72px',  min: '50px' },
-  { k: 'sugestao', label: 'Sugerido',   rz: 'sug',    w: '72px',  min: '50px' },
+  { k: 'sugestao', label: 'Baixar estoque', rz: 'sug',  w: '72px',  min: '50px' },
   { k: 'doca',     label: 'DOCA',       rz: 'doca',   w: '70px',  min: '55px' },
   { k: 'lab',      label: 'LAB',        rz: 'lab',    w: '70px',  min: '55px' },
   { k: 'bolsao',   label: 'Bolsão',     rz: 'bolsao', w: '160px', min: '60px' },
@@ -1456,7 +1456,7 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
 
   const headerContent = {
     ord: 'Ord', lote: 'Lote', modelo: 'MODELO', chk: 'Checklists',
-    media: mediaHeaderContent, diasab: abertoHeaderContent, qtd_wms: 'Qtd WMS', sugestao: 'Sugerido',
+    media: mediaHeaderContent, diasab: abertoHeaderContent, qtd_wms: 'Qtd WMS', sugestao: 'Baixar estoque',
     doca: docaHeaderContent, lab: labHeaderContent, bolsao: 'Bolsão',
     obs: 'Observação', pecas: 'Peças', del: '✕',
   };

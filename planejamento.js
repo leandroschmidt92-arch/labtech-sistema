@@ -21,11 +21,38 @@ const FLUXOLAB_PLAN_TABLE_LABELS = {
 function fluxolabPlanRowHasData(row) {
   return !!(row && (
     String(row.modelo || '').trim() !== '' ||
+    String(row.chk_manual || '').trim() !== '' ||
     String(row.qtd_wms || '').trim() !== '' ||
     String(row.sugestao || '').trim() !== '' ||
     String(row.obs || '').trim() !== '' ||
     String(row.pecas || '').trim() !== ''
   ));
+}
+
+// Quantidade efetiva de checklists da linha (usa chk_manual quando definido, senão o total do modelo)
+function fluxolabGetRowChkCount(row, statsChk) {
+  if (!row || !String(row.modelo || '').trim()) return 0;
+  const manual = String(row.chk_manual != null ? row.chk_manual : '').trim();
+  if (manual !== '') {
+    const n = parseInt(manual, 10);
+    if (!isNaN(n) && n >= 0) return n;
+  }
+  const st = statsChk || fluxolabPlanGetChecklistStats(row.modelo);
+  return st.count || 0;
+}
+
+// Sincroniza o input da coluna Checklists (valor, cor, readonly e tooltip)
+function fluxolabSyncChkInputElem(inpChk, rowObj, statsChk) {
+  if (!inpChk) return;
+  const mVal = rowObj && rowObj.modelo ? String(rowObj.modelo).trim() : '';
+  const st = statsChk || (mVal ? fluxolabPlanGetChecklistStats(mVal) : { count: 0 });
+  const hasMan = rowObj && String(rowObj.chk_manual != null ? rowObj.chk_manual : '').trim() !== '';
+  inpChk.value = mVal ? (hasMan ? rowObj.chk_manual : (st.count || '-')) : '';
+  const eff = fluxolabGetRowChkCount(rowObj, st);
+  inpChk.style.color = !mVal ? 'var(--muted)' : (eff > 0 ? '#4ade80' : '#f87171');
+  inpChk.readOnly = !mVal;
+  inpChk.style.cursor = !mVal ? 'default' : 'text';
+  inpChk.title = mVal ? `Clique para definir a quantidade de checklists manualmente (total do modelo: ${st.count || 0})` : '';
 }
 
 // Ajusta a tabela removendo linhas vazias extras do final ou adicionando a
@@ -52,7 +79,7 @@ function fluxolabCompactPlanTable(tableName) {
   }
   if (list.length < desiredLength) {
     while (list.length < desiredLength) {
-      list.push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
+      list.push({ modelo: '', chk_manual: '', chk_auto_rem: false, qtd_wms: '', sugestao: '', obs: '', pecas: '' });
     }
     return true;
   }
@@ -113,7 +140,7 @@ async function fluxolabLoadPlanejamento() {
     if (!Array.isArray(_fluxolabPlanejamentoState[t])) _fluxolabPlanejamentoState[t] = [];
     const minRows = FLUXOLAB_PLAN_MIN_ROWS[t] || 5;
     while (_fluxolabPlanejamentoState[t].length < minRows) {
-      _fluxolabPlanejamentoState[t].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
+      _fluxolabPlanejamentoState[t].push({ modelo: '', chk_manual: '', chk_auto_rem: false, qtd_wms: '', sugestao: '', obs: '', pecas: '' });
     }
     // Se o estado salvo veio com linhas extras vazias (ex.: mínimo antigo era
     // maior), retrai já no carregamento até o mínimo atual.
@@ -238,12 +265,13 @@ function fluxolabApplyRemoteSync(remoteData) {
     }
     
     for (let i = 0; i < remoteData[t].length; i++) {
-      if (!_fluxolabPlanejamentoState[t][i]) _fluxolabPlanejamentoState[t][i] = { modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' };
+      if (!_fluxolabPlanejamentoState[t][i]) _fluxolabPlanejamentoState[t][i] = { modelo: '', chk_manual: '', chk_auto_rem: false, qtd_wms: '', sugestao: '', obs: '', pecas: '' };
       
       const remoteRow = remoteData[t][i];
       const localRow = _fluxolabPlanejamentoState[t][i];
+      localRow.chk_auto_rem = !!remoteRow.chk_auto_rem;
       
-      ['modelo', 'qtd_wms', 'sugestao', 'obs', 'pecas'].forEach(f => {
+      ['modelo', 'chk_manual', 'qtd_wms', 'sugestao', 'obs', 'pecas'].forEach(f => {
         const val = remoteRow[f] || '';
         localRow[f] = val; // Atualiza a memória local
         
@@ -251,21 +279,27 @@ function fluxolabApplyRemoteSync(remoteData) {
         const inpId = `plan-${t}-r${i}-${f}`;
         const inpElem = document.getElementById(inpId);
         if (inpElem && document.activeElement !== inpElem) {
-          inpElem.value = val;
+          if (f === 'chk_manual') {
+            fluxolabSyncChkInputElem(inpElem, localRow);
+          } else {
+            inpElem.value = val;
+          }
           
           // Se for modelo, precisa recalcular Checklists/Bolsões visualmente
           if (f === 'modelo') {
             const statsChk = val ? fluxolabPlanGetChecklistStats(val) : { count: 0, media: 0, urgencias: 0, trocas: 0, urgenciasTT: 0 };
             const statsBol = val ? fluxolabPlanGetBolsaoStats(val) : { doca: 0, lab: 0, qual: 0 };
             
-            const cellChk = document.getElementById(`plan-${t}-r${i}-chk`);
+            const inpChk = document.getElementById(`plan-${t}-r${i}-chk_manual`);
             const cellMedia = document.getElementById(`plan-${t}-r${i}-media`);
             const cellDoca = document.getElementById(`plan-${t}-r${i}-doca`);
             const cellLab = document.getElementById(`plan-${t}-r${i}-lab`);
             const cellQual = document.getElementById(`plan-${t}-r${i}-qual`);
             const cellBadge = document.getElementById(`plan-${t}-r${i}-badge`);
             
-            if (cellChk) { cellChk.innerText = val ? (statsChk.count || '-') : ''; cellChk.style.color = !val ? 'var(--muted)' : (statsChk.count > 0 ? '#4ade80' : '#f87171'); }
+            if (inpChk && document.activeElement !== inpChk) {
+              fluxolabSyncChkInputElem(inpChk, localRow, statsChk);
+            }
             if (cellMedia) { cellMedia.innerText = val ? (statsChk.media || '-') : ''; cellMedia.style.color = statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'; }
             if (cellDoca) cellDoca.innerText = val ? (statsBol.doca || '-') : '';
             if (cellLab) cellLab.innerText = val ? (statsBol.lab || '-') : '';
@@ -297,7 +331,12 @@ function fluxolabUpdateRowElem(elem, tableName, field) {
   if (!_fluxolabPlanejamentoState[tableName][index]) return;
   
   const value = elem.value;
+  const prevValue = _fluxolabPlanejamentoState[tableName][index][field] || '';
   _fluxolabPlanejamentoState[tableName][index][field] = value;
+  if (field === 'modelo' && prevValue !== value) {
+    _fluxolabPlanejamentoState[tableName][index].chk_manual = '';
+    _fluxolabPlanejamentoState[tableName][index].chk_auto_rem = false;
+  }
   
   const isLastRow = index === _fluxolabPlanejamentoState[tableName].length - 1;
   const rowHasData = fluxolabPlanRowHasData(_fluxolabPlanejamentoState[tableName][index]);
@@ -306,7 +345,7 @@ function fluxolabUpdateRowElem(elem, tableName, field) {
     // Tabela EXPANDE: última linha foi preenchida, adiciona uma nova linha
     // vazia no final imediatamente no estado e no DOM sem perder o foco do campo atual.
     const newIdx = _fluxolabPlanejamentoState[tableName].length;
-    const newRow = { modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' };
+    const newRow = { modelo: '', chk_manual: '', chk_auto_rem: false, qtd_wms: '', sugestao: '', obs: '', pecas: '' };
     _fluxolabPlanejamentoState[tableName].push(newRow);
     try {
       const savedSizes = JSON.parse(localStorage.getItem('fluxolabPlanSizes') || '{}');
@@ -335,15 +374,16 @@ function fluxolabUpdateRowElem(elem, tableName, field) {
   if (field === 'modelo') {
     const statsChk = value ? fluxolabPlanGetChecklistStats(value) : { count: 0, media: 0, urgencias: 0, trocas: 0, urgenciasTT: 0 };
     const statsBol = value ? fluxolabPlanGetBolsaoStats(value) : { doca: 0, lab: 0, qual: 0 };
+    const rowObj = _fluxolabPlanejamentoState[tableName][index];
     
-    const cellChk = document.getElementById(`plan-${tableName}-r${index}-chk`);
+    const inpChk = document.getElementById(`plan-${tableName}-r${index}-chk_manual`);
     const cellMedia = document.getElementById(`plan-${tableName}-r${index}-media`);
     const cellDoca = document.getElementById(`plan-${tableName}-r${index}-doca`);
     const cellLab = document.getElementById(`plan-${tableName}-r${index}-lab`);
     const cellQual = document.getElementById(`plan-${tableName}-r${index}-qual`);
     const cellBadge = document.getElementById(`plan-${tableName}-r${index}-badge`);
     
-    if (cellChk) { cellChk.innerText = value ? (statsChk.count || '-') : ''; cellChk.style.color = !value ? 'var(--muted)' : (statsChk.count > 0 ? '#4ade80' : '#f87171'); }
+    fluxolabSyncChkInputElem(inpChk, rowObj, statsChk);
     if (cellMedia) { cellMedia.innerText = value ? (statsChk.media || '-') : ''; cellMedia.style.color = statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'; }
     if (cellDoca) cellDoca.innerText = value ? (statsBol.doca || '-') : '';
     if (cellLab) cellLab.innerText = value ? (statsBol.lab || '-') : '';
@@ -351,6 +391,245 @@ function fluxolabUpdateRowElem(elem, tableName, field) {
     if (cellBadge) cellBadge.innerHTML = planBadgeHtml(statsChk.count, !!value, statsChk.urgencias, statsChk.trocas, statsChk.urgenciasTT);
     fluxolabUpdateTotalChk(tableName);
   }
+}
+
+let _planChkCommitTimers = {};
+
+// Edição manual da coluna Checklists (durante digitação)
+function fluxolabUpdateRowChkInput(elem, tableName) {
+  const tr = elem.closest('tr');
+  if (!tr) return;
+  const tbody = tr.parentNode;
+  const index = Array.from(tbody.children).indexOf(tr);
+  if (!_fluxolabPlanejamentoState[tableName] || !_fluxolabPlanejamentoState[tableName][index]) return;
+
+  const row = _fluxolabPlanejamentoState[tableName][index];
+  const cleaned = String(elem.value || '').replace(/[^\d]/g, '');
+  if (elem.value !== cleaned) elem.value = cleaned;
+  row.chk_manual = cleaned;
+  row.chk_auto_rem = false;
+
+  const statsChk = row.modelo ? fluxolabPlanGetChecklistStats(row.modelo) : { count: 0 };
+  const eff = fluxolabGetRowChkCount(row, statsChk);
+  elem.style.color = !row.modelo ? 'var(--muted)' : (eff > 0 ? '#4ade80' : '#f87171');
+
+  fluxolabUpdateTotalChk(tableName);
+  fluxolabSavePlanejamentoDebounced();
+
+  const timerKey = `${tableName}:${index}`;
+  clearTimeout(_planChkCommitTimers[timerKey]);
+  if (cleaned !== '') {
+    _planChkCommitTimers[timerKey] = setTimeout(() => {
+      fluxolabCommitRowChkByIndex(tableName, index, true);
+    }, 500);
+  }
+}
+
+// Confirmação da quantia manual de Checklists (ao sair do campo ou pressionar Enter)
+function fluxolabCommitRowChk(elem, tableName) {
+  const tr = elem.closest('tr');
+  if (!tr) return;
+  const tbody = tr.parentNode;
+  const index = Array.from(tbody.children).indexOf(tr);
+  clearTimeout(_planChkCommitTimers[`${tableName}:${index}`]);
+  fluxolabCommitRowChkByIndex(tableName, index, false);
+}
+
+// Calcula o restante que faltou para completar o total do modelo e insere/atualiza
+// automaticamente na última linha da tabela.
+function fluxolabCommitRowChkByIndex(tableName, index, fromDebounce) {
+  const list = _fluxolabPlanejamentoState[tableName];
+  if (!Array.isArray(list) || !list[index]) return;
+
+  const row = list[index];
+  const elem = document.getElementById(`plan-${tableName}-r${index}-chk_manual`);
+  const modeloTxt = String(row.modelo || '').trim();
+  if (!modeloTxt) {
+    row.chk_manual = '';
+    row.chk_auto_rem = false;
+    if (elem) elem.value = '';
+    return;
+  }
+
+  const statsChk = fluxolabPlanGetChecklistStats(modeloTxt);
+  const totalModel = statsChk.count || 0;
+  const raw = String(row.chk_manual != null ? row.chk_manual : '').trim();
+
+  if (fromDebounce && raw === '') return;
+
+  const normTarget = (typeof _fluxolabNormModel === 'function')
+    ? _fluxolabNormModel(modeloTxt)
+    : modeloTxt.toUpperCase().replace(/\s+/g, '');
+
+  const sameIndices = [];
+  list.forEach((r, i) => {
+    if (!r || !String(r.modelo || '').trim()) return;
+    const nm = (typeof _fluxolabNormModel === 'function')
+      ? _fluxolabNormModel(r.modelo)
+      : String(r.modelo).toUpperCase().replace(/\s+/g, '');
+    if (nm === normTarget) sameIndices.push(i);
+  });
+
+  // Linha de restante criada automaticamente para este modelo (se já existir e não for a linha atual)
+  let autoRemIdx = -1;
+  for (let k = sameIndices.length - 1; k >= 0; k--) {
+    const i = sameIndices[k];
+    if (i !== index && list[i] && list[i].chk_auto_rem) {
+      autoRemIdx = i;
+      break;
+    }
+  }
+
+  const val = raw !== '' ? parseInt(raw, 10) : NaN;
+
+  const rowHasOtherFields = (r) => !!(r && (
+    String(r.qtd_wms || '').trim() !== '' ||
+    String(r.sugestao || '').trim() !== '' ||
+    String(r.obs || '').trim() !== '' ||
+    String(r.pecas || '').trim() !== ''
+  ));
+
+  const rerenderPreservingFocus = () => {
+    const run = () => {
+      const activeEl = document.activeElement;
+      const activeId = activeEl && activeEl.id ? activeEl.id : null;
+      const selStart = activeEl && typeof activeEl.selectionStart === 'number' ? activeEl.selectionStart : null;
+      const selEnd = activeEl && typeof activeEl.selectionEnd === 'number' ? activeEl.selectionEnd : null;
+      fluxolabRenderPlanejamento();
+      if (activeId) {
+        const restored = document.getElementById(activeId);
+        if (restored) {
+          restored.focus();
+          if (selStart !== null && typeof restored.setSelectionRange === 'function') {
+            try { restored.setSelectionRange(selStart, selEnd); } catch (e) {}
+          }
+        }
+      }
+    };
+    if (fromDebounce) run();
+    else setTimeout(run, 10);
+  };
+
+  // Soma apenas as linhas do modelo que tiveram definição manual (ignora linhas antigas não divididas e a linha auto_rem)
+  const manualIndices = sameIndices.filter(i => {
+    const r = list[i];
+    return r && !r.chk_auto_rem && String(r.chk_manual != null ? r.chk_manual : '').trim() !== '';
+  });
+
+  // Se o campo foi esvaziado ou zerado, restaura o valor automático (ou o restante)
+  if (isNaN(val) || val <= 0) {
+    row.chk_manual = '';
+    row.chk_auto_rem = false;
+    const otherManual = manualIndices.filter(i => i !== index);
+    if (otherManual.length === 0) {
+      if (elem) fluxolabSyncChkInputElem(elem, row, statsChk);
+      if (autoRemIdx >= 0 && !rowHasOtherFields(list[autoRemIdx])) {
+        list.splice(autoRemIdx, 1);
+        fluxolabCompactPlanTable(tableName);
+        fluxolabSavePlanejamentoNow();
+        rerenderPreservingFocus();
+        return;
+      }
+    } else {
+      const sumManual = otherManual.reduce((s, i) => s + fluxolabGetRowChkCount(list[i], statsChk), 0);
+      const faltante = Math.max(0, totalModel - sumManual);
+      if (autoRemIdx >= 0) {
+        if (faltante > 0) {
+          list[autoRemIdx].chk_manual = String(faltante);
+          const remEl = document.getElementById(`plan-${tableName}-r${autoRemIdx}-chk_manual`);
+          if (remEl) fluxolabSyncChkInputElem(remEl, list[autoRemIdx], statsChk);
+        } else if (!rowHasOtherFields(list[autoRemIdx])) {
+          list.splice(autoRemIdx, 1);
+          fluxolabCompactPlanTable(tableName);
+          fluxolabSavePlanejamentoNow();
+          rerenderPreservingFocus();
+          return;
+        }
+      }
+      if (elem) fluxolabSyncChkInputElem(elem, row, statsChk);
+    }
+    fluxolabUpdateTotalChk(tableName);
+    fluxolabSavePlanejamentoDebounced();
+    return;
+  }
+
+  row.chk_auto_rem = false;
+
+  // Se é a única definição manual e o valor digitado já é igual ao total do modelo, volta ao automático sem criar linha extra
+  if (manualIndices.length === 1 && manualIndices[0] === index && val === totalModel) {
+    row.chk_manual = '';
+    if (elem) fluxolabSyncChkInputElem(elem, row, statsChk);
+    if (autoRemIdx >= 0 && !rowHasOtherFields(list[autoRemIdx])) {
+      list.splice(autoRemIdx, 1);
+      fluxolabCompactPlanTable(tableName);
+      fluxolabSavePlanejamentoNow();
+      rerenderPreservingFocus();
+      return;
+    }
+    fluxolabUpdateTotalChk(tableName);
+    fluxolabSavePlanejamentoDebounced();
+    return;
+  }
+
+  if (totalModel > 0) {
+    const sumManual = manualIndices.reduce((s, i) => s + fluxolabGetRowChkCount(list[i], statsChk), 0);
+    const faltante = totalModel - sumManual;
+
+    if (faltante > 0) {
+      if (autoRemIdx >= 0) {
+        // Já existe uma linha automática de restante para este modelo: atualiza a quantia faltante nela
+        list[autoRemIdx].chk_manual = String(faltante);
+        const remEl = document.getElementById(`plan-${tableName}-r${autoRemIdx}-chk_manual`);
+        if (remEl) fluxolabSyncChkInputElem(remEl, list[autoRemIdx], statsChk);
+        fluxolabUpdateTotalChk(tableName);
+        fluxolabSavePlanejamentoNow();
+        return;
+      } else {
+        // Insere automaticamente na última linha preenchida da tabela com a quantia faltante
+        let lastFilledIdx = -1;
+        for (let i = list.length - 1; i >= 0; i--) {
+          if (fluxolabPlanRowHasData(list[i])) { lastFilledIdx = i; break; }
+        }
+        const insertPos = lastFilledIdx + 1;
+        const remainderRow = {
+          modelo: row.modelo,
+          chk_manual: String(faltante),
+          chk_auto_rem: true,
+          qtd_wms: '',
+          sugestao: '',
+          obs: '',
+          pecas: ''
+        };
+        if (insertPos < list.length && !fluxolabPlanRowHasData(list[insertPos])) {
+          list[insertPos] = remainderRow;
+        } else {
+          list.splice(insertPos, 0, remainderRow);
+        }
+        fluxolabCompactPlanTable(tableName);
+        fluxolabSavePlanejamentoNow();
+        rerenderPreservingFocus();
+        return;
+      }
+    } else if (autoRemIdx >= 0) {
+      if (!rowHasOtherFields(list[autoRemIdx])) {
+        list.splice(autoRemIdx, 1);
+        fluxolabCompactPlanTable(tableName);
+        fluxolabSavePlanejamentoNow();
+        rerenderPreservingFocus();
+        return;
+      } else {
+        list[autoRemIdx].chk_manual = '0';
+        const remEl = document.getElementById(`plan-${tableName}-r${autoRemIdx}-chk_manual`);
+        if (remEl) fluxolabSyncChkInputElem(remEl, list[autoRemIdx], statsChk);
+        fluxolabUpdateTotalChk(tableName);
+        fluxolabSavePlanejamentoNow();
+        return;
+      }
+    }
+  }
+
+  fluxolabUpdateTotalChk(tableName);
+  fluxolabSavePlanejamentoDebounced();
 }
 
 function fluxolabClearPlanTable(tableName) {
@@ -361,7 +640,7 @@ function fluxolabClearPlanTable(tableName) {
     const minRows = FLUXOLAB_PLAN_MIN_ROWS[tableName] || 1;
     _fluxolabPlanejamentoState[tableName] = [];
     for (let i = 0; i < minRows; i++) {
-      _fluxolabPlanejamentoState[tableName].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
+      _fluxolabPlanejamentoState[tableName].push({ modelo: '', chk_manual: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
     }
     fluxolabSavePlanejamentoDebounced();
     fluxolabRenderPlanejamento();
@@ -382,7 +661,7 @@ function fluxolabRemovePlanRow(tableName, idx) {
 
   const minRows = FLUXOLAB_PLAN_MIN_ROWS[tableName] || 1;
   while (list.length < minRows) {
-    list.push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
+    list.push({ modelo: '', chk_manual: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
   }
   fluxolabCompactPlanTable(tableName);
   fluxolabSavePlanejamentoNow();
@@ -454,7 +733,7 @@ function planDropTr(e, tableName) {
       tr.cells[1].innerHTML = `${i + 1}`;
       
       // Update IDs to match new order so realtime sync targets the correct row
-      ['modelo','qtd_wms','sugestao','obs','pecas'].forEach(f => {
+      ['modelo','chk_manual','qtd_wms','sugestao','obs','pecas'].forEach(f => {
         const inp = tr.querySelector(`[id$="-${f}"]`);
         if (inp) inp.id = `plan-${tableName}-r${i}-${f}`;
       });
@@ -685,7 +964,7 @@ function fluxolabCalcTotalChk(tableName) {
   return rows.reduce((sum, row) => {
     if (!row.modelo) return sum;
     const stats = fluxolabPlanGetChecklistStats(row.modelo);
-    return sum + (stats.count || 0);
+    return sum + fluxolabGetRowChkCount(row, stats);
   }, 0);
 }
 
@@ -715,6 +994,11 @@ function fluxolabBuildPlanRowHtml(tableName, row, idx, themeColor, savedSizes) {
   
   const idPecas = `pta-${tableName}-r${idx}-pecas`;
   const hPecas = savedSizes[idPecas] || '36px';
+  
+  const hasManualChk = String(row.chk_manual != null ? row.chk_manual : '').trim() !== '';
+  const effChk = fluxolabGetRowChkCount(row, statsChk);
+  const chkDisplayVal = !isFilled ? '' : (hasManualChk ? row.chk_manual : (statsChk.count || '-'));
+  const chkColor = !isFilled ? 'var(--muted)' : (effChk > 0 ? '#4ade80' : '#f87171');
   
   return `
       <tr style="background:${rowBg};transition:background .2s" 
@@ -746,8 +1030,16 @@ function fluxolabBuildPlanRowHtml(tableName, row, idx, themeColor, savedSizes) {
           </div>
         </td>
         
-        <td id="plan-${tableName}-r${idx}-chk" class="chk-cell" style="${tdStyle};color:${!isFilled ? 'var(--muted)' : (statsChk.count > 0 ? '#4ade80' : '#f87171')};font-weight:900;font-size:18px">
-          ${isFilled ? (statsChk.count || '-') : ''}
+        <td id="plan-${tableName}-r${idx}-chk" class="chk-cell" style="${tdStyle};overflow:hidden">
+          <input id="plan-${tableName}-r${idx}-chk_manual" type="text" inputmode="numeric" value="${chkDisplayVal}"
+                 ${!isFilled ? 'readonly' : ''}
+                 title="${isFilled ? 'Clique para definir a quantidade de checklists manualmente (total do modelo: ' + (statsChk.count || 0) + ')' : ''}"
+                 onfocus="this.style.background='rgba(255,255,255,0.05)';this._justFocused=true;if(this.value&&this.value!=='-')this.select();setTimeout(()=>{this._justFocused=false;},250)"
+                 onmouseup="if(this._justFocused){this._justFocused=false;return false;}"
+                 onblur="${inpBlur};fluxolabCommitRowChk(this, '${tableName}')"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}"
+                 oninput="fluxolabUpdateRowChkInput(this, '${tableName}')"
+                 style="${inpBase};font-weight:900;color:${chkColor};min-width:0;box-sizing:border-box;${!isFilled ? 'cursor:default' : 'cursor:text'}" />
         </td>
         <td id="plan-${tableName}-r${idx}-media" class="media-cell" style="${tdStyle};color:${statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'};font-weight:900;font-size:18px">
           ${isFilled ? (statsChk.media || '-') : ''}
@@ -839,7 +1131,7 @@ function fluxolabRenderPlanTable(title, tableName, titleColor, themeColor) {
             <th style="${thStyle}">${resizableHeader('Checklists', `ph-${tableName}-chk`, '80px', '60px')}</th>
             <th style="${thStyle}">${resizableHeader(mediaHeaderContent, `ph-${tableName}-media`, '80px', '60px')}</th>
             <th style="${thStyle};width:72px;min-width:72px;max-width:72px"><div style="padding:12px 6px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.05em">Qtd WMS</div></th>
-            <th style="${thStyle};width:72px;min-width:72px;max-width:72px"><div style="padding:12px 6px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.05em">Sugerido</div></th>
+            <th style="${thStyle};width:72px;min-width:72px;max-width:72px"><div style="padding:12px 6px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.05em">Baixar estoque</div></th>
             <th style="${thStyle}">${resizableHeader('DOCA', `ph-${tableName}-doca`, '60px', '50px', '#22d3ee')}</th>
             <th style="${thStyle}">${resizableHeader('LAB', `ph-${tableName}-lab`, '60px', '50px', '#a78bfa')}</th>
             <th style="${thStyle}">${resizableHeader('QUAL.', `ph-${tableName}-qual`, '60px', '50px', '#f5a623')}</th>
