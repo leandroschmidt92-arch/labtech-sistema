@@ -47,6 +47,7 @@ const PEND_COL_DEFS = [
   { k: 'bolsao',   label: 'Bolsão',     rz: 'bolsao', w: '160px', min: '60px' },
   { k: 'obs',      label: 'Observação', rz: 'obs',    w: '180px', min: '70px' },
   { k: 'pecas',    label: 'Peças',      rz: 'pecas',  w: '180px', min: '70px' },
+  { k: 'del',      label: 'Excluir linha', rz: 'del', w: '44px', min: '40px' },
 ];
 
 let _pendColMenuOpen = {};
@@ -404,6 +405,29 @@ function pendToggleColMenu(tableName) {
 
 // Remove as linhas vazias sobrando no final: mantém apenas UMA linha vazia
 // após o último registro preenchido (a tabela encolhe sozinha).
+// Remove uma linha da tabela (com confirmação), igual ao Planejamento do Dia
+function pendRemoveRow(tableName, idx) {
+  const list = _fluxolabPendenciasState[tableName];
+  if (!Array.isArray(list) || idx < 0 || idx >= list.length) return;
+  const row = list[idx] || {};
+  const modeloTxt = String(row.modelo || '').trim();
+  const msg = modeloTxt
+    ? `Tem certeza que deseja remover a ${idx + 1}ª linha (${modeloTxt})?`
+    : `Tem certeza que deseja remover a ${idx + 1}ª linha?`;
+  if (!confirm(msg)) return;
+  list.splice(idx, 1);
+  while (list.length < (PEND_ROW_MIN[tableName] || 1)) {
+    list.push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
+  }
+  pendTrimRows(tableName);
+  const last = list[list.length - 1];
+  if (last && PEND_FIELDS.some(f => String(last[f] || '').trim())) {
+    list.push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
+  }
+  fluxolabSavePendenciasNow();
+  fluxolabRenderPendencias();
+}
+window.pendRemoveRow = pendRemoveRow;
 function pendTrimRows(tableName, keepIndex) {
   const list = _fluxolabPendenciasState[tableName];
   if (!Array.isArray(list)) return false;
@@ -920,7 +944,7 @@ function pendChkCellHtml(stats, tableName, idx, isFilled) {
 function pendDiasAbertoHtml(stats) {
   if (!stats || !stats.count || !stats.maxAberto) return '-';
   const dias = stats.maxAberto;
-  const color = dias >= 30 ? '#ef4444' : dias >= 15 ? '#f59e0b' : dias >= 7 ? '#facc15' : '#4ade80';
+  const color = dias > 19 ? '#ef4444' : '#ffffff';
   return `<span style="font-size:18px;font-weight:900;color:${color};font-family:var(--mono);line-height:1">${dias}d</span>`;
 }
 
@@ -929,7 +953,7 @@ function pendDiasUteisHtml(stats) {
   if (!stats || !stats.count) return '-';
   const max = stats.maxDiasUteis || stats.media || 0;
   if (!max && !stats.media) return '-';
-  const color = max >= 20 ? '#ef4444' : max >= 10 ? '#f59e0b' : max >= 4 ? '#facc15' : 'var(--text)';
+  const color = max > 19 ? '#ef4444' : '#ffffff';
   return `<span style="font-size:18px;font-weight:900;color:${color};font-family:var(--mono);line-height:1">${max}d</span>`;
 }
 
@@ -937,14 +961,14 @@ function pendDiasUteisItemHtml(itemStats) {
   if (!itemStats) return '-';
   const dias = itemStats.diasUteis;
   if (dias == null || isNaN(dias)) return '-';
-  const color = dias >= 20 ? '#ef4444' : dias >= 10 ? '#f59e0b' : dias >= 4 ? '#facc15' : 'var(--text)';
+  const color = dias > 19 ? '#ef4444' : '#ffffff';
   return `<span style="font-size:18px;font-weight:900;color:${color};font-family:var(--mono);line-height:1">${dias}d</span>`;
 }
 
 function pendDiasAbertoItemHtml(itemStats) {
   if (!itemStats || !itemStats.diasAberto) return '-';
   const dias = itemStats.diasAberto;
-  const color = dias >= 30 ? '#ef4444' : dias >= 15 ? '#f59e0b' : dias >= 7 ? '#facc15' : '#4ade80';
+  const color = dias > 19 ? '#ef4444' : '#ffffff';
   return `<span style="font-size:18px;font-weight:900;color:${color};font-family:var(--mono);line-height:1">${dias}d</span>`;
 }
 
@@ -990,16 +1014,15 @@ function pendRenderChecklistDetalhes(stats) {
       } else if (key && r[key] != null && String(r[key]).trim() !== '') {
         val = esc(r[key]);
       }
-      // Highlight Tipo cell with colored pill
-      if (key && key === kTipoDet && _urgDet) {
-        const pBg = _isTrocaDet ? 'rgba(234,179,8,0.25)' : 'rgba(239,68,68,0.28)';
-        const pBd = _isTrocaDet ? '#eab308' : '#ef4444';
-        const pTx = _isTrocaDet ? '#fef08a' : '#fee2e2';
-        const pIco = _isTrocaDet ? '⚡' : '🚨';
-        const pTag = _isTrocaDet
-          ? `<span style="background:#eab308;color:#000;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:900;margin-left:3px">TROCA TÉCNICA</span>`
-          : `<span style="background:#ef4444;color:#fff;padding:1px 5px;border-radius:3px;font-size:8px;font-weight:900;margin-left:3px">A INSTALAR</span>`;
-        val = `<span style="display:inline-flex;align-items:center;gap:4px;background:${pBg};border:1.5px solid ${pBd};color:${pTx};padding:2px 7px;border-radius:5px;font-weight:800;font-size:11px;white-space:nowrap;box-shadow:0 0 6px ${_isTrocaDet ? 'rgba(234,179,8,0.4)' : 'rgba(239,68,68,0.4)'}"><span class="fx-urg-icon">${pIco}</span> ${val}${pTag}</span>`;
+      // Highlight Tipo cell with compact badge
+      let _cellBadgeDet = '';
+      if (key && key === kTipoDet && typeof _fluxolabRowEhTT === 'function' && _fluxolabRowEhTT(r, kTipoDet)) _cellBadgeDet = _fluxolabBadgeTT(1);
+      if (key && key === kStatus && typeof _fluxolabRowStatusUrg === 'function') {
+        const _stDet = _fluxolabRowStatusUrg(r);
+        _cellBadgeDet = _stDet === 'TT' ? _fluxolabBadgeURGTT(1) : (_stDet === 'URG' ? _fluxolabBadgeURG(1) : '');
+      }
+      if (_cellBadgeDet) {
+        val = `<span style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap"><span>${val}</span>${_cellBadgeDet}</span>`;
       }
       return `<td style="padding:6px 10px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border);vertical-align:top">${val}</td>`;
     }).join('');
@@ -1318,7 +1341,7 @@ function pendBadgeHtml(count, filled, modelo) {
   let html = '';
   if (filled) {
     if (count > 0) {
-      html += `<span style="background:rgba(74,222,128,0.15);color:#4ade80;font-size:9px;font-weight:800;padding:3px 7px;border-radius:10px;white-space:nowrap;flex-shrink:0;letter-spacing:0.03em">✓ CHECKLIST</span>`;
+      html += `<span style="background:rgba(74,222,128,0.15);color:#4ade80;font-size:13px;font-weight:900;padding:2px 8px;border-radius:10px;white-space:nowrap;flex-shrink:0;line-height:1.2" title="Possui checklist">✓</span>`;
     } else {
       html += `<span style="background:rgba(248,113,113,0.15);color:#f87171;font-size:9px;font-weight:800;padding:3px 7px;border-radius:10px;white-space:nowrap;flex-shrink:0;letter-spacing:0.03em">✗ SEM CHECKLIST</span>`;
     }
@@ -1435,7 +1458,7 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
     ord: 'Ord', lote: 'Lote', modelo: 'MODELO', chk: 'Checklists',
     media: mediaHeaderContent, diasab: abertoHeaderContent, qtd_wms: 'Qtd WMS', sugestao: 'Sugerido',
     doca: docaHeaderContent, lab: labHeaderContent, bolsao: 'Bolsão',
-    obs: 'Observação', pecas: 'Peças',
+    obs: 'Observação', pecas: 'Peças', del: '✕',
   };
   const headerColor = { modelo: 'var(--text)', doca: '#22d3ee', lab: '#a78bfa', diasab: '#fbbf24' };
 
@@ -1499,7 +1522,9 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
     const statsBol = row.modelo ? fluxolabPlanGetBolsaoStats(row.modelo) : { doca: 0, lab: 0 };
     const urgQtd = (row.modelo && typeof _fluxolabModeloUrgenteQtd === 'function') ? _fluxolabModeloUrgenteQtd(row.modelo) : 0;
     const urgCor = (urgQtd && row.modelo && typeof _fluxolabModeloUrgenteCor === 'function') ? _fluxolabModeloUrgenteCor(row.modelo) : (urgQtd ? 'red' : '');
-    const urgBadgeHtml = (urgQtd && typeof _fluxolabUrgBadge === 'function') ? _fluxolabUrgBadge(urgQtd, null, urgCor) : '';
+    const urgBadgeHtml = (row.modelo && typeof _fluxolabModeloUrgBadgesHtml === 'function')
+      ? _fluxolabModeloUrgBadgesHtml(row.modelo)
+      : ((urgQtd && typeof _fluxolabUrgBadge === 'function') ? _fluxolabUrgBadge(urgQtd, null, urgCor) : '');
 
     const isVirtual = !!disp.virtual;
     const isDetailed = listaDetalhada && disp.chkIdx != null;
@@ -1545,7 +1570,7 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
     );
 
     const modeloCell = isVirtual
-      ? `<div style="padding:0 8px 0 12px;text-align:left;font-weight:800;font-size:14px;color:${themeColor};opacity:.88;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+      ? `<div style="padding:0 8px 0 12px;text-align:left;font-weight:800;font-size:14px;color:#ffffff;opacity:.88;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
            <span>${esc(row.modelo)}</span>
            <span style="font-size:10px;color:var(--muted);font-weight:700">· checklist ${disp.chkSeq}/${statsChk.count}</span>
            ${pendIsAcessorio(row.modelo) ? pendAcessorioBadgeHtml() : ''}
@@ -1554,7 +1579,7 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
            <input id="pnd-${tableName}-r${idx}-modelo" type="text" list="modelos-lista" placeholder="Digite..." value="${row.modelo || ''}"
                   onfocus="${inpFocus}" onblur="${inpBlur}"
                   onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'modelo')"
-                  style="flex:1;min-width:0;height:100%;min-height:36px;border:none;background:transparent;text-align:left;font-weight:800;outline:none;font-family:var(--font);font-size:15px;color:${themeColor};transition:all .2s;padding:0" />
+                  style="flex:1;min-width:0;height:100%;min-height:36px;border:none;background:transparent;text-align:left;font-weight:800;outline:none;font-family:var(--font);font-size:15px;color:#ffffff;transition:all .2s;padding:0" />
            <span id="pnd-${tableName}-r${idx}-badge" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">${pendBadgeHtml(statsChk.count, isFilled, row.modelo)}${urgBadgeHtml}</span>
            <span class="active-users-badge" id="pnd-${tableName}-r${idx}-active-users" data-modelo="${row.modelo || ''}" style="display:flex;align-items:center"></span>
          </div>`;
@@ -1643,6 +1668,13 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
         </td>
 
         ${obsPecas}
+
+        <td style="${tdLastStyle};padding:4px;text-align:center${hid('del')}">
+          ${isVirtual ? '' : `<button type="button" class="pend-row-del-btn" onclick="pendRemoveRow('${tableName}', ${idx})" title="Remover linha"
+            style="width:26px;height:26px;border-radius:6px;border:1px solid rgba(242,87,87,0.35);background:rgba(242,87,87,0.10);color:var(--danger);font-size:12px;font-weight:900;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:1;transition:all .15s"
+            onmouseover="this.style.background='var(--danger)';this.style.color='#fff'"
+            onmouseout="this.style.background='rgba(242,87,87,0.10)';this.style.color='var(--danger)'">✕</button>`}
+        </td>
 
       </tr>
     `;

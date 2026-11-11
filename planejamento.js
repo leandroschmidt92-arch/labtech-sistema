@@ -6,30 +6,39 @@ let _fluxolabPlanLoaded = false;
 let _planSyncChannel = null;
 let _planMediaSortDir = { tabela1: null, tabela2: null, tabela3: null }; // null | 'desc' | 'asc'
 
-// Quantidade mínima de linhas de cada tabela. A tabela nunca fica com menos
-// linhas que isso, mas pode crescer conforme modelos vão sendo digitados e
-// depois retrai de volta até esse mínimo quando as linhas extras ficam vazias.
-const FLUXOLAB_PLAN_MIN_ROWS = { tabela1: 5, tabela2: 5, tabela3: 10 };
+// Quantidade mínima de linhas de cada tabela. Todas as tabelas são expansíveis:
+// começam enxutas e mantêm sempre 1 linha vazia extra no final após a última
+// linha preenchida, crescendo conforme novos modelos são digitados e retraindo
+// automaticamente quando linhas são removidas/esvaziadas.
+const FLUXOLAB_PLAN_MIN_ROWS = { tabela1: 1, tabela2: 1, tabela3: 1 };
+const FLUXOLAB_PLAN_TABLE_LABELS = {
+  tabela1: 'PROGRAMAÇÃO ENTRADA EM LOTE LABORATÓRIO',
+  tabela2: 'PROJETOS',
+  tabela3: 'PRIORIDADE DE SAÍDA'
+};
 
 // Uma linha "tem dado" se qualquer campo dela foi preenchido
 function fluxolabPlanRowHasData(row) {
   return !!(row && (
-    (row.modelo && row.modelo.trim() !== '') ||
-    (row.qtd_wms && row.qtd_wms.trim() !== '') ||
-    (row.sugestao && row.sugestao.trim() !== '') ||
-    (row.obs && row.obs.trim() !== '') ||
-    (row.pecas && row.pecas.trim() !== '')
+    String(row.modelo || '').trim() !== '' ||
+    String(row.qtd_wms || '').trim() !== '' ||
+    String(row.sugestao || '').trim() !== '' ||
+    String(row.obs || '').trim() !== '' ||
+    String(row.pecas || '').trim() !== ''
   ));
 }
 
-// Retrai a tabela removendo linhas vazias extras do final, respeitando o
-// mínimo configurado (FLUXOLAB_PLAN_MIN_ROWS) e mantendo sempre 1 linha vazia
-// extra após a última linha preenchida (para o usuário continuar digitando).
-// Retorna true se alguma linha foi removida (ou seja, se precisa re-renderizar).
+// Ajusta a tabela removendo linhas vazias extras do final ou adicionando a
+// linha vazia final, respeitando o mínimo configurado (FLUXOLAB_PLAN_MIN_ROWS)
+// e mantendo sempre 1 linha vazia extra após a última linha preenchida
+// (para o usuário continuar digitando e expandir a tabela).
+// Retorna true se o tamanho da lista foi alterado.
 function fluxolabCompactPlanTable(tableName) {
+  if (!Array.isArray(_fluxolabPlanejamentoState[tableName])) {
+    _fluxolabPlanejamentoState[tableName] = [];
+  }
   const list = _fluxolabPlanejamentoState[tableName];
-  if (!list) return false;
-  const minRows = FLUXOLAB_PLAN_MIN_ROWS[tableName] || 5;
+  const minRows = FLUXOLAB_PLAN_MIN_ROWS[tableName] || 1;
 
   let lastFilledIdx = -1;
   for (let i = list.length - 1; i >= 0; i--) {
@@ -39,6 +48,12 @@ function fluxolabCompactPlanTable(tableName) {
   const desiredLength = Math.max(minRows, lastFilledIdx + 2);
   if (list.length > desiredLength) {
     _fluxolabPlanejamentoState[tableName] = list.slice(0, desiredLength);
+    return true;
+  }
+  if (list.length < desiredLength) {
+    while (list.length < desiredLength) {
+      list.push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
+    }
     return true;
   }
   return false;
@@ -210,17 +225,15 @@ function fluxolabApplyRemoteSync(remoteData) {
   ['tabela1', 'tabela2', 'tabela3'].forEach(t => {
     if (!remoteData[t]) return;
     
-    // Se outro usuário retraiu a tabela (removeu linhas vazias do final),
-    // corta as linhas locais que sobraram além do novo tamanho remoto,
-    // desde que nenhuma delas tenha sido preenchida localmente sem sync ainda.
+    // Se outro usuário removeu ou adicionou linhas, sincroniza o tamanho da tabela local
     if (_fluxolabPlanejamentoState[t].length > remoteData[t].length) {
-      const extras = _fluxolabPlanejamentoState[t].slice(remoteData[t].length);
-      const extrasEmpty = extras.every(r => !fluxolabPlanRowHasData(r));
-      if (extrasEmpty) {
-        _fluxolabPlanejamentoState[t].length = remoteData[t].length;
-        if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'planejamento') {
-          fluxolabScheduleRerender(t);
-        }
+      _fluxolabPlanejamentoState[t].length = remoteData[t].length;
+      if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'planejamento') {
+        fluxolabScheduleRerender(t);
+      }
+    } else if (_fluxolabPlanejamentoState[t].length < remoteData[t].length) {
+      if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'planejamento') {
+        fluxolabScheduleRerender(t);
       }
     }
     
@@ -242,23 +255,30 @@ function fluxolabApplyRemoteSync(remoteData) {
           
           // Se for modelo, precisa recalcular Checklists/Bolsões visualmente
           if (f === 'modelo') {
-            const statsChk = val ? fluxolabPlanGetChecklistStats(val) : { count: 0, media: 0 };
-            const statsBol = val ? fluxolabPlanGetBolsaoStats(val) : { doca: 0, lab: 0 };
+            const statsChk = val ? fluxolabPlanGetChecklistStats(val) : { count: 0, media: 0, urgencias: 0, trocas: 0, urgenciasTT: 0 };
+            const statsBol = val ? fluxolabPlanGetBolsaoStats(val) : { doca: 0, lab: 0, qual: 0 };
             
             const cellChk = document.getElementById(`plan-${t}-r${i}-chk`);
             const cellMedia = document.getElementById(`plan-${t}-r${i}-media`);
             const cellDoca = document.getElementById(`plan-${t}-r${i}-doca`);
             const cellLab = document.getElementById(`plan-${t}-r${i}-lab`);
+            const cellQual = document.getElementById(`plan-${t}-r${i}-qual`);
             const cellBadge = document.getElementById(`plan-${t}-r${i}-badge`);
             
             if (cellChk) { cellChk.innerText = val ? (statsChk.count || '-') : ''; cellChk.style.color = !val ? 'var(--muted)' : (statsChk.count > 0 ? '#4ade80' : '#f87171'); }
             if (cellMedia) { cellMedia.innerText = val ? (statsChk.media || '-') : ''; cellMedia.style.color = statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'; }
             if (cellDoca) cellDoca.innerText = val ? (statsBol.doca || '-') : '';
             if (cellLab) cellLab.innerText = val ? (statsBol.lab || '-') : '';
-            if (cellBadge) cellBadge.innerHTML = planBadgeHtml(statsChk.count, !!val);
+            if (cellQual) cellQual.innerText = val ? (statsBol.qual || '-') : '';
+            if (cellBadge) cellBadge.innerHTML = planBadgeHtml(statsChk.count, !!val, statsChk.urgencias, statsChk.trocas, statsChk.urgenciasTT);
           }
         }
       });
+    }
+    if (fluxolabCompactPlanTable(t)) {
+      if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'planejamento') {
+        fluxolabScheduleRerender(t);
+      }
     }
     fluxolabUpdateTotalChk(t);
   });
@@ -280,27 +300,24 @@ function fluxolabUpdateRowElem(elem, tableName, field) {
   _fluxolabPlanejamentoState[tableName][index][field] = value;
   
   const isLastRow = index === _fluxolabPlanejamentoState[tableName].length - 1;
-  const rowHasData = _fluxolabPlanejamentoState[tableName][index].modelo.trim() !== '' ||
-                     _fluxolabPlanejamentoState[tableName][index].qtd_wms.trim() !== '' ||
-                     _fluxolabPlanejamentoState[tableName][index].sugestao.trim() !== '' ||
-                     _fluxolabPlanejamentoState[tableName][index].obs.trim() !== '' ||
-                     _fluxolabPlanejamentoState[tableName][index].pecas.trim() !== '';
+  const rowHasData = fluxolabPlanRowHasData(_fluxolabPlanejamentoState[tableName][index]);
 
   if (isLastRow && rowHasData) {
     // Tabela EXPANDE: última linha foi preenchida, adiciona uma nova linha
-    // vazia no final para o usuário continuar digitando.
-    _fluxolabPlanejamentoState[tableName].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
-    fluxolabSavePlanejamentoDebounced();
-
-    // FIX (bug "campo de texto apaga enquanto digita no FluxoLAB > Planejamento"):
-    // igual ao mesmo bug corrigido em Pendências — antes, a tabela inteira era
-    // reconstruída num timer fixo de 10ms, o que podia destruir o PRÓXIMO campo
-    // bem no momento em que o usuário começava a digitar nele (ex.: Tab de
-    // Modelo pra Qtd WMS), apagando o que tinha acabado de ser digitado.
-    // Agora adia o rebuild enquanto o usuário ainda estiver com o foco em
-    // algum campo desta mesma tabela, tentando de novo a cada 250ms (até ~5s).
-    setTimeout(() => fluxolabScheduleRerender(tableName), 10);
-    return;
+    // vazia no final imediatamente no estado e no DOM sem perder o foco do campo atual.
+    const newIdx = _fluxolabPlanejamentoState[tableName].length;
+    const newRow = { modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' };
+    _fluxolabPlanejamentoState[tableName].push(newRow);
+    try {
+      const savedSizes = JSON.parse(localStorage.getItem('fluxolabPlanSizes') || '{}');
+      const themeColor = tableName === 'tabela1' ? '#22d3ee' : (tableName === 'tabela2' ? '#a78bfa' : '#fb923c');
+      tbody.insertAdjacentHTML('beforeend', fluxolabBuildPlanRowHtml(tableName, newRow, newIdx, themeColor, savedSizes));
+      if (_planResizeObserver && tbody.lastElementChild) {
+        tbody.lastElementChild.querySelectorAll('.plan-textarea').forEach(el => _planResizeObserver.observe(el));
+      }
+    } catch (e) {
+      setTimeout(() => fluxolabScheduleRerender(tableName), 10);
+    }
   }
   
   fluxolabSavePlanejamentoDebounced();
@@ -312,34 +329,36 @@ function fluxolabUpdateRowElem(elem, tableName, field) {
     const compacted = fluxolabCompactPlanTable(tableName);
     if (compacted) {
       setTimeout(() => fluxolabScheduleRerender(tableName), 10);
-      return;
     }
   }
   
   if (field === 'modelo') {
-    const statsChk = value ? fluxolabPlanGetChecklistStats(value) : { count: 0, media: 0 };
-    const statsBol = value ? fluxolabPlanGetBolsaoStats(value) : { doca: 0, lab: 0 };
+    const statsChk = value ? fluxolabPlanGetChecklistStats(value) : { count: 0, media: 0, urgencias: 0, trocas: 0, urgenciasTT: 0 };
+    const statsBol = value ? fluxolabPlanGetBolsaoStats(value) : { doca: 0, lab: 0, qual: 0 };
     
     const cellChk = document.getElementById(`plan-${tableName}-r${index}-chk`);
     const cellMedia = document.getElementById(`plan-${tableName}-r${index}-media`);
     const cellDoca = document.getElementById(`plan-${tableName}-r${index}-doca`);
     const cellLab = document.getElementById(`plan-${tableName}-r${index}-lab`);
+    const cellQual = document.getElementById(`plan-${tableName}-r${index}-qual`);
     const cellBadge = document.getElementById(`plan-${tableName}-r${index}-badge`);
     
     if (cellChk) { cellChk.innerText = value ? (statsChk.count || '-') : ''; cellChk.style.color = !value ? 'var(--muted)' : (statsChk.count > 0 ? '#4ade80' : '#f87171'); }
     if (cellMedia) { cellMedia.innerText = value ? (statsChk.media || '-') : ''; cellMedia.style.color = statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'; }
     if (cellDoca) cellDoca.innerText = value ? (statsBol.doca || '-') : '';
     if (cellLab) cellLab.innerText = value ? (statsBol.lab || '-') : '';
-    if (cellBadge) cellBadge.innerHTML = planBadgeHtml(statsChk.count, !!value);
+    if (cellQual) cellQual.innerText = value ? (statsBol.qual || '-') : '';
+    if (cellBadge) cellBadge.innerHTML = planBadgeHtml(statsChk.count, !!value, statsChk.urgencias, statsChk.trocas, statsChk.urgenciasTT);
     fluxolabUpdateTotalChk(tableName);
   }
 }
 
 function fluxolabClearPlanTable(tableName) {
-  if (confirm(`Tem certeza que deseja limpar a ${tableName}? Os ajustes de tamanho das colunas não serão perdidos.`)) {
+  const label = FLUXOLAB_PLAN_TABLE_LABELS[tableName] || tableName;
+  if (confirm(`Tem certeza que deseja limpar a tabela "${label}"? Os ajustes de tamanho das colunas não serão perdidos.`)) {
     // Ao limpar tudo, não sobra nenhum modelo adicionado, então a tabela
     // retrai direto para o mínimo configurado.
-    const minRows = FLUXOLAB_PLAN_MIN_ROWS[tableName] || 5;
+    const minRows = FLUXOLAB_PLAN_MIN_ROWS[tableName] || 1;
     _fluxolabPlanejamentoState[tableName] = [];
     for (let i = 0; i < minRows; i++) {
       _fluxolabPlanejamentoState[tableName].push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
@@ -347,6 +366,27 @@ function fluxolabClearPlanTable(tableName) {
     fluxolabSavePlanejamentoDebounced();
     fluxolabRenderPlanejamento();
   }
+}
+
+function fluxolabRemovePlanRow(tableName, idx) {
+  const list = _fluxolabPlanejamentoState[tableName];
+  if (!Array.isArray(list) || idx < 0 || idx >= list.length) return;
+  const row = list[idx] || {};
+  const modeloTxt = String(row.modelo || '').trim();
+  const msg = modeloTxt
+    ? `Tem certeza que deseja remover a ${idx + 1}ª linha (${modeloTxt})?`
+    : `Tem certeza que deseja remover a ${idx + 1}ª linha?`;
+  if (!confirm(msg)) return;
+
+  list.splice(idx, 1);
+
+  const minRows = FLUXOLAB_PLAN_MIN_ROWS[tableName] || 1;
+  while (list.length < minRows) {
+    list.push({ modelo: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
+  }
+  fluxolabCompactPlanTable(tableName);
+  fluxolabSavePlanejamentoNow();
+  fluxolabRenderPlanejamento();
 }
 
 // Ordena a tabela pela coluna "Média Dias" (clique alterna maior→menor / menor→maior)
@@ -418,16 +458,21 @@ function planDropTr(e, tableName) {
         const inp = tr.querySelector(`[id$="-${f}"]`);
         if (inp) inp.id = `plan-${tableName}-r${i}-${f}`;
       });
-      ['chk','media','doca','lab','badge'].forEach(f => {
+      ['chk','media','doca','lab','qual','badge'].forEach(f => {
         const cell = tr.querySelector(`[id$="-${f}"]`);
         if (cell) cell.id = `plan-${tableName}-r${i}-${f}`;
       });
+      const delBtn = tr.querySelector('.plan-row-del-btn');
+      if (delBtn) delBtn.setAttribute('onclick', `fluxolabRemovePlanRow('${tableName}', ${i})`);
     });
     
     const finalIdx = Array.from(tbody.children).indexOf(_planDraggedTr);
     const list = _fluxolabPlanejamentoState[tableName];
     const item = list.splice(oldIdx, 1)[0];
     list.splice(finalIdx, 0, item);
+    if (fluxolabCompactPlanTable(tableName)) {
+      fluxolabRenderPlanejamento();
+    }
     
     fluxolabSavePlanejamentoDebounced();
   }
@@ -463,26 +508,49 @@ function planInitResizeObserver() {
 }
 
 // Badge visual ao lado do modelo: indica se existe checklist importado para ele
-function planBadgeHtml(count, filled) {
+// e exibe badges pequenos só com o número (quantidade) de Urgências (vermelho), Trocas Técnicas (amarelo/laranja)
+// e o badge pequeno compacto "Urgência TT" (do tamanho de ✓ CHECKLIST)
+function planBadgeHtml(count, filled, urgencias, trocas, urgenciasTT) {
   if (!filled) return '';
-  if (count > 0) {
-    return `<span style="background:rgba(74,222,128,0.15);color:#4ade80;font-size:9px;font-weight:800;padding:3px 7px;border-radius:10px;white-space:nowrap;flex-shrink:0;letter-spacing:0.03em">✓ CHECKLIST</span>`;
+  let html = '';
+  const nUrg = Number(urgencias || 0);
+  const nTroca = Number(trocas || 0);
+  const nUrgTT = Number(urgenciasTT || 0);
+  if (nTroca > 0) {
+    html += `<span title="Troca Técnica" style="background:rgba(234,179,8,0.20);color:#fde047;border:1px solid rgba(234,179,8,0.55);font-size:13px;font-weight:900;padding:3px 10px;border-radius:12px;white-space:nowrap;flex-shrink:0;letter-spacing:0.03em;line-height:1.2">TT${nTroca > 1 ? ' (' + nTroca + ')' : ''}</span>`;
   }
-  return `<span style="background:rgba(248,113,113,0.15);color:#f87171;font-size:9px;font-weight:800;padding:3px 7px;border-radius:10px;white-space:nowrap;flex-shrink:0;letter-spacing:0.03em">✗ SEM CHECKLIST</span>`;
+  if (nUrgTT > 0) {
+    html += `<span title="Urgência TT" style="background:rgba(249,115,22,0.20);color:#fb923c;border:1px solid rgba(249,115,22,0.55);font-size:13px;font-weight:900;padding:3px 10px;border-radius:12px;white-space:nowrap;flex-shrink:0;letter-spacing:0.03em;line-height:1.2">URG.TT${nUrgTT > 1 ? ' (' + nUrgTT + ')' : ''}</span>`;
+  }
+  if (nUrg > 0) {
+    html += `<span title="Urgência" style="background:rgba(239,68,68,0.20);color:#f87171;border:1px solid rgba(239,68,68,0.55);font-size:13px;font-weight:900;padding:3px 10px;border-radius:12px;white-space:nowrap;flex-shrink:0;letter-spacing:0.03em;line-height:1.2">URG.${nUrg > 1 ? ' (' + nUrg + ')' : ''}</span>`;
+  }
+  if (count > 0) {
+    html += `<span style="background:rgba(74,222,128,0.15);color:#4ade80;font-size:13px;font-weight:900;padding:2px 8px;border-radius:10px;white-space:nowrap;flex-shrink:0;line-height:1.2" title="Possui checklist">✓</span>`;
+  } else {
+    html += `<span style="background:rgba(248,113,113,0.15);color:#f87171;font-size:9px;font-weight:800;padding:3px 7px;border-radius:10px;white-space:nowrap;flex-shrink:0;letter-spacing:0.03em">✗ SEM CHECKLIST</span>`;
+  }
+  return html;
 }
 
 // Helpers de cálculo
 function fluxolabPlanGetChecklistStats(modeloName) {
-  if (!modeloName || typeof _fluxolabChecklistsImported === 'undefined' || !_fluxolabChecklistsImported.length) return { count: 0, media: 0, mediaAberto: 0, maxAberto: 0 };
+  if (!modeloName || typeof _fluxolabChecklistsImported === 'undefined' || !_fluxolabChecklistsImported.length) return { count: 0, media: 0, mediaAberto: 0, maxAberto: 0, urgencias: 0, trocas: 0, urgenciasTT: 0 };
   const sample = _fluxolabChecklistsImported[0];
-  const kModelo = (typeof _fluxolabFindKey === 'function') ? (_fluxolabFindKey(sample, 'Modelo') || _fluxolabFindKey(sample, 'Equipamento')) : null;
+  const kModelo = (typeof _fluxolabFindKey === 'function') ? (_fluxolabFindKey(sample, 'Descrição Equipamento') || _fluxolabFindKey(sample, 'Descricao Equipamento') || _fluxolabFindKey(sample, 'Modelo') || _fluxolabFindKey(sample, 'Equipamento')) : null;
   const kDias = (typeof _fluxolabFindKey === 'function') ? (_fluxolabFindKey(sample, 'Dias Úteis Andamento') || _fluxolabFindKey(sample, 'Dias Uteis Andamento') || _fluxolabFindKey(sample, 'Dias Úteis') || _fluxolabFindKey(sample, 'Dias Uteis')) : null;
   
   // Coluna "Dias Aberto" da planilha de checklists importada (coluna F)
   const kAberto = (typeof _fluxolabFindKey === 'function') ? (_fluxolabFindKey(sample, 'Dias Aberto') || _fluxolabFindKey(sample, 'Dias em Aberto') || _fluxolabFindKey(sample, 'Dias Abertos')) : null;
   const kPedido = (typeof _fluxolabFindKey === 'function') ? _fluxolabFindKey(sample, 'Pedido') : null;
+  const kStatus = (typeof _fluxolabFindKey === 'function') ? (_fluxolabFindKey(sample, 'Status Checklist') || _fluxolabFindKey(sample, 'Status')) : null;
+  let kTipo = (typeof _fluxolabFindKey === 'function') ? _fluxolabFindKey(sample, 'Tipo') : null;
+  if (!kTipo) {
+    const kSt = Object.keys(sample).find(k => k.trim().toLowerCase() === 'status');
+    if (kSt && kSt !== kStatus) kTipo = kSt;
+  }
 
-  if (!kModelo) return { count: 0, media: 0, mediaAberto: 0, maxAberto: 0 };
+  if (!kModelo) return { count: 0, media: 0, mediaAberto: 0, maxAberto: 0, urgencias: 0, trocas: 0, urgenciasTT: 0 };
   
   const normAlvo = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(modeloName) : modeloName.toUpperCase().replace(/\s+/g,'');
   
@@ -493,6 +561,9 @@ function fluxolabPlanGetChecklistStats(modeloName) {
   let maxAberto = 0;
   let maxDiasUteis = 0;
   let minDiasUteis = Infinity;
+  let urgencias = 0;
+  let trocas = 0;
+  let urgenciasTT = 0;
   const rows = [];
   for (const r of _fluxolabChecklistsImported) {
     const rowM = r[kModelo] || '';
@@ -500,6 +571,10 @@ function fluxolabPlanGetChecklistStats(modeloName) {
     if (rm === normAlvo) {
       count++;
       rows.push(r);
+      const _st = (typeof _fluxolabRowStatusUrg === 'function') ? _fluxolabRowStatusUrg(r) : '';
+      if (_st === 'TT') urgenciasTT++;
+      else if (_st === 'URG') urgencias++;
+      if (typeof _fluxolabRowEhTT === 'function' && _fluxolabRowEhTT(r, kTipo)) trocas++;
       if (kDias) {
         let d = parseInt(r[kDias]);
         if (!isNaN(d)) {
@@ -525,8 +600,11 @@ function fluxolabPlanGetChecklistStats(modeloName) {
     maxAberto,
     maxDiasUteis,
     minDiasUteis: minDiasUteis === Infinity ? 0 : minDiasUteis,
+    urgencias,
+    trocas,
+    urgenciasTT,
     rows,
-    keys: { kModelo, kDias, kAberto, kPedido },
+    keys: { kModelo, kDias, kAberto, kPedido, kTipo },
   };
 }
 
@@ -617,74 +695,28 @@ function fluxolabUpdateTotalChk(tableName) {
   if (el) el.innerText = `Total Checklists: ${fluxolabCalcTotalChk(tableName)}`;
 }
 
-function fluxolabRenderPlanTable(title, tableName, titleColor, themeColor) {
-  const rows = _fluxolabPlanejamentoState[tableName] || [];
-  const savedSizes = JSON.parse(localStorage.getItem('fluxolabPlanSizes') || '{}');
-  
-  const tableStyle = 'width:max-content;border-collapse:separate;border-spacing:0;font-family:var(--font);font-size:14px;text-align:center;border-radius:12px;overflow:hidden;background:rgba(0,0,0,0.2);border:1px solid var(--border2);box-shadow:0 8px 32px rgba(0,0,0,0.3)';
-  const thStyle = 'border-bottom:1px solid var(--border2);border-right:1px solid var(--border2);padding:0;font-weight:800;vertical-align:middle;background:rgba(0,0,0,0.4)';
-  const thLastStyle = 'border-bottom:1px solid var(--border2);padding:0;font-weight:800;vertical-align:middle;background:rgba(0,0,0,0.4)';
+function fluxolabBuildPlanRowHtml(tableName, row, idx, themeColor, savedSizes) {
   const tdStyle = 'border-bottom:1px solid var(--border2);border-right:1px solid var(--border2);padding:0;vertical-align:middle';
   const tdLastStyle = 'border-bottom:1px solid var(--border2);padding:0;vertical-align:middle';
+
+  const statsChk = row.modelo ? fluxolabPlanGetChecklistStats(row.modelo) : { count: 0, media: 0, urgencias: 0, trocas: 0, urgenciasTT: 0 };
+  const statsBol = row.modelo ? fluxolabPlanGetBolsaoStats(row.modelo) : { doca: 0, lab: 0, qual: 0 };
   
-  const resizableHeader = (content, id, defWidth, minWidth, color) => {
-    const savedW = savedSizes[id] || defWidth;
-    return `<div id="${id}" class="plan-header-resizer" style="resize:horizontal;overflow:hidden;width:${savedW};min-width:${minWidth};padding:12px 6px;margin:0 auto;color:${color || 'var(--muted)'};font-size:11px;text-transform:uppercase;letter-spacing:0.05em">${content}</div>`;
-  };
+  const rowBg = idx % 2 === 0 ? 'rgba(255,255,255,0.015)' : 'transparent';
+  const isFilled = row.modelo ? true : false;
   
-  const mediaSortDir = _planMediaSortDir[tableName] || null;
-  const mediaSortArrow = mediaSortDir === 'desc' ? ' ↓' : (mediaSortDir === 'asc' ? ' ↑' : '');
-  const mediaHeaderContent = `<span onclick="fluxolabSortPlanByMedia('${tableName}')" style="cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:2px" title="Ordenar por Média Dias (maior → menor)">Média Dias${mediaSortArrow}</span>`;
+  const inpBase = 'width:100%;height:100%;min-height:36px;border:none;background:transparent;text-align:center;font-weight:800;outline:none;font-family:var(--font);font-size:18px;color:var(--text);transition:all .2s;display:block';
+  const inpFocus = 'this.style.background="rgba(255,255,255,0.05)"';
+  const inpBlur = 'this.style.background="transparent"';
+  const dragHandle = `cursor:grab;`;
   
-  let html = `
-    <div style="margin-bottom:32px;overflow-x:auto;padding-bottom:14px">
-      <table style="${tableStyle}">
-        <thead>
-          <tr>
-            <th colspan="11" style="background:rgba(255,255,255,0.03);color:${titleColor};padding:14px;font-size:14px;font-weight:900;letter-spacing:0.08em;text-transform:uppercase;border-bottom:1px solid var(--border2);text-shadow:0 0 12px ${titleColor}50;position:relative">
-              <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${titleColor};margin-right:8px;box-shadow:0 0 8px ${titleColor}"></span>
-              ${title}
-              <span id="plan-total-chk-${tableName}" style="position:absolute;right:100px;top:50%;transform:translateY(-50%);background:rgba(74,222,128,0.12);color:#4ade80;border:1px solid rgba(74,222,128,0.35);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:800;letter-spacing:0.04em;text-transform:none;text-shadow:none">Total Checklists: ${fluxolabCalcTotalChk(tableName)}</span>
-              <button onclick="fluxolabClearPlanTable('${tableName}')" style="position:absolute;right:14px;top:10px;background:var(--danger);color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:10px;font-weight:800;cursor:pointer;text-transform:uppercase;letter-spacing:0.05em">Limpar</button>
-            </th>
-          </tr>
-          <tr>
-            <th style="${thStyle}">${resizableHeader('Ord', `ph-${tableName}-ord`, '50px', '40px')}</th>
-            <th style="${thStyle}">${resizableHeader('Lote', `ph-${tableName}-lote`, '50px', '40px')}</th>
-            <th style="${thStyle}">${resizableHeader('MODELO', `ph-${tableName}-mod`, '340px', '120px', 'var(--text)')}</th>
-            <th style="${thStyle}">${resizableHeader('Checklists', `ph-${tableName}-chk`, '80px', '60px')}</th>
-            <th style="${thStyle}">${resizableHeader(mediaHeaderContent, `ph-${tableName}-media`, '80px', '60px')}</th>
-            <th style="${thStyle};width:72px;min-width:72px;max-width:72px"><div style="padding:12px 6px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.05em">Qtd WMS</div></th>
-            <th style="${thStyle};width:72px;min-width:72px;max-width:72px"><div style="padding:12px 6px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.05em">Sugerido</div></th>
-            <th style="${thStyle}">${resizableHeader('DOCA', `ph-${tableName}-doca`, '60px', '50px', '#22d3ee')}</th>
-            <th style="${thStyle}">${resizableHeader('LAB', `ph-${tableName}-lab`, '60px', '50px', '#a78bfa')}</th>
-            <th style="${thStyle}">${resizableHeader('QUAL.', `ph-${tableName}-qual`, '60px', '50px', '#f5a623')}</th>
-            <th style="${thStyle}">${resizableHeader('Observação', `ph-${tableName}-obs`, '180px', '80px')}</th>
-            <th style="${thLastStyle}">${resizableHeader('Peças', `ph-${tableName}-pecas`, '180px', '80px')}</th>
-          </tr>
-        </thead>
-        <tbody>
-  `;
+  const idObs = `pta-${tableName}-r${idx}-obs`;
+  const hObs = savedSizes[idObs] || '36px';
   
-  rows.forEach((row, idx) => {
-    const statsChk = row.modelo ? fluxolabPlanGetChecklistStats(row.modelo) : { count: 0, media: 0 };
-    const statsBol = row.modelo ? fluxolabPlanGetBolsaoStats(row.modelo) : { doca: 0, lab: 0, qual: 0 };
-    
-    const rowBg = idx % 2 === 0 ? 'rgba(255,255,255,0.015)' : 'transparent';
-    const isFilled = row.modelo ? true : false;
-    
-    const inpBase = 'width:100%;height:100%;min-height:36px;border:none;background:transparent;text-align:center;font-weight:800;outline:none;font-family:var(--font);font-size:18px;color:var(--text);transition:all .2s;display:block';
-    const inpFocus = 'this.style.background="rgba(255,255,255,0.05)"';
-    const inpBlur = 'this.style.background="transparent"';
-    const dragHandle = `cursor:grab;`
-    
-    const idObs = `pta-${tableName}-r${idx}-obs`;
-    const hObs = savedSizes[idObs] || '36px';
-    
-    const idPecas = `pta-${tableName}-r${idx}-pecas`;
-    const hPecas = savedSizes[idPecas] || '36px';
-    
-    html += `
+  const idPecas = `pta-${tableName}-r${idx}-pecas`;
+  const hPecas = savedSizes[idPecas] || '36px';
+  
+  return `
       <tr style="background:${rowBg};transition:background .2s" 
           ondragstart="planDragStartTr(event, '${tableName}')" 
           ondragover="planDragOver(event)" 
@@ -710,7 +742,7 @@ function fluxolabRenderPlanTable(title, tableName, titleColor, themeColor) {
                    oninput="fluxolabUpdateRowElem(this, '${tableName}', 'modelo')"
                    onchange="fluxolabUpdateRowElem(this, '${tableName}', 'modelo')" 
                    style="flex:1;min-width:0;height:100%;min-height:36px;border:none;background:transparent;text-align:left;font-weight:800;outline:none;font-family:var(--font);font-size:15px;color:${themeColor};transition:all .2s;padding:0" />
-            <span id="plan-${tableName}-r${idx}-badge" style="display:flex;align-items:center">${planBadgeHtml(statsChk.count, isFilled)}</span>
+            <span id="plan-${tableName}-r${idx}-badge" style="display:flex;align-items:center;gap:4px">${planBadgeHtml(statsChk.count, isFilled, statsChk.urgencias, statsChk.trocas, statsChk.urgenciasTT)}</span>
           </div>
         </td>
         
@@ -753,15 +785,74 @@ function fluxolabRenderPlanTable(title, tableName, titleColor, themeColor) {
                  onchange="fluxolabUpdateRowElem(this, '${tableName}', 'obs')" 
                  style="${inpBase};height:${hObs};padding-top:10px;font-weight:500;text-transform:uppercase;color:var(--text);resize:vertical">${esc(row.obs || '')}</textarea>
         </td>
-        <td style="${tdLastStyle};padding:4px">
+        <td style="${tdStyle};padding:4px">
           <textarea id="plan-${tableName}-r${idx}-pecas" class="plan-textarea" rows="1" placeholder="..."
                  onfocus="${inpFocus}" onblur="${inpBlur}" 
                  oninput="fluxolabUpdateRowElem(this, '${tableName}', 'pecas')"
                  onchange="fluxolabUpdateRowElem(this, '${tableName}', 'pecas')" 
                  style="${inpBase};height:${hPecas};padding-top:10px;font-weight:500;text-transform:uppercase;color:var(--text);resize:vertical">${esc(row.pecas || '')}</textarea>
         </td>
+        <td style="${tdLastStyle};width:42px;min-width:42px;max-width:42px;padding:4px;text-align:center">
+          <button type="button" class="plan-row-del-btn" onclick="fluxolabRemovePlanRow('${tableName}', ${idx})" title="Remover linha"
+            style="width:26px;height:26px;border-radius:6px;border:1px solid rgba(242,87,87,0.35);background:rgba(242,87,87,0.10);color:var(--danger);font-size:12px;font-weight:900;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:1;transition:all .15s"
+            onmouseover="this.style.background='var(--danger)';this.style.color='#fff'"
+            onmouseout="this.style.background='rgba(242,87,87,0.10)';this.style.color='var(--danger)'">✕</button>
+        </td>
       </tr>
-    `;
+  `;
+}
+
+function fluxolabRenderPlanTable(title, tableName, titleColor, themeColor) {
+  fluxolabCompactPlanTable(tableName);
+  const rows = _fluxolabPlanejamentoState[tableName] || [];
+  const savedSizes = JSON.parse(localStorage.getItem('fluxolabPlanSizes') || '{}');
+  
+  const tableStyle = 'width:max-content;border-collapse:separate;border-spacing:0;font-family:var(--font);font-size:14px;text-align:center;border-radius:12px;overflow:hidden;background:rgba(0,0,0,0.2);border:1px solid var(--border2);box-shadow:0 8px 32px rgba(0,0,0,0.3)';
+  const thStyle = 'border-bottom:1px solid var(--border2);border-right:1px solid var(--border2);padding:0;font-weight:800;vertical-align:middle;background:rgba(0,0,0,0.4)';
+  const thLastStyle = 'border-bottom:1px solid var(--border2);padding:0;font-weight:800;vertical-align:middle;background:rgba(0,0,0,0.4)';
+  
+  const resizableHeader = (content, id, defWidth, minWidth, color) => {
+    const savedW = savedSizes[id] || defWidth;
+    return `<div id="${id}" class="plan-header-resizer" style="resize:horizontal;overflow:hidden;width:${savedW};min-width:${minWidth};padding:12px 6px;margin:0 auto;color:${color || 'var(--muted)'};font-size:11px;text-transform:uppercase;letter-spacing:0.05em">${content}</div>`;
+  };
+  
+  const mediaSortDir = _planMediaSortDir[tableName] || null;
+  const mediaSortArrow = mediaSortDir === 'desc' ? ' ↓' : (mediaSortDir === 'asc' ? ' ↑' : '');
+  const mediaHeaderContent = `<span onclick="fluxolabSortPlanByMedia('${tableName}')" style="cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:2px" title="Ordenar por Média Dias (maior → menor)">Média Dias${mediaSortArrow}</span>`;
+  
+  let html = `
+    <div style="margin-bottom:32px;overflow-x:auto;padding-bottom:14px">
+      <table style="${tableStyle}">
+        <thead>
+          <tr>
+            <th colspan="13" style="background:rgba(255,255,255,0.03);color:${titleColor};padding:14px;font-size:14px;font-weight:900;letter-spacing:0.08em;text-transform:uppercase;border-bottom:1px solid var(--border2);text-shadow:0 0 12px ${titleColor}50;position:relative">
+              <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${titleColor};margin-right:8px;box-shadow:0 0 8px ${titleColor}"></span>
+              ${title}
+              <span id="plan-total-chk-${tableName}" style="position:absolute;right:100px;top:50%;transform:translateY(-50%);background:rgba(74,222,128,0.12);color:#4ade80;border:1px solid rgba(74,222,128,0.35);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:800;letter-spacing:0.04em;text-transform:none;text-shadow:none">Total Checklists: ${fluxolabCalcTotalChk(tableName)}</span>
+              <button onclick="fluxolabClearPlanTable('${tableName}')" style="position:absolute;right:14px;top:10px;background:var(--danger);color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:10px;font-weight:800;cursor:pointer;text-transform:uppercase;letter-spacing:0.05em">Limpar</button>
+            </th>
+          </tr>
+          <tr>
+            <th style="${thStyle}">${resizableHeader('Ord', `ph-${tableName}-ord`, '50px', '40px')}</th>
+            <th style="${thStyle}">${resizableHeader('Lote', `ph-${tableName}-lote`, '50px', '40px')}</th>
+            <th style="${thStyle}">${resizableHeader('MODELO', `ph-${tableName}-mod`, '340px', '120px', 'var(--text)')}</th>
+            <th style="${thStyle}">${resizableHeader('Checklists', `ph-${tableName}-chk`, '80px', '60px')}</th>
+            <th style="${thStyle}">${resizableHeader(mediaHeaderContent, `ph-${tableName}-media`, '80px', '60px')}</th>
+            <th style="${thStyle};width:72px;min-width:72px;max-width:72px"><div style="padding:12px 6px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.05em">Qtd WMS</div></th>
+            <th style="${thStyle};width:72px;min-width:72px;max-width:72px"><div style="padding:12px 6px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.05em">Sugerido</div></th>
+            <th style="${thStyle}">${resizableHeader('DOCA', `ph-${tableName}-doca`, '60px', '50px', '#22d3ee')}</th>
+            <th style="${thStyle}">${resizableHeader('LAB', `ph-${tableName}-lab`, '60px', '50px', '#a78bfa')}</th>
+            <th style="${thStyle}">${resizableHeader('QUAL.', `ph-${tableName}-qual`, '60px', '50px', '#f5a623')}</th>
+            <th style="${thStyle}">${resizableHeader('Observação', `ph-${tableName}-obs`, '180px', '80px')}</th>
+            <th style="${thStyle}">${resizableHeader('Peças', `ph-${tableName}-pecas`, '180px', '80px')}</th>
+            <th style="${thLastStyle};width:42px;min-width:42px;max-width:42px"><div style="padding:12px 4px;color:var(--muted);font-size:11px" title="Remover linha">✕</div></th>
+          </tr>
+        </thead>
+        <tbody>
+  `;
+  
+  rows.forEach((row, idx) => {
+    html += fluxolabBuildPlanRowHtml(tableName, row, idx, themeColor, savedSizes);
   });
   
   html += `
@@ -792,6 +883,8 @@ function _planInjectLightCss(){
     .plan-light table ::placeholder{color:#64748b !important;opacity:1}
     .plan-light table button,.plan-light table label{background:#f1f5f9 !important;border-color:#94a3b8 !important}
     .plan-light table button[onclick^="fluxolabClearPlanTable"]{background:#dc2626 !important;color:#fff !important;border-color:#dc2626 !important}
+    .plan-light table button.plan-row-del-btn{background:#fef2f2 !important;color:#dc2626 !important;border-color:#fca5a5 !important}
+    .plan-light table button.plan-row-del-btn:hover{background:#dc2626 !important;color:#fff !important}
     .plan-light table [id$="-colmenu"]{background:#fff !important;border-color:#94a3b8 !important;box-shadow:0 12px 32px rgba(0,0,0,.25) !important}
   `;
   document.head.appendChild(st);
@@ -828,14 +921,21 @@ function fluxolabRenderPlanejamento() {
           <p style="font-size:13px;color:var(--muted);margin:4px 0 0">Modo Multiplayer: Qualquer alteração feita por você ou por outros usuários atualiza a tela em tempo real sem conflitos.</p>
         </div>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <div style="display:inline-flex;align-items:center;gap:10px;background:var(--bg2);border:1px solid var(--border2);border-radius:8px;padding:6px 12px;font-size:11px;color:var(--muted)">
+          <span style="display:inline-flex;align-items:center;gap:5px"><span style="background:rgba(234,179,8,0.20);color:#fde047;border:1px solid rgba(234,179,8,0.55);font-size:9px;font-weight:800;padding:2px 7px;border-radius:10px">TT</span> Troca Técnica</span>
+          <span style="width:1px;height:14px;background:var(--border2)"></span>
+          <span style="display:inline-flex;align-items:center;gap:5px"><span style="background:rgba(249,115,22,0.20);color:#fb923c;border:1px solid rgba(249,115,22,0.55);font-size:9px;font-weight:800;padding:2px 7px;border-radius:10px">URG.TT</span> Urgência TT</span>
+          <span style="width:1px;height:14px;background:var(--border2)"></span>
+          <span style="display:inline-flex;align-items:center;gap:5px"><span style="background:rgba(239,68,68,0.20);color:#f87171;border:1px solid rgba(239,68,68,0.55);font-size:9px;font-weight:800;padding:2px 7px;border-radius:10px">URG.</span> Urgência</span>
+        </div>
         <button type="button" onclick="planToggleLightBg()" title="Alterna o fundo da tabela entre escuro e branco (fontes pretas)" style="background:var(--bg3);color:var(--muted);border:1px solid var(--border2);border-radius:8px;padding:8px 12px;font-size:11px;font-weight:800;cursor:pointer;font-family:var(--font)">${planIsLightBg() ? '🌙 Fundo escuro' : '☀️ Fundo branco'}</button>
       </div>
     </div>
   `;
   
   html += fluxolabRenderPlanTable('PROGRAMAÇÃO ENTRADA EM LOTE LABORATÓRIO', 'tabela1', '#22d3ee', '#22d3ee');
-  html += fluxolabRenderPlanTable('SOLICITAÇÕES DA DIREÇÃO', 'tabela2', '#a78bfa', '#a78bfa');
+  html += fluxolabRenderPlanTable('PROJETOS', 'tabela2', '#a78bfa', '#a78bfa');
   html += fluxolabRenderPlanTable('PRIORIDADE DE SAÍDA', 'tabela3', '#fb923c', '#fb923c');
   
   panel.innerHTML = html;

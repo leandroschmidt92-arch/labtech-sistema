@@ -799,10 +799,14 @@ html,body{
 }
 .logout-btn:hover{ color:var(--danger);border-color:var(--danger); }
 .status-bar{
-  padding:5px 24px;font-size:12px;color:var(--accent);
+  padding:6px 24px;font-size:12px;color:var(--accent);
   display:flex;align-items:center;gap:8px;
   border-bottom:1px solid rgba(79,142,247,.13);
-  background:rgba(79,142,247,.06);
+  background:rgba(8, 10, 15, 0.85);
+  position:sticky;
+  top:72px;
+  z-index:95;
+  backdrop-filter:blur(16px) saturate(150%);
 }
 .pulse{ width:6px;height:6px;border-radius:50%;background:var(--accent2);animation:pulse 2s infinite;flex-shrink:0; }
 @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.4;}}

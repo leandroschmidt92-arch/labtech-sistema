@@ -152,6 +152,7 @@
         else btn.style.display = 'none';
       }
     });
+    body.querySelectorAll('.pend-row-del-btn').forEach(function(b){ b.style.display = 'none'; });
     body.querySelectorAll('label').forEach(function(lbl) {
       if ((lbl.textContent || '').toLowerCase().includes('lista detalhada')) lbl.style.display = 'none';
     });

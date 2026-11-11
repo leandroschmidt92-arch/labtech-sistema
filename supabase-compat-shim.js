@@ -18,24 +18,46 @@ function createSupabaseCompatShim(supa) {
   const _blobCache = new Map();     // blobKey -> { data, ts, hasSub, loaded }
   const _blobInflight = new Map();  // blobKey -> Promise
   const BLOB_TTL_MS = 15000; // ↑ TTL maior reduz re-fetches redundantes (era 8s)
+  const BLOB_SUB_MAX_AGE_MS = 30000; // mesmo com hasSub, expira após 30s para evitar cache obsoleto se perder broadcast
+
+  function _sanitizeFluxolabBlob(data) {
+    if (!data || typeof data !== 'object') return {};
+    const out = {};
+    const bestBySelb = new Map(); // normCode -> { bolsao, key, ts }
+    for (const [bolsao, items] of Object.entries(data)) {
+      if (!bolsao || bolsao.charAt(0) === '_' || !items || typeof items !== 'object') continue;
+      out[bolsao] = {};
+      for (const [k, v] of Object.entries(items)) {
+        if (!v || typeof v !== 'object') continue;
+        const norm = String(v.selb || k || '').trim().toUpperCase();
+        if (!norm || norm.charAt(0) === '_') continue;
+        const ts = Number(v.ts) || 0;
+        const prev = bestBySelb.get(norm);
+        if (!prev || ts >= prev.ts) {
+          if (prev && out[prev.bolsao]) {
+            delete out[prev.bolsao][prev.key];
+          }
+          bestBySelb.set(norm, { bolsao, key: k, ts });
+          out[bolsao][k] = v;
+        }
+      }
+    }
+    return out;
+  }
 
   function _blobCacheGet(blobKey) {
     const c = _blobCache.get(blobKey);
     if (!c) return undefined;
-    // Só confia no cache "sem expiração" quando já houve uma carga real
-    // (via blobLoad bem-sucedido ou evento Realtime). Sem isso, marcar
-    // hasSub antes do primeiro load fazia o blobLoad devolver o valor
-    // default vazio ({}) sem nunca consultar o Supabase — é por isso que
-    // os bolsões do FluxoLAB apareciam vazios ao atualizar a página e só
-    // voltavam quando chegava um evento Realtime (alguém movimentando algo).
-    if (c.hasSub && c.loaded) return c.data;
-    if (!c.hasSub && (Date.now() - c.ts <= BLOB_TTL_MS)) return c.data;
+    const age = Date.now() - c.ts;
+    if (c.hasSub && c.loaded && age <= BLOB_SUB_MAX_AGE_MS) return c.data;
+    if (!c.hasSub && age <= BLOB_TTL_MS) return c.data;
     return undefined;
   }
   function _blobCacheSet(blobKey, data, opts) {
     const prev = _blobCache.get(blobKey) || {};
+    const cleanData = blobKey === 'fluxolab' ? _sanitizeFluxolabBlob(data) : (data || {});
     _blobCache.set(blobKey, {
-      data: data || {},
+      data: cleanData,
       ts: Date.now(),
       hasSub: (opts && opts.hasSub) || prev.hasSub || false,
       loaded: true,
@@ -51,17 +73,18 @@ function createSupabaseCompatShim(supa) {
   // mode 'rows'  -> 1 linha por registro, tabela tem coluna id + raw(jsonb)
   // mode 'blob'  -> a árvore inteira fica como 1 linha em fluxolab_state
   const ROOTS = {
-    users:               { mode: 'rows', table: 'operadores' },
-    history:             { mode: 'rows', table: 'history', dated: true }, // /history/{dateKey}[/{docId}]
-    fluxolab_log:        { mode: 'rows', table: 'fluxolab_log' },
-    devolucoes:          { mode: 'rows', table: 'devolucoes' },
-    fluxolab_checklists: { mode: 'rows', table: 'fluxolab_checklists' },
-    fluxolab:            { mode: 'blob', blobKey: 'fluxolab' },
-    alarme_global:       { mode: 'blob', blobKey: 'alarme_global' },
-    schedule_override:   { mode: 'blob', blobKey: 'schedule_override' },
-    faceAuth:            { mode: 'rows', table: 'face_auth' },
-    chat_diario:         { mode: 'blob', blobKey: 'chat_diario' },
-    app_config:          { mode: 'blob', blobKey: 'app_config' },
+    users:                        { mode: 'rows', table: 'operadores' },
+    history:                      { mode: 'rows', table: 'history', dated: true }, // /history/{dateKey}[/{docId}]
+    fluxolab_log:                 { mode: 'rows', table: 'fluxolab_log' },
+    devolucoes:                   { mode: 'rows', table: 'devolucoes' },
+    fluxolab_checklists:          { mode: 'rows', table: 'fluxolab_checklists' },
+    fluxolab:                     { mode: 'blob', blobKey: 'fluxolab' },
+    fluxolab_checklist_liberados: { mode: 'blob', blobKey: 'fluxolab_checklist_liberados' },
+    alarme_global:                { mode: 'blob', blobKey: 'alarme_global' },
+    schedule_override:            { mode: 'blob', blobKey: 'schedule_override' },
+    faceAuth:                     { mode: 'rows', table: 'face_auth' },
+    chat_diario:                  { mode: 'blob', blobKey: 'chat_diario' },
+    app_config:                   { mode: 'blob', blobKey: 'app_config' },
   };
 
   // Colunas dedicadas que tentamos espelhar (best-effort). A fonte de
@@ -110,19 +133,31 @@ function createSupabaseCompatShim(supa) {
 
   // ── Helpers de path ─────────────────────────────────────────────────
   function parts(path) {
-    return String(path || '').split('/').filter(Boolean);
+    const p = String(path || '').split('/').filter(Boolean);
+    // Isola /fluxolab/_checklist_liberados na sua própria linha de fluxolab_state
+    // para que gravações de checklists liberados NUNCA sobrescrevam os bolsões
+    // do FluxoLAB nem colidam com a varredura de duplicados.
+    if (p[0] === 'fluxolab' && p[1] === '_checklist_liberados') {
+      return ['fluxolab_checklist_liberados', ...p.slice(2)];
+    }
+    return p;
   }
 
   // ── Helpers de blob (árvore inteira em fluxolab_state.data) ─────────
-  async function blobLoad(blobKey) {
-    const cached = _blobCacheGet(blobKey);
-    if (cached !== undefined) return cached;
+  async function blobLoad(blobKey, forceFresh) {
+    if (forceFresh) {
+      _blobCache.delete(blobKey);
+    } else {
+      const cached = _blobCacheGet(blobKey);
+      if (cached !== undefined) return cached;
+    }
     let inflight = _blobInflight.get(blobKey);
-    if (inflight) return inflight;
+    if (inflight && !forceFresh) return inflight;
     inflight = (async () => {
       try {
         const { data } = await supa.from('fluxolab_state').select('data').eq('key', blobKey).maybeSingle();
-        const val = (data && data.data) || {};
+        const rawVal = (data && data.data) || {};
+        const val = blobKey === 'fluxolab' ? _sanitizeFluxolabBlob(rawVal) : rawVal;
         _blobCacheSet(blobKey, val);
         return val;
       } finally {
@@ -133,12 +168,13 @@ function createSupabaseCompatShim(supa) {
     return inflight;
   }
   async function blobSave(blobKey, obj) {
-    _blobCacheSet(blobKey, obj);
+    const cleanObj = blobKey === 'fluxolab' ? _sanitizeFluxolabBlob(obj) : (obj || {});
+    _blobCacheSet(blobKey, cleanObj);
     await supa.from('fluxolab_state').upsert(
-      { key: blobKey, data: obj, updated_at: new Date().toISOString() },
+      { key: blobKey, data: cleanObj, updated_at: new Date().toISOString() },
       { onConflict: 'key' }
     );
-    pubBlob(blobKey, obj);
+    pubBlob(blobKey, cleanObj);
   }
   function getIn(obj, p) { let c = obj; for (const k of p) { if (c == null) return undefined; c = c[k]; } return c; }
   function setIn(obj, p, val) {
@@ -729,7 +765,34 @@ function createSupabaseCompatShim(supa) {
         if (cfg.mode === 'blob') {
           const bp = p.slice(1);
           if (!bp.length) return blobSave(cfg.blobKey, value);
-          const blob = await blobLoad(cfg.blobKey);
+          // Caso especial FluxoLAB: gravar em /fluxolab/<bolsao>/<selbKey> usa sempre
+          // movimentação atômica (fluxolab_move_selb) para garantir que o SELB seja
+          // removido de qualquer outro bolsão antes de entrar no destino.
+          if (cfg.blobKey === 'fluxolab' && bp.length === 2 && value && typeof value === 'object') {
+            try {
+              await fluxolabMoveSelb(bp[1], bp[0], value);
+              return;
+            } catch (e) { /* fallback abaixo */ }
+          }
+          // Merge atômico da chave via jsonb_patch_blob (nunca sobrescreve o blob inteiro com cache local)
+          if (value !== null && value !== undefined) {
+            try {
+              const parentPath = bp.slice(0, -1);
+              const leafKey = bp[bp.length - 1];
+              const { error } = await supa.rpc('jsonb_patch_blob', {
+                p_key: cfg.blobKey,
+                p_path: parentPath,
+                p_patch: { [leafKey]: value },
+              });
+              if (!error) {
+                const fresh = await blobLoad(cfg.blobKey, true);
+                _blobCacheSet(cfg.blobKey, fresh, { hasSub: true });
+                pubBlob(cfg.blobKey, fresh);
+                return;
+              }
+            } catch (e) { /* fallback abaixo */ }
+          }
+          const blob = await blobLoad(cfg.blobKey, true);
           setIn(blob, bp, value);
           return blobSave(cfg.blobKey, blob);
         }
@@ -752,7 +815,7 @@ function createSupabaseCompatShim(supa) {
           // autor da escrita) e publica o blob já consolidado no bus.
           _blobCache.delete(cfg.blobKey);
           try {
-            const fresh = await blobLoad(cfg.blobKey);
+            const fresh = await blobLoad(cfg.blobKey, true);
             _blobCacheSet(cfg.blobKey, fresh, { hasSub: true });
             pubBlob(cfg.blobKey, fresh);
           } catch (e) { busPublish({ k: 'blob-reload', key: cfg.blobKey }); }
@@ -765,7 +828,7 @@ function createSupabaseCompatShim(supa) {
         if (cfg.mode === 'blob') {
           const bp = p.slice(1);
           if (!bp.length) return blobSave(cfg.blobKey, {});
-          const blob = await blobLoad(cfg.blobKey);
+          const blob = await blobLoad(cfg.blobKey, true);
           delIn(blob, bp);
           return blobSave(cfg.blobKey, blob);
         }
@@ -778,7 +841,20 @@ function createSupabaseCompatShim(supa) {
           if (value !== undefined) {
             if (cfg.mode === 'blob') {
               const bp = p.slice(1);
-              const blob = await blobLoad(cfg.blobKey);
+              try {
+                const { error } = await supa.rpc('jsonb_patch_blob', {
+                  p_key: cfg.blobKey,
+                  p_path: bp,
+                  p_patch: { [key]: value },
+                });
+                if (!error) {
+                  const fresh = await blobLoad(cfg.blobKey, true);
+                  _blobCacheSet(cfg.blobKey, fresh, { hasSub: true });
+                  pubBlob(cfg.blobKey, fresh);
+                  return { key };
+                }
+              } catch (e) { /* fallback abaixo */ }
+              const blob = await blobLoad(cfg.blobKey, true);
               const coll = bp.length ? (getIn(blob, bp) || {}) : blob;
               coll[key] = value;
               if (bp.length) setIn(blob, bp, coll);
@@ -900,7 +976,7 @@ function createSupabaseCompatShim(supa) {
       p_dest_bolsao: destBolsao,
       p_record: record,
     });
-    const blob = data || {};
+    const blob = _sanitizeFluxolabBlob(data || {});
     _blobCacheSet('fluxolab', blob, { hasSub: true });
     pubBlob('fluxolab', blob); // avisa outras abas/usuários em tempo real
     return blob;
@@ -911,7 +987,7 @@ function createSupabaseCompatShim(supa) {
       p_key: 'fluxolab',
       p_selb_key: selbKey,
     });
-    const blob = data || {};
+    const blob = _sanitizeFluxolabBlob(data || {});
     _blobCacheSet('fluxolab', blob, { hasSub: true });
     pubBlob('fluxolab', blob);
     return blob;
@@ -922,10 +998,20 @@ function createSupabaseCompatShim(supa) {
   async function fluxolabDedupeSelbs() {
     const data = await _rpc('fluxolab_dedupe_selbs', { p_key: 'fluxolab' });
     const res  = data || {};
-    const blob = res.data || {};
+    const blob = _sanitizeFluxolabBlob(res.data || {});
+    const removidos = (res.removidos || []).filter(r =>
+      r && (!r.bolsao || String(r.bolsao).charAt(0) !== '_') && (!r.mantido_em || String(r.mantido_em).charAt(0) !== '_')
+    );
     _blobCacheSet('fluxolab', blob, { hasSub: true });
     pubBlob('fluxolab', blob);
-    return { data: blob, removidos: res.removidos || [] };
+    return { data: blob, removidos };
+  }
+
+  async function reloadBlob(blobKey) {
+    const fresh = await blobLoad(blobKey || 'fluxolab', true);
+    _blobCacheSet(blobKey || 'fluxolab', fresh, { hasSub: true });
+    _busDispatch({ k: 'blob', key: blobKey || 'fluxolab', data: fresh });
+    return fresh;
   }
 
   return {
@@ -933,6 +1019,7 @@ function createSupabaseCompatShim(supa) {
     fluxolabMoveSelb,
     fluxolabRemoveSelbEverywhere,
     fluxolabDedupeSelbs,
+    reloadBlob,
     // Diagnóstico: quantos canais Realtime estão realmente abertos.
     _debugChannels() {
       return { modo: USE_PG_CHANGES ? 'postgres_changes' : 'broadcast-bus',

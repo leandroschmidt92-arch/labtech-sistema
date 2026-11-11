@@ -11,6 +11,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 
 <!-- Etiquetador: JsBarcode Code 128 -->
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
@@ -71,8 +74,8 @@
 }
 </style>
 
-<script src="pendencias-viewer.js?v=2"></script>
-<script src="pendencias-viewer-complexas.js?v=2"></script>
+<script src="pendencias-viewer.js?v=3"></script>
+<script src="pendencias-viewer-complexas.js?v=3"></script>
 
 <style>/* ro-visu-fluxolab */
 /* Deixa visualmente claro que o usuário está em modo somente visualização */
@@ -1100,10 +1103,51 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     </div>
   </div>
 
-  <div class="status-bar">
-    <div class="pulse" id="status-dot" title="Status da Conexão"></div>
-    <span>Sistema ativo — <span id="live-clock"></span></span>
-    <span id="schedule-badge" style="margin-left:auto;font-size:11px;font-weight:600;padding:2px 12px;border-radius:20px;display:none"></span>
+  <div class="status-bar" id="main-status-bar">
+    <div id="status-bar-clock" style="display:none;align-items:center;gap:8px;width:100%">
+      <div class="pulse" id="status-dot" title="Status da Conexão"></div>
+      <span>Sistema ativo — <span id="live-clock"></span></span>
+      <span id="schedule-badge" style="margin-left:auto;font-size:11px;font-weight:600;padding:2px 12px;border-radius:20px;display:none"></span>
+    </div>
+    <div id="team-totals-card" style="
+      background: var(--bg2); border: 1px solid var(--border); border-radius: 16px;
+      padding: 6px 18px; display: flex; align-items: center; gap: 14px; flex-shrink: 0;
+      box-shadow: var(--shadow); backdrop-filter: blur(10px); margin: 0 auto;
+    ">
+      <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center;">
+        <div style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 10px;">
+          <span style="font-size: 10px; font-weight: 800; color: #fff; letter-spacing: 0.05em;">TOTAL</span>
+          <span id="t-total" style="font-family: var(--mono); font-size: 18px; font-weight: 800; color: var(--accent);">0</span>
+        </div>
+        <div style="height: 24px; width: 1px; background: var(--border); margin: 0 4px;"></div>
+        <div id="exp-mont-pill" title="Montagem: produção atual vs. expectativa (cards ativos × meta 8)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(16, 185, 129, 0.06); border: 1px solid rgba(16, 185, 129, 0.15); border-radius: 10px;">
+          <span style="font-size: 10px; font-weight: 800; color: var(--accent2); letter-spacing: 0.05em;">EXP. MT</span>
+          <span style="font-family: var(--mono); font-size: 15px; font-weight: 800;"><span id="exp-mont-atual" style="color: var(--warn);">0</span><span style="color: var(--muted);">/</span><span id="exp-mont-total" style="color: var(--muted);">0</span></span>
+        </div>
+        <div id="exp-limp-pill" title="Limpeza: produção atual vs. expectativa (cards ativos × meta 8)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(59, 130, 246, 0.06); border: 1px solid rgba(59, 130, 246, 0.15); border-radius: 10px;">
+          <span style="font-size: 10px; font-weight: 800; color: var(--accent); letter-spacing: 0.05em;">EXP. LP</span>
+          <span style="font-family: var(--mono); font-size: 15px; font-weight: 800;"><span id="exp-limp-atual" style="color: var(--warn);">0</span><span style="color: var(--muted);">/</span><span id="exp-limp-total" style="color: var(--muted);">0</span></span>
+        </div>
+        <div id="exp-comp-pill" title="Complexa: produção atual vs. expectativa (cards ativos × meta 1)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(139, 92, 246, 0.06); border: 1px solid rgba(139, 92, 246, 0.15); border-radius: 10px;">
+          <span style="font-size: 10px; font-weight: 800; color: var(--purple); letter-spacing: 0.05em;">EXP. CX</span>
+          <span style="font-family: var(--mono); font-size: 15px; font-weight: 800;"><span id="exp-comp-atual" style="color: var(--warn);">0</span><span style="color: var(--muted);">/</span><span id="exp-comp-total" style="color: var(--muted);">0</span></span>
+        </div>
+        <div style="height: 24px; width: 1px; background: var(--border); margin: 0 4px;"></div>
+        <div id="dash-checklists-pill" title="Total de checklists na planilha importada (FluxoLAB)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.15); border-radius: 10px;">
+          <span style="font-size: 10px; font-weight: 800; color: #f59e0b; letter-spacing: 0.05em;">📋 CHECKLISTS</span>
+          <span id="dash-checklists-total" style="font-family: var(--mono); font-size: 15px; font-weight: 800; color: #f59e0b;">—</span>
+        </div>
+        <div style="height: 24px; width: 1px; background: var(--border); margin: 0 4px;"></div>
+        <div id="dash-liberadas-pill" title="Total de equipamentos liberados pela Qualidade hoje" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(236, 72, 153, 0.06); border: 1px solid rgba(236, 72, 153, 0.15); border-radius: 10px;">
+          <span style="font-size: 10px; font-weight: 800; color: #ec4899; letter-spacing: 0.05em;">LIBERADAS NO DIA</span>
+          <span id="dash-liberadas-total" style="font-family: var(--mono); font-size: 15px; font-weight: 800; color: #ec4899;">0</span>
+        </div>
+        <div id="dash-health-pill" title="Saúde Geral da Equipe (Presença)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(74, 222, 128, 0.06); border: 1px solid rgba(74, 222, 128, 0.15); border-radius: 10px;">
+          <span style="font-size: 10px; font-weight: 800; color: #4ade80; letter-spacing: 0.05em;">SAÚDE EQUIPE</span>
+          <span id="dash-health-total" style="font-family: var(--mono); font-size: 15px; font-weight: 800; color: #4ade80;">0%</span>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Schedule full-screen overlay (break/off hours) -->
@@ -1155,52 +1199,13 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       </div>
     </div>
 
-    <!-- ── LINHA: APROVADAS POR EQUIPE + ABAS DE SETOR ── -->
+    <!-- ── LINHA: ABAS DE SETOR ── -->
     <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:24px;flex-wrap:wrap">
       <div class="stabs" id="sector-tabs" style="margin:0;flex-shrink:0">
         <button class="stab a-mont" onclick="setSector('MONTAGEM',this)">Montagem</button>
         <button class="stab" onclick="setSector('LIMPEZA',this)">Limpeza</button>
         <button class="stab" onclick="setSector('COMPLEXA',this)">Complexa</button>
         <button class="stab" onclick="setSector('ELETRÔNICA',this)">Eletrônica</button>
-      </div>
-      <div id="team-totals-card" style="
-        background: var(--bg2); border: 1px solid var(--border); border-radius: 16px;
-        padding: 8px 20px; display: flex; align-items: center; gap: 14px; flex-shrink: 0;
-        box-shadow: var(--shadow); backdrop-filter: blur(10px);
-      ">
-        <div style="display: flex; gap: 10px; align-items: center;">
-          <div style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 10px;">
-            <span style="font-size: 10px; font-weight: 800; color: #fff; letter-spacing: 0.05em;">TOTAL</span>
-            <span id="t-total" style="font-family: var(--mono); font-size: 18px; font-weight: 800; color: var(--accent);">0</span>
-          </div>
-          <div style="height: 24px; width: 1px; background: var(--border); margin: 0 4px;"></div>
-          <div id="exp-mont-pill" title="Montagem: produção atual vs. expectativa (cards ativos × meta 8)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(16, 185, 129, 0.06); border: 1px solid rgba(16, 185, 129, 0.15); border-radius: 10px;">
-            <span style="font-size: 10px; font-weight: 800; color: var(--accent2); letter-spacing: 0.05em;">EXP. MT</span>
-            <span style="font-family: var(--mono); font-size: 15px; font-weight: 800;"><span id="exp-mont-atual" style="color: var(--warn);">0</span><span style="color: var(--muted);">/</span><span id="exp-mont-total" style="color: var(--muted);">0</span></span>
-          </div>
-          <div id="exp-limp-pill" title="Limpeza: produção atual vs. expectativa (cards ativos × meta 8)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(59, 130, 246, 0.06); border: 1px solid rgba(59, 130, 246, 0.15); border-radius: 10px;">
-            <span style="font-size: 10px; font-weight: 800; color: var(--accent); letter-spacing: 0.05em;">EXP. LP</span>
-            <span style="font-family: var(--mono); font-size: 15px; font-weight: 800;"><span id="exp-limp-atual" style="color: var(--warn);">0</span><span style="color: var(--muted);">/</span><span id="exp-limp-total" style="color: var(--muted);">0</span></span>
-          </div>
-          <div id="exp-comp-pill" title="Complexa: produção atual vs. expectativa (cards ativos × meta 1)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(139, 92, 246, 0.06); border: 1px solid rgba(139, 92, 246, 0.15); border-radius: 10px;">
-            <span style="font-size: 10px; font-weight: 800; color: var(--purple); letter-spacing: 0.05em;">EXP. CX</span>
-            <span style="font-family: var(--mono); font-size: 15px; font-weight: 800;"><span id="exp-comp-atual" style="color: var(--warn);">0</span><span style="color: var(--muted);">/</span><span id="exp-comp-total" style="color: var(--muted);">0</span></span>
-          </div>
-          <div style="height: 24px; width: 1px; background: var(--border); margin: 0 4px;"></div>
-          <div id="dash-checklists-pill" title="Total de checklists na planilha importada (FluxoLAB)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(245, 158, 11, 0.06); border: 1px solid rgba(245, 158, 11, 0.15); border-radius: 10px;">
-            <span style="font-size: 10px; font-weight: 800; color: #f59e0b; letter-spacing: 0.05em;">📋 CHECKLISTS</span>
-            <span id="dash-checklists-total" style="font-family: var(--mono); font-size: 15px; font-weight: 800; color: #f59e0b;">—</span>
-          </div>
-          <div style="height: 24px; width: 1px; background: var(--border); margin: 0 4px;"></div>
-          <div id="dash-liberadas-pill" title="Total de equipamentos liberados pela Qualidade hoje" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(236, 72, 153, 0.06); border: 1px solid rgba(236, 72, 153, 0.15); border-radius: 10px;">
-            <span style="font-size: 10px; font-weight: 800; color: #ec4899; letter-spacing: 0.05em;">LIBERADAS NO DIA</span>
-            <span id="dash-liberadas-total" style="font-family: var(--mono); font-size: 15px; font-weight: 800; color: #ec4899;">0</span>
-          </div>
-          <div id="dash-health-pill" title="Saúde Geral da Equipe (Presença)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(74, 222, 128, 0.06); border: 1px solid rgba(74, 222, 128, 0.15); border-radius: 10px;">
-            <span style="font-size: 10px; font-weight: 800; color: #4ade80; letter-spacing: 0.05em;">SAÚDE EQUIPE</span>
-            <span id="dash-health-total" style="font-family: var(--mono); font-size: 15px; font-weight: 800; color: #4ade80;">0%</span>
-          </div>
-        </div>
       </div>
     </div>
     <div class="grid" id="cards-grid"></div>
@@ -2090,16 +2095,22 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 
       <div id="modelo-loading" style="display:none;text-align:center;padding:20px;color:var(--muted);font-size:13px">Carregando histórico completo...</div>
 
-      <!-- Filtro de janela de tempo -->
-      <div id="modelo-window-tabs" style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
+      <!-- Filtro de janela de tempo e seletor de Mês -->
+      <div id="modelo-window-tabs" style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
         <button class="modelo-win-btn" data-days="30" onclick="setModeloWindow(30,this)">30 dias</button>
         <button class="modelo-win-btn" data-days="60" onclick="setModeloWindow(60,this)">60 dias</button>
         <button class="modelo-win-btn active" data-days="90" onclick="setModeloWindow(90,this)">90 dias</button>
+        <span style="width:1px;height:22px;background:var(--border2);margin:0 6px"></span>
+        <button class="modelo-win-btn" id="btn-modelo-mes-atual" onclick="setModeloCurrentMonth(this)" title="Filtrar todos os equipamentos que passaram no mês atual">📅 Mês Atual</button>
+        <div style="display:inline-flex;align-items:center;gap:6px;background:var(--bg2);border:1px solid var(--border2);border-radius:9px;padding:3px 10px" id="modelo-month-wrap">
+          <span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">📅 Mês:</span>
+          <input type="month" id="modelo-month-picker" onchange="setModeloMonth(this.value)" style="background:transparent;border:none;color:var(--text);font-family:var(--mono);font-size:12px;font-weight:600;outline:none;cursor:pointer;padding:3px 2px">
+        </div>
       </div>
 
-      <!-- Busca de modelo -->
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:18px">
-        <div style="position:relative;flex:1;max-width:420px">
+      <!-- Busca de modelo e Filtro de Ordenação (Crescente / Decrescente) -->
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:18px;flex-wrap:wrap">
+        <div style="position:relative;flex:1;max-width:360px;min-width:200px">
           <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:14px;pointer-events:none">🔍</span>
           <input id="modelo-search" class="sinp" placeholder="BUSCAR MODELO..."
             oninput="renderModeloRel()"
@@ -2112,71 +2123,177 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--muted)'">
           ✕ Limpar
         </button>
-      </div>
-      <div style="margin-bottom:28px">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
-          <span style="font-size:14px;font-weight:700;color:var(--mont)">● MONTAGEM</span>
-          <span id="modelo-mont-label" style="font-size:11px;color:var(--muted)"></span>
+
+        <!-- Filtro de Setores (Montagem / Limpeza / Complexas) -->
+        <div style="display:inline-flex;align-items:center;gap:6px;background:var(--bg2);border:1px solid var(--border2);border-radius:9px;padding:4px 10px;flex-wrap:wrap" id="modelo-sector-toggles">
+          <span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">🏭 Setores:</span>
+          <button type="button" id="btn-mod-sec-ALL" onclick="toggleModeloSector('ALL')" style="background:var(--accent);color:#fff;border:1px solid var(--accent);border-radius:7px;font-family:var(--font);font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer;white-space:nowrap;transition:all .15s" title="Exibir todos os setores (Montagem, Limpeza e Complexas)">
+            Todos
+          </button>
+          <button type="button" id="btn-mod-sec-MONTAGEM" onclick="toggleModeloSector('MONTAGEM')" style="background:rgba(79,142,247,.16);color:var(--mont);border:1px solid rgba(79,142,247,.45);border-radius:7px;font-family:var(--font);font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer;white-space:nowrap;transition:all .15s" title="Clique para ativar/desativar Montagem">
+            ✓ Montagem
+          </button>
+          <button type="button" id="btn-mod-sec-LIMPEZA" onclick="toggleModeloSector('LIMPEZA')" style="background:rgba(61,214,140,.16);color:var(--limp);border:1px solid rgba(61,214,140,.45);border-radius:7px;font-family:var(--font);font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer;white-space:nowrap;transition:all .15s" title="Clique para ativar/desativar Limpeza">
+            ✓ Limpeza
+          </button>
+          <button type="button" id="btn-mod-sec-COMPLEXA" onclick="toggleModeloSector('COMPLEXA')" style="background:rgba(245,166,35,.16);color:var(--comp);border:1px solid rgba(245,166,35,.45);border-radius:7px;font-family:var(--font);font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer;white-space:nowrap;transition:all .15s" title="Clique para ativar/desativar Complexas">
+            ✓ Complexas
+          </button>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px" id="modelo-mont-kpi"></div>
-        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:16px">
-          <canvas id="chart-modelo-mont" height="180"></canvas>
+
+        <!-- Controle de Ordenação de Tempos (Crescente / Decrescente) -->
+        <div style="display:inline-flex;align-items:center;gap:6px;background:var(--bg2);border:1px solid var(--border2);border-radius:9px;padding:4px 10px;flex-wrap:wrap">
+          <span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">⏱️ Ordenar:</span>
+          <select id="modelo-sort-field" onchange="setModeloSortField(this.value)" style="background:var(--bg3);border:1px solid var(--border2);border-radius:7px;color:var(--text);font-family:var(--font);font-size:12px;font-weight:600;padding:4px 8px;outline:none;cursor:pointer">
+            <option value="totalRecs" selected>Maior Volume (Qtd. de Registros)</option>
+            <option value="tempoRevisao">Tempo Médio Saída Revisão (Mont + Limp)</option>
+            <option value="expRevisaoDia">Expectativa Saída Revisão/Dia (Mont + Limp)</option>
+            <option value="totalAvg">Expectativa / Tempo Geral</option>
+            <option value="expMontDia">Expectativa Montagem/Dia (9 Op)</option>
+            <option value="expLimpDia">Expectativa Limpeza/Dia (9 Op)</option>
+            <option value="montAvg">Tempo Médio Montagem</option>
+            <option value="limpAvg">Tempo Médio Limpeza</option>
+            <option value="compAvg">Tempo Médio Complexa</option>
+            <option value="nome">Modelo (A–Z)</option>
+          </select>
+          <button id="btn-modelo-sort-desc" onclick="setModeloSortDir('desc')" style="background:var(--accent);color:#fff;border:1px solid var(--accent);border-radius:7px;font-family:var(--font);font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer;white-space:nowrap" title="Do maior para o menor">
+            ⬇️ Decrescente
+          </button>
+          <button id="btn-modelo-sort-asc" onclick="setModeloSortDir('asc')" style="background:var(--bg3);color:var(--muted);border:1px solid var(--border2);border-radius:7px;font-family:var(--font);font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer;white-space:nowrap" title="Do menor para o maior">
+            ⬆️ Crescente
+          </button>
         </div>
-        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
-          <div style="overflow-x:auto">
-          <table class="rtbl">
-            <thead><tr>
-              <th>Equipamento</th><th>Registros</th>
-              <th>Mínimo</th><th>Médio</th><th>Máximo</th><th style="width:80px">Ação</th>
-            </tr></thead>
-            <tbody id="modelo-mont-body"></tbody>
-          </table>
-          </div>
+
+        <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
+          <button onclick="exportarModeloComparativoXLSX()" style="background:rgba(61,214,140,.12);border:1px solid rgba(61,214,140,.35);border-radius:9px;color:var(--accent2);font-family:var(--font);font-size:12px;font-weight:700;padding:7px 14px;cursor:pointer;white-space:nowrap" title="Exportar planilha Excel (.xlsx) formatada lado a lado ordenada por maior volume (decrescente)">
+            ⬇ Exportar Relatório Lado a Lado (XLSX)
+          </button>
+          <button onclick="exportarModeloComparativoPDF()" style="background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);border-radius:9px;color:#f87171;font-family:var(--font);font-size:12px;font-weight:700;padding:7px 14px;cursor:pointer;white-space:nowrap" title="Exportar documento PDF formatado lado a lado ordenado por maior volume (decrescente)">
+            📄 Exportar Relatório (PDF)
+          </button>
+          <button onclick="imprimirModeloComparativo()" style="background:rgba(79,142,247,.12);border:1px solid rgba(79,142,247,.35);border-radius:9px;color:var(--accent);font-family:var(--font);font-size:12px;font-weight:700;padding:7px 14px;cursor:pointer;white-space:nowrap">
+            🖨️ Imprimir Relatório
+          </button>
         </div>
       </div>
 
-      <!-- ── LIMPEZA ── -->
-      <div>
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
-          <span style="font-size:14px;font-weight:700;color:var(--limp)">● LIMPEZA</span>
-          <span id="modelo-limp-label" style="font-size:11px;color:var(--muted)"></span>
-        </div>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px" id="modelo-limp-kpi"></div>
-        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:16px">
-          <canvas id="chart-modelo-limp" height="180"></canvas>
-        </div>
-        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
-          <div style="overflow-x:auto">
-          <table class="rtbl">
-            <thead><tr>
-              <th>Equipamento</th><th>Registros</th>
-              <th>Mínimo</th><th>Médio</th><th>Máximo</th><th style="width:80px">Ação</th>
-            </tr></thead>
-            <tbody id="modelo-limp-body"></tbody>
-          </table>
+      <!-- ── RELATÓRIO COMPARATIVO LADO A LADO (MONTAGEM × LIMPEZA × COMPLEXA POR MODELO) ── -->
+      <div id="modelo-comparativo-card" style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:20px;margin-bottom:24px">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+          <div>
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <span id="modelo-comparativo-title" style="font-size:15px;font-weight:700;color:var(--text)">📊 Comparativo Lado a Lado — <span style="color:var(--mont)">MONTAGEM</span> × <span style="color:var(--limp)">LIMPEZA</span> × <span style="color:var(--comp)">COMPLEXA</span> por Modelo</span>
+              <span id="modelo-comparativo-badge" style="font-size:11px;font-weight:700;font-family:var(--mono);padding:3px 10px;border-radius:20px;background:rgba(79,142,247,.14);color:var(--accent);border:1px solid rgba(79,142,247,.3)"></span>
+            </div>
+            <p style="font-size:11px;color:var(--muted);margin-top:4px" id="modelo-comparativo-sub">Tempo médio por modelo de todos os equipamentos que passaram no período selecionado, comparando Montagem, Limpeza e Complexa lado a lado. (Clique nos cabeçalhos ou use o filtro acima para alternar entre Crescente e Decrescente).</p>
           </div>
+          <button onclick="toggleModeloComparativoTable()" id="btn-toggle-modelo-comp" style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--muted);font-family:var(--font);font-size:11px;font-weight:600;padding:6px 12px;cursor:pointer">
+            ▲ Recolher tabela unificada
+          </button>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:10px;margin-bottom:16px" id="modelo-comparativo-kpi"></div>
+        <div id="modelo-comparativo-table-wrap" style="overflow-x:auto;max-height:560px;overflow-y:auto;border:1px solid var(--border);border-radius:10px">
+          <table class="rtbl" id="modelo-comparativo-tbl" style="min-width:1180px">
+            <thead style="position:sticky;top:0;z-index:2;background:var(--bg3)">
+              <tr>
+                <th rowspan="2" onclick="setModeloSortHeader('nome')" style="vertical-align:middle;border-right:1px solid var(--border2);cursor:pointer;user-select:none" title="Clique para ordenar por Modelo">Equipamento (Modelo) <span id="sort-ico-nome"></span></th>
+                <th colspan="4" data-mod-sec="MONTAGEM" style="text-align:center;color:var(--mont);border-bottom:1px solid rgba(79,142,247,.3);border-right:1px solid var(--border2);background:rgba(79,142,247,.06)">● MONTAGEM</th>
+                <th colspan="4" data-mod-sec="LIMPEZA" style="text-align:center;color:var(--limp);border-bottom:1px solid rgba(61,214,140,.3);border-right:1px solid var(--border2);background:rgba(61,214,140,.06)">● LIMPEZA</th>
+                <th colspan="4" data-mod-sec="COMPLEXA" style="text-align:center;color:var(--comp);border-bottom:1px solid rgba(245,166,35,.3);border-right:1px solid var(--border2);background:rgba(245,166,35,.06)">● COMPLEXA</th>
+                <th rowspan="2" onclick="setModeloSortHeader('totalAvg')" style="text-align:center;vertical-align:middle;color:var(--warn);cursor:pointer;user-select:none;min-width:185px;border-right:1px solid var(--border2)" title="Expectativa de produção por dia considerando 9 operadores na Montagem (c/ Complexa) e 9 operadores na Limpeza trabalhando 7h/dia (63h por setor)">📈 Expectativa / Dia <span id="sort-ico-totalAvg"></span><br><span id="modelo-exp-hdr-sub" style="font-size:9px;font-weight:500;color:var(--muted)">9 Op · 7h/dia (Mont+Comp | Limp)</span></th>
+                <th rowspan="2" onclick="setModeloSortHeader('tempoRevisao')" style="text-align:center;vertical-align:middle;color:#a78bfa;cursor:pointer;user-select:none;min-width:140px;border-right:1px solid var(--border2)" title="Tempo médio de saída de uma máquina da revisão: (Tempo Médio Montagem + Tempo Médio Limpeza) ÷ 2">⏱️ Saída da Revisão <span id="sort-ico-tempoRevisao"></span><br><span style="font-size:9px;font-weight:500;color:var(--muted)">(Mont + Limp) ÷ 2</span></th>
+                <th rowspan="2" onclick="setModeloSortHeader('expRevisaoDia')" style="text-align:center;vertical-align:middle;color:#38bdf8;cursor:pointer;user-select:none;min-width:155px" title="Expectativa de produção diária (9 op × 7h = 63h/dia) dividida pelo Tempo de Saída da Revisão ((Mont + Limp) ÷ 2)">🚀 Expectativa Revisão / Dia <span id="sort-ico-expRevisaoDia"></span><br><span style="font-size:9px;font-weight:500;color:var(--muted)">Base (Mont + Limp) ÷ 2</span></th>
+              </tr>
+              <tr>
+                <th data-mod-sec="MONTAGEM" onclick="setModeloSortHeader('montQtd')" style="text-align:center;font-size:10px;background:rgba(79,142,247,.04);cursor:pointer;user-select:none">Qtd <span id="sort-ico-montQtd"></span></th>
+                <th data-mod-sec="MONTAGEM" onclick="setModeloSortHeader('montMin')" style="text-align:center;font-size:10px;background:rgba(79,142,247,.04);cursor:pointer;user-select:none">Mínimo <span id="sort-ico-montMin"></span></th>
+                <th data-mod-sec="MONTAGEM" onclick="setModeloSortHeader('montAvg')" style="text-align:center;font-size:10px;color:var(--mont);background:rgba(79,142,247,.09);cursor:pointer;user-select:none" title="Clique para ordenar por Tempo Médio de Montagem">Tempo Médio <span id="sort-ico-montAvg"></span></th>
+                <th data-mod-sec="MONTAGEM" onclick="setModeloSortHeader('montMax')" style="text-align:center;font-size:10px;border-right:1px solid var(--border2);background:rgba(79,142,247,.04);cursor:pointer;user-select:none">Máximo <span id="sort-ico-montMax"></span></th>
+
+                <th data-mod-sec="LIMPEZA" onclick="setModeloSortHeader('limpQtd')" style="text-align:center;font-size:10px;background:rgba(61,214,140,.04);cursor:pointer;user-select:none">Qtd <span id="sort-ico-limpQtd"></span></th>
+                <th data-mod-sec="LIMPEZA" onclick="setModeloSortHeader('limpMin')" style="text-align:center;font-size:10px;background:rgba(61,214,140,.04);cursor:pointer;user-select:none">Mínimo <span id="sort-ico-limpMin"></span></th>
+                <th data-mod-sec="LIMPEZA" onclick="setModeloSortHeader('limpAvg')" style="text-align:center;font-size:10px;color:var(--limp);background:rgba(61,214,140,.09);cursor:pointer;user-select:none" title="Clique para ordenar por Tempo Médio de Limpeza">Tempo Médio <span id="sort-ico-limpAvg"></span></th>
+                <th data-mod-sec="LIMPEZA" onclick="setModeloSortHeader('limpMax')" style="text-align:center;font-size:10px;border-right:1px solid var(--border2);background:rgba(61,214,140,.04);cursor:pointer;user-select:none">Máximo <span id="sort-ico-limpMax"></span></th>
+
+                <th data-mod-sec="COMPLEXA" onclick="setModeloSortHeader('compQtd')" style="text-align:center;font-size:10px;background:rgba(245,166,35,.04);cursor:pointer;user-select:none">Qtd <span id="sort-ico-compQtd"></span></th>
+                <th data-mod-sec="COMPLEXA" onclick="setModeloSortHeader('compMin')" style="text-align:center;font-size:10px;background:rgba(245,166,35,.04);cursor:pointer;user-select:none">Mínimo <span id="sort-ico-compMin"></span></th>
+                <th data-mod-sec="COMPLEXA" onclick="setModeloSortHeader('compAvg')" style="text-align:center;font-size:10px;color:var(--comp);background:rgba(245,166,35,.09);cursor:pointer;user-select:none" title="Clique para ordenar por Tempo Médio de Complexa">Tempo Médio <span id="sort-ico-compAvg"></span></th>
+                <th data-mod-sec="COMPLEXA" onclick="setModeloSortHeader('compMax')" style="text-align:center;font-size:10px;border-right:1px solid var(--border2);background:rgba(245,166,35,.04);cursor:pointer;user-select:none">Máximo <span id="sort-ico-compMax"></span></th>
+              </tr>
+            </thead>
+            <tbody id="modelo-comparativo-body"></tbody>
+          </table>
         </div>
       </div>
 
-      <!-- ── COMPLEXA ── -->
-      <div style="margin-top:28px">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
-          <span style="font-size:14px;font-weight:700;color:var(--comp)">● COMPLEXA</span>
-          <span id="modelo-comp-label" style="font-size:11px;color:var(--muted)"></span>
+      <!-- ── MONTAGEM, LIMPEZA & COMPLEXA LADO A LADO ── -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:20px;margin-bottom:28px;align-items:start">
+        <!-- ── MONTAGEM ── -->
+        <div id="modelo-sec-card-MONTAGEM" style="min-width:0">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+            <span style="font-size:14px;font-weight:700;color:var(--mont)">● MONTAGEM</span>
+            <span id="modelo-mont-label" style="font-size:11px;color:var(--muted)"></span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px" id="modelo-mont-kpi"></div>
+          <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:16px">
+            <canvas id="chart-modelo-mont" height="180"></canvas>
+          </div>
+          <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
+            <div style="overflow-x:auto">
+            <table class="rtbl">
+              <thead><tr>
+                <th>Equipamento</th><th>Registros</th>
+                <th>Mínimo</th><th>Médio</th><th>Máximo</th><th style="width:80px">Ação</th>
+              </tr></thead>
+              <tbody id="modelo-mont-body"></tbody>
+            </table>
+            </div>
+          </div>
         </div>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px" id="modelo-comp-kpi"></div>
-        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:16px">
-          <canvas id="chart-modelo-comp" height="180"></canvas>
+
+        <!-- ── LIMPEZA ── -->
+        <div id="modelo-sec-card-LIMPEZA" style="min-width:0">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+            <span style="font-size:14px;font-weight:700;color:var(--limp)">● LIMPEZA</span>
+            <span id="modelo-limp-label" style="font-size:11px;color:var(--muted)"></span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px" id="modelo-limp-kpi"></div>
+          <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:16px">
+            <canvas id="chart-modelo-limp" height="180"></canvas>
+          </div>
+          <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
+            <div style="overflow-x:auto">
+            <table class="rtbl">
+              <thead><tr>
+                <th>Equipamento</th><th>Registros</th>
+                <th>Mínimo</th><th>Médio</th><th>Máximo</th><th style="width:80px">Ação</th>
+              </tr></thead>
+              <tbody id="modelo-limp-body"></tbody>
+            </table>
+            </div>
+          </div>
         </div>
-        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
-          <div style="overflow-x:auto">
-          <table class="rtbl">
-            <thead><tr>
-              <th>Equipamento</th><th>Registros</th>
-              <th>Mínimo</th><th>Médio</th><th>Máximo</th><th style="width:80px">Ação</th>
-            </tr></thead>
-            <tbody id="modelo-comp-body"></tbody>
-          </table>
+
+        <!-- ── COMPLEXA ── -->
+        <div id="modelo-sec-card-COMPLEXA" style="min-width:0">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+            <span style="font-size:14px;font-weight:700;color:var(--comp)">● COMPLEXA</span>
+            <span id="modelo-comp-label" style="font-size:11px;color:var(--muted)"></span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px" id="modelo-comp-kpi"></div>
+          <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:16px">
+            <canvas id="chart-modelo-comp" height="180"></canvas>
+          </div>
+          <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
+            <div style="overflow-x:auto">
+            <table class="rtbl">
+              <thead><tr>
+                <th>Equipamento</th><th>Registros</th>
+                <th>Mínimo</th><th>Médio</th><th>Máximo</th><th style="width:80px">Ação</th>
+              </tr></thead>
+              <tbody id="modelo-comp-body"></tbody>
+            </table>
+            </div>
           </div>
         </div>
       </div>
@@ -4946,10 +5063,10 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.19.1/umd/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-<script src="supabase-compat-shim.js?v=2"></script>
-<script src="app.js?v=57"></script>
-<script src="planejamento.js?v=2"></script>
-<script src="pendencias.js?v=4"></script>
+<script src="supabase-compat-shim.js?v=3"></script>
+<script src="app.js?v=74"></script>
+<script src="planejamento.js?v=8"></script>
+<script src="pendencias.js?v=10"></script>
 
 
 <!-- ═══ ALERTA FIXO: SELB EM ANDAMENTO (Complexa / Montagem / Limpeza) ═══ -->

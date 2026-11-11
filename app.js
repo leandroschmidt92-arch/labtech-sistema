@@ -261,7 +261,7 @@ function fluxolabStartLogListener() {
 function fluxolabStartLiberadosListener() {
   if (_fluxolabLiberadosListener) return;
   try {
-    _fluxolabLiberadosListener = _db.ref('/fluxolab/_checklist_liberados')
+    _fluxolabLiberadosListener = _db.ref('/fluxolab_checklist_liberados')
       .orderByChild('ts')
       .limitToLast(1000)
       .on('value', snap => {
@@ -2938,6 +2938,12 @@ function showOperatorView(uid){
   document.getElementById('topbar-tabs').style.display = 'none';
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.getElementById('view-operador').classList.add('active');
+  const _sbClock = document.getElementById('status-bar-clock');
+  const _sbTotals = document.getElementById('team-totals-card');
+  if (_sbClock && _sbTotals) {
+    _sbClock.style.display = 'flex';
+    _sbTotals.style.display = 'none';
+  }
 
   // Preenche header
   const u = users.find(x=>x.id===uid);
@@ -3300,6 +3306,7 @@ function setView(v,btn){
       window._qualListenerStarted = true;
       _initQualListener().catch(e => console.warn('[Qualidade] listener:', e));
     }
+    if(typeof fluxolabStartListener === 'function') fluxolabStartListener();
     if(typeof fluxolabStartChecklistsListener === 'function') fluxolabStartChecklistsListener();
     renderQualRegistros();
   }
@@ -3320,6 +3327,18 @@ function setView(v,btn){
   document.getElementById('view-'+v).classList.add('active');
   document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
   if(btn) btn.classList.add('active');
+  // Na tela de Dashboard exibe os badges fixos no lugar do relógio da status-bar
+  const _sbClock = document.getElementById('status-bar-clock');
+  const _sbTotals = document.getElementById('team-totals-card');
+  if (_sbClock && _sbTotals) {
+    if (v === 'dashboard') {
+      _sbClock.style.display = 'none';
+      _sbTotals.style.display = 'flex';
+    } else {
+      _sbClock.style.display = 'flex';
+      _sbTotals.style.display = 'none';
+    }
+  }
   // Oculta alertas na tela do operador, limpa o painel ao sair dela
   const alertPanel = document.getElementById('selb-alert-panel');
   if(alertPanel){
@@ -11783,17 +11802,284 @@ function renderScrapRel(){
   </tr>`;}).join('');
 }
 
-// ════ TEMPO POR MODELO — todos os períodos ════
+// ════ TEMPO POR MODELO — todos os períodos e por Mês (Lado a Lado) ════
 let modeloFilter = '';
 // Janela de tempo (em dias) usada pelo relatório Tempo Médio por Modelo.
-// Valores válidos: 30, 60, 90. Default = 90.
+// Valores válidos: 30, 60, 90. Default = 90. Quando _modeloMonthFilter está preenchido ('YYYY-MM'), filtra pelo mês.
 let _modeloWindowDays = 90;
+let _modeloMonthFilter = ''; // ex: '2026-11'
+const _modeloLoadedMonths = new Set();
+
+function _formatMonthPtBr(yyyyMm){
+  if(!yyyyMm || !/^\d{4}-\d{2}$/.test(yyyyMm)) return yyyyMm || '';
+  const [yy, mm] = yyyyMm.split('-').map(Number);
+  const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+  return `${meses[mm - 1] || mm}/${yy}`;
+}
+
+function _getModeloRecDateMs(h){
+  if(h.endEpoch && h.endEpoch > 0) return h.endEpoch;
+  if(h.startEpoch && h.startEpoch > 0) return h.startEpoch;
+  if(h._dateKey){ const t = Date.parse(h._dateKey.replace(/_/g,' ')); if(!isNaN(t)) return t; }
+  return Date.now();
+}
+
+function _getModeloActiveRange(){
+  if(_modeloMonthFilter && /^\d{4}-\d{2}$/.test(_modeloMonthFilter)){
+    const [yy, mm] = _modeloMonthFilter.split('-').map(Number);
+    const startMs = new Date(yy, mm - 1, 1, 0, 0, 0, 0).getTime();
+    const endMs   = new Date(yy, mm, 0, 23, 59, 59, 999).getTime();
+    const mLabel  = _formatMonthPtBr(_modeloMonthFilter);
+    return {
+      isMonth: true,
+      monthKey: _modeloMonthFilter,
+      startMs,
+      endMs,
+      label: `Mês de ${mLabel}`,
+      shortBadge: `📅 ${mLabel}`
+    };
+  }
+  const winDays = (typeof _modeloWindowDays === 'number' && _modeloWindowDays > 0) ? _modeloWindowDays : 90;
+  return {
+    isMonth: false,
+    monthKey: '',
+    startMs: Date.now() - winDays * 24 * 60 * 60 * 1000,
+    endMs: Infinity,
+    label: `Últimos ${winDays} dias`,
+    shortBadge: `⏱️ Últimos ${winDays} dias`
+  };
+}
+
 function setModeloWindow(days, btn){
   _modeloWindowDays = days;
+  _modeloMonthFilter = '';
   document.querySelectorAll('#modelo-window-tabs .modelo-win-btn').forEach(b => b.classList.remove('active'));
   if(btn) btn.classList.add('active');
+  const wrap = document.getElementById('modelo-month-wrap');
+  if(wrap) wrap.style.borderColor = 'var(--border2)';
+  const picker = document.getElementById('modelo-month-picker');
+  if(picker) picker.value = '';
   if(typeof renderModeloRel === 'function') renderModeloRel();
 }
+
+function setModeloCurrentMonth(btn){
+  const now = new Date();
+  const yyyyMm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const picker = document.getElementById('modelo-month-picker');
+  if(picker) picker.value = yyyyMm;
+  setModeloMonth(yyyyMm, btn);
+}
+
+function setModeloMonth(yyyyMm, btn){
+  if(!yyyyMm){
+    const btn90 = document.querySelector('#modelo-window-tabs .modelo-win-btn[data-days="90"]');
+    setModeloWindow(90, btn90);
+    return;
+  }
+  _modeloMonthFilter = yyyyMm;
+  document.querySelectorAll('#modelo-window-tabs .modelo-win-btn').forEach(b => b.classList.remove('active'));
+  const now = new Date();
+  const curYyyyMm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const btnMesAtual = document.getElementById('btn-modelo-mes-atual');
+  if(btn) btn.classList.add('active');
+  else if(btnMesAtual && yyyyMm === curYyyyMm) btnMesAtual.classList.add('active');
+  const wrap = document.getElementById('modelo-month-wrap');
+  if(wrap) wrap.style.borderColor = 'var(--accent)';
+  const picker = document.getElementById('modelo-month-picker');
+  if(picker && picker.value !== yyyyMm) picker.value = yyyyMm;
+  if(typeof renderModeloRel === 'function') renderModeloRel();
+}
+
+async function loadModeloMonthIfNeeded(yyyyMm){
+  if(!yyyyMm || _modeloLoadedMonths.has(yyyyMm) || typeof _supa === 'undefined') return;
+  const [yy, mm] = yyyyMm.split('-').map(Number);
+  if(!yy || !mm) return;
+  const startMs = new Date(yy, mm - 1, 1, 0, 0, 0, 0).getTime() - 86400000;
+  const endMs   = new Date(yy, mm, 0, 23, 59, 59, 999).getTime() + 86400000;
+  const loadingEl = document.getElementById('modelo-loading');
+  if(loadingEl) loadingEl.style.display = 'block';
+  try {
+    const seen = new Set(_modeloAllRecs.map(h => h._docId).filter(Boolean));
+    const PAGE = 1000;
+    let from = 0;
+    for(let page = 0; page < 15; page++){
+      const { data, error } = await _supa
+        .from('history')
+        .select('id,date_key,raw,start_epoch')
+        .gte('start_epoch', startMs)
+        .lte('start_epoch', endMs)
+        .order('start_epoch', { ascending: false })
+        .range(from, from + PAGE - 1);
+      if(error) throw error;
+      const rows = data || [];
+      rows.forEach(row => {
+        if(!row || !row.id || seen.has(row.id)) return;
+        seen.add(row.id);
+        const raw = (row.raw && typeof row.raw === 'object') ? row.raw : {};
+        _modeloAllRecs.push({
+          ...raw,
+          _docId: row.id,
+          _dateKey: row.date_key || raw._dateKey || '',
+          startEpoch: raw.startEpoch || row.start_epoch,
+        });
+      });
+      if(rows.length < PAGE) break;
+      from += PAGE;
+    }
+    _modeloLoadedMonths.add(yyyyMm);
+  } catch(e){
+    console.warn('[T. Médio Modelo] falha ao carregar mês específico:', yyyyMm, e);
+  } finally {
+    if(loadingEl) loadingEl.style.display = 'none';
+  }
+}
+
+function toggleModeloComparativoTable(){
+  const wrap = document.getElementById('modelo-comparativo-table-wrap');
+  const btn  = document.getElementById('btn-toggle-modelo-comp');
+  if(!wrap) return;
+  const isHidden = wrap.style.display === 'none';
+  wrap.style.display = isHidden ? 'block' : 'none';
+  if(btn) btn.textContent = isHidden ? '▲ Recolher tabela unificada' : '▼ Expandir tabela unificada';
+}
+
+// Estado de ordenação de tempos (Crescente / Decrescente) e setores visíveis
+let _modeloSortField = 'totalRecs'; // 'totalRecs' (Maior Volume) | 'totalAvg' | 'expMontDia' | 'expLimpDia' | 'montAvg' | 'limpAvg' | 'compAvg' | 'nome' | ...
+let _modeloSortDir   = 'desc';     // 'desc' (Maior -> Menor) | 'asc' (Menor -> Maior)
+let _modeloVisibleSectors = new Set(['MONTAGEM', 'LIMPEZA', 'COMPLEXA']);
+
+function toggleModeloSector(sec){
+  if(sec === 'ALL'){
+    _modeloVisibleSectors = new Set(['MONTAGEM', 'LIMPEZA', 'COMPLEXA']);
+  } else {
+    if(_modeloVisibleSectors.has(sec)){
+      if(_modeloVisibleSectors.size > 1) _modeloVisibleSectors.delete(sec);
+      else _modeloVisibleSectors = new Set(['MONTAGEM', 'LIMPEZA', 'COMPLEXA']);
+    } else {
+      _modeloVisibleSectors.add(sec);
+    }
+  }
+  _updateModeloSortUI();
+  if(typeof renderModeloRel === 'function') renderModeloRel();
+}
+
+function _updateModeloSortUI(){
+  const sel = document.getElementById('modelo-sort-field');
+  if(sel && ['totalRecs','tempoRevisao','expRevisaoDia','totalAvg','expMontDia','expLimpDia','montAvg','limpAvg','compAvg','nome'].includes(_modeloSortField)){
+    sel.value = _modeloSortField;
+  }
+  const btnDesc = document.getElementById('btn-modelo-sort-desc');
+  const btnAsc  = document.getElementById('btn-modelo-sort-asc');
+  if(btnDesc){
+    const active = _modeloSortDir === 'desc';
+    btnDesc.style.background  = active ? 'var(--accent)' : 'var(--bg3)';
+    btnDesc.style.color       = active ? '#fff' : 'var(--muted)';
+    btnDesc.style.borderColor = active ? 'var(--accent)' : 'var(--border2)';
+  }
+  if(btnAsc){
+    const active = _modeloSortDir === 'asc';
+    btnAsc.style.background  = active ? 'var(--accent)' : 'var(--bg3)';
+    btnAsc.style.color       = active ? '#fff' : 'var(--muted)';
+    btnAsc.style.borderColor = active ? 'var(--accent)' : 'var(--border2)';
+  }
+
+  // Atualiza botões de seleção de setores (Montagem, Limpeza, Complexas)
+  const allActive = _modeloVisibleSectors.size === 3;
+  const btnAll = document.getElementById('btn-mod-sec-ALL');
+  if(btnAll){
+    btnAll.style.background  = allActive ? 'var(--accent)' : 'var(--bg3)';
+    btnAll.style.color       = allActive ? '#fff' : 'var(--muted)';
+    btnAll.style.borderColor = allActive ? 'var(--accent)' : 'var(--border2)';
+  }
+  const secCfg = [
+    { key: 'MONTAGEM', label: 'Montagem',  bg: 'rgba(79,142,247,.16)', color: 'var(--mont)', border: 'rgba(79,142,247,.45)' },
+    { key: 'LIMPEZA',  label: 'Limpeza',   bg: 'rgba(61,214,140,.16)', color: 'var(--limp)', border: 'rgba(61,214,140,.45)' },
+    { key: 'COMPLEXA', label: 'Complexas', bg: 'rgba(245,166,35,.16)', color: 'var(--comp)', border: 'rgba(245,166,35,.45)' }
+  ];
+  secCfg.forEach(s => {
+    const on = _modeloVisibleSectors.has(s.key);
+    const btn = document.getElementById('btn-mod-sec-' + s.key);
+    if(btn){
+      btn.textContent       = (on ? '✓ ' : '○ ') + s.label;
+      btn.style.background  = on ? s.bg : 'var(--bg3)';
+      btn.style.color       = on ? s.color : 'var(--muted)';
+      btn.style.borderColor = on ? s.border : 'var(--border2)';
+      btn.style.opacity     = on ? '1' : '0.65';
+    }
+    const secCard = document.getElementById('modelo-sec-card-' + s.key);
+    if(secCard) secCard.style.display = on ? '' : 'none';
+  });
+
+  // Mostra/oculta colunas dos setores na tabela comparativa
+  document.querySelectorAll('#modelo-comparativo-card [data-mod-sec]').forEach(el => {
+    const sec = el.getAttribute('data-mod-sec');
+    el.style.display = _modeloVisibleSectors.has(sec) ? '' : 'none';
+  });
+  const tblEl = document.getElementById('modelo-comparativo-tbl');
+  if(tblEl){
+    const nSec = _modeloVisibleSectors.size;
+    tblEl.style.minWidth = nSec === 1 ? '920px' : (nSec === 2 ? '1200px' : '1460px');
+  }
+
+  // Atualiza título dinâmico do Comparativo Lado a Lado
+  const titleEl = document.getElementById('modelo-comparativo-title');
+  if(titleEl){
+    const parts = [];
+    if(_modeloVisibleSectors.has('MONTAGEM')) parts.push('<span style="color:var(--mont)">MONTAGEM</span>');
+    if(_modeloVisibleSectors.has('LIMPEZA'))  parts.push('<span style="color:var(--limp)">LIMPEZA</span>');
+    if(_modeloVisibleSectors.has('COMPLEXA')) parts.push('<span style="color:var(--comp)">COMPLEXA</span>');
+    titleEl.innerHTML = `📊 Comparativo Lado a Lado — ${parts.join(' × ')} por Modelo`;
+  }
+
+  const hdrSubEl = document.getElementById('modelo-exp-hdr-sub');
+  if(hdrSubEl){
+    const hasM = _modeloVisibleSectors.has('MONTAGEM');
+    const hasC = _modeloVisibleSectors.has('COMPLEXA');
+    const hasL = _modeloVisibleSectors.has('LIMPEZA');
+    const mPart = (hasM && hasC) ? 'Mont+Comp' : (hasM ? 'Mont' : (hasC ? 'Comp' : ''));
+    const lPart = hasL ? 'Limp' : '';
+    const joined = [mPart, lPart].filter(Boolean).join(' | ');
+    hdrSubEl.textContent = `9 Op · 7h/dia (${joined})`;
+  }
+
+  const allCols = [
+    'nome','totalAvg','tempoRevisao','expRevisaoDia',
+    'montQtd','montMin','montAvg','montMax',
+    'limpQtd','limpMin','limpAvg','limpMax',
+    'compQtd','compMin','compAvg','compMax'
+  ];
+  allCols.forEach(col => {
+    const el = document.getElementById('sort-ico-' + col);
+    if(el) el.textContent = (col === _modeloSortField) ? (_modeloSortDir === 'asc' ? '▲' : '▼') : '';
+  });
+}
+
+function setModeloSortField(field){
+  _modeloSortField = field || 'totalAvg';
+  if(field === 'nome' && _modeloSortDir !== 'asc' && _modeloSortDir !== 'desc'){
+    _modeloSortDir = 'asc';
+  }
+  _updateModeloSortUI();
+  if(typeof renderModeloRel === 'function') renderModeloRel();
+}
+
+function setModeloSortDir(dir){
+  _modeloSortDir = (dir === 'asc') ? 'asc' : 'desc';
+  _updateModeloSortUI();
+  if(typeof renderModeloRel === 'function') renderModeloRel();
+}
+
+function setModeloSortHeader(col){
+  if(_modeloSortField === col){
+    _modeloSortDir = (_modeloSortDir === 'desc') ? 'asc' : 'desc';
+  } else {
+    _modeloSortField = col;
+    _modeloSortDir   = (col === 'nome') ? 'asc' : 'desc';
+  }
+  _updateModeloSortUI();
+  if(typeof renderModeloRel === 'function') renderModeloRel();
+}
+
 // chartModelo removido — Chart.js gerenciado via Chart.getChart() por canvas
 let _modeloAllRecs = [];
 
@@ -11908,22 +12194,26 @@ async function recarregarModeloRel(){
   const btn = document.getElementById('btn-recarregar-modelo');
   if(btn){ btn.textContent = '⏳ Carregando...'; btn.disabled = true; }
   _modeloAllRecs = [];
+  _modeloLoadedMonths.clear();
   await renderModeloRel();
   if(btn){ btn.textContent = '🔄 Recarregar dados'; btn.disabled = false; }
 }
 
-// Abre modal com todos os SELBs de um modelo específico
+// Abre modal com todos os SELBs de um modelo específico (respeitando o mês ou janela selecionada)
 function abrirModeloDetalhes(equipNome, sector){
   const statusSel = (document.getElementById('modelo-status-filter')?.value) || 'ok';
   const statusOk  = statusSel === 'ok' ? ['ok'] : ['ok','rep','scrap'];
+  const range     = _getModeloActiveRange();
 
   const _isMontLimp2 = (sector === 'MONTAGEM' || sector === 'LIMPEZA');
-  const regs = _modeloAllRecs.filter(h =>
-    h.equipamento && h.equipamento.trim() === equipNome &&
-    h.sector === sector &&
-    statusOk.includes(h.status) &&
-    h.duracao
-  ).map(h => {
+  const regs = _modeloAllRecs.filter(h => {
+    if(!h.equipamento || h.equipamento.trim() !== equipNome) return false;
+    if(h.sector !== sector) return false;
+    if(!statusOk.includes(h.status)) return false;
+    if(!h.duracao) return false;
+    const dMs = _getModeloRecDateMs(h);
+    return dMs >= range.startMs && dMs <= range.endMs;
+  }).map(h => {
     const rawSecs = calcDuracaoLiquida(h);
     // Para MONTAGEM e LIMPEZA: registros > 180min são exibidos com cap de 180min
     const cappedSecs = (_isMontLimp2 && rawSecs > 10800 && rawSecs <= 6 * 3600) ? 10800 : rawSecs;
@@ -11939,7 +12229,7 @@ function abrirModeloDetalhes(equipNome, sector){
 
   const modal = document.getElementById('modal-modelo-selbs');
   document.getElementById('mms-title').textContent = equipNome;
-  document.getElementById('mms-sub').textContent = sector + ' · ' + regs.length + ' registro(s)';
+  document.getElementById('mms-sub').textContent = `${sector} · ${range.label} · ${regs.length} registro(s)`;
 
   _renderModalSelbsBody(regs);
   modal.classList.remove('hidden');
@@ -12047,28 +12337,21 @@ function _atualizarPainelExcluidos(){
 
 async function renderModeloRel(){
   if(_modeloAllRecs.length === 0) await loadModeloAllPeriods();
+  if(_modeloMonthFilter) await loadModeloMonthIfNeeded(_modeloMonthFilter);
 
   // Filtro de status: 'ok' apenas ou 'ok'+'rep'+'scrap' (todas concluídas)
   const statusSel = (document.getElementById('modelo-status-filter')?.value) || 'ok';
   const statusOk  = statusSel === 'ok' ? ['ok'] : ['ok','rep','scrap'];
 
-  // Janela deslizante de 90 dias — descarta qualquer registro mais antigo,
-  // mesmo que ainda esteja no cache em memória.
-  const _winDays = (typeof _modeloWindowDays === 'number' && _modeloWindowDays > 0) ? _modeloWindowDays : 90;
-  const _cutoff90 = Date.now() - _winDays * 24 * 60 * 60 * 1000;
-  const _recDateMs = (h) => {
-    if(h.endEpoch && h.endEpoch > 0) return h.endEpoch;
-    if(h.startEpoch && h.startEpoch > 0) return h.startEpoch;
-    if(h._dateKey){ const t = Date.parse(h._dateKey.replace(/_/g,' ')); if(!isNaN(t)) return t; }
-    return Date.now(); // sem data → assume hoje (não descarta)
-  };
-  const recs = _modeloAllRecs.filter(h =>
-    statusOk.includes(h.status) &&
-    (h.sector === 'MONTAGEM' || h.sector === 'LIMPEZA' || h.sector === 'COMPLEXA' || h.sector === 'ELETRÔNICA') &&
-    (!modeloFilter || h.sector === modeloFilter) &&
-    h.equipamento && h.duracao &&
-    _recDateMs(h) >= _cutoff90
-  );
+  const range = _getModeloActiveRange();
+  const recs = _modeloAllRecs.filter(h => {
+    if(!statusOk.includes(h.status)) return false;
+    if(h.sector !== 'MONTAGEM' && h.sector !== 'LIMPEZA' && h.sector !== 'COMPLEXA' && h.sector !== 'ELETRÔNICA') return false;
+    if(modeloFilter && h.sector !== modeloFilter) return false;
+    if(!h.equipamento || !h.duracao) return false;
+    const dMs = _getModeloRecDateMs(h);
+    return dMs >= range.startMs && dMs <= range.endMs;
+  });
 
   // Agrupa por equipamento+setor; exclui SELBs individualmente por _docId
   const byEquip = {};
@@ -12107,19 +12390,353 @@ async function renderModeloRel(){
     return { nome: e.nome, sector: e.sector, n, nTotal, nExc, avg, min, max, sum };
   }).sort((a,b) => b.avg - a.avg);
 
+  const uniqueModelCount = new Set(rows.map(r => r.nome)).size;
   const totalExc = _selbsExcluidos.size;
   const lbl = document.getElementById('modelo-period-label');
   const statusLabel = statusSel === 'ok' ? 'aprovadas' : 'concluídas';
-  if(lbl) lbl.textContent = 'Últimos '+_winDays+' dias — '+recs.length+' registros '+statusLabel+' de '+rows.length+' modelos'
+  if(lbl) lbl.textContent = `${range.label} — ${recs.length} registros ${statusLabel} de ${uniqueModelCount} modelos únicos`
     + (totalExc > 0 ? ` · ${totalExc} SELB(s) excluído(s) da média` : '');
 
   _atualizarPainelExcluidos();
 
+  // ── Renderiza Tabela Comparativa Lado a Lado (MONTAGEM × LIMPEZA × COMPLEXA) ──
+  _updateModeloSortUI();
+  const showMont = _modeloVisibleSectors.has('MONTAGEM');
+  const showLimp = _modeloVisibleSectors.has('LIMPEZA');
+  const showComp = _modeloVisibleSectors.has('COMPLEXA');
+
+  const searchQ = (document.getElementById('modelo-search')?.value || '').toUpperCase().trim();
+  const compMap = {};
+  rows.forEach(r => {
+    if(r.sector !== 'MONTAGEM' && r.sector !== 'LIMPEZA' && r.sector !== 'COMPLEXA') return;
+    if(!_modeloVisibleSectors.has(r.sector)) return;
+    if(searchQ && !r.nome.toUpperCase().includes(searchQ)) return;
+    if(!compMap[r.nome]) compMap[r.nome] = { nome: r.nome, mont: null, limp: null, comp: null };
+    if(r.sector === 'MONTAGEM') compMap[r.nome].mont = r;
+    if(r.sector === 'LIMPEZA')  compMap[r.nome].limp = r;
+    if(r.sector === 'COMPLEXA') compMap[r.nome].comp = r;
+  });
+
+  // Capacidade diária: 9 operadores na Montagem (c/ Complexa) e 9 operadores na Limpeza × 7h líquidas/dia
+  const EXP_OP_MONT = 9;
+  const EXP_OP_LIMP = 9;
+  const EXP_HORAS_DIA = 7;
+  const EXP_SECS_MONT_DIA = EXP_OP_MONT * EXP_HORAS_DIA * 3600; // 226.800s (63h)
+  const EXP_SECS_LIMP_DIA = EXP_OP_LIMP * EXP_HORAS_DIA * 3600; // 226.800s (63h)
+
+  const compRows = Object.values(compMap).map(item => {
+    const mAvg = (showMont && item.mont && item.mont.n > 0) ? item.mont.avg : 0;
+    const lAvg = (showLimp && item.limp && item.limp.n > 0) ? item.limp.avg : 0;
+    const cAvg = (showComp && item.comp && item.comp.n > 0) ? item.comp.avg : 0;
+    const montMin = (showMont && item.mont && item.mont.n > 0) ? item.mont.min : 0;
+    const montMax = (showMont && item.mont && item.mont.n > 0) ? item.mont.max : 0;
+    const montQtd = (showMont && item.mont && item.mont.nTotal) ? item.mont.nTotal : 0;
+
+    const limpMin = (showLimp && item.limp && item.limp.n > 0) ? item.limp.min : 0;
+    const limpMax = (showLimp && item.limp && item.limp.n > 0) ? item.limp.max : 0;
+    const limpQtd = (showLimp && item.limp && item.limp.nTotal) ? item.limp.nTotal : 0;
+
+    const compMin = (showComp && item.comp && item.comp.n > 0) ? item.comp.min : 0;
+    const compMax = (showComp && item.comp && item.comp.n > 0) ? item.comp.max : 0;
+    const compQtd = (showComp && item.comp && item.comp.nTotal) ? item.comp.nTotal : 0;
+
+    // Montagem + Complexa (respeitando setores selecionados)
+    const montN   = (showMont && item.mont && item.mont.n > 0) ? item.mont.n : 0;
+    const montSum = (showMont && item.mont && item.mont.n > 0) ? item.mont.sum : 0;
+    const compN   = (showComp && item.comp && item.comp.n > 0) ? item.comp.n : 0;
+    const compSum = (showComp && item.comp && item.comp.n > 0) ? item.comp.sum : 0;
+    const mcRecs  = montN + compN;
+    const mcAvg   = mcRecs > 0 ? Math.round((montSum + compSum) / mcRecs) : 0;
+
+    const expMontDia  = mcAvg > 0 ? Math.round(EXP_SECS_MONT_DIA / mcAvg) : 0;
+    const expLimpDia  = lAvg  > 0 ? Math.round(EXP_SECS_LIMP_DIA / lAvg)  : 0;
+    const expMontOnly = mAvg  > 0 ? Math.round(EXP_SECS_MONT_DIA / mAvg)  : 0;
+    const expCompOnly = cAvg  > 0 ? Math.round(EXP_SECS_MONT_DIA / cAvg)  : 0;
+
+    const activeSectorsCount = (mAvg > 0 ? 1 : 0) + (lAvg > 0 ? 1 : 0) + (cAvg > 0 ? 1 : 0);
+    const hasBoth = mAvg > 0 && lAvg > 0;
+    const totalAvg = mAvg + lAvg + cAvg;
+    const totalRecs = montN + ((showLimp && item.limp && item.limp.n) || 0) + compN;
+
+    // Tempo de saída de uma máquina da revisão: (Tempo Médio Montagem + Tempo Médio Limpeza) ÷ 2
+    const rawMontAvg = (item.mont && item.mont.n > 0) ? item.mont.avg : 0;
+    const rawLimpAvg = (item.limp && item.limp.n > 0) ? item.limp.avg : 0;
+    const tempoRevisao = (rawMontAvg > 0 || rawLimpAvg > 0) ? Math.round((rawMontAvg + rawLimpAvg) / 2) : 0;
+    // Expectativa Revisão / Dia com base no tempo de saída da revisão ((Mont + Limp) ÷ 2) em 63h/dia (9 op × 7h)
+    const expRevisaoDia = tempoRevisao > 0 ? Math.round(EXP_SECS_MONT_DIA / tempoRevisao) : 0;
+
+    return {
+      ...item,
+      mAvg, lAvg, cAvg, mcAvg, mcRecs,
+      rawMontAvg, rawLimpAvg, tempoRevisao, expRevisaoDia,
+      montAvg: mAvg, limpAvg: lAvg, compAvg: cAvg,
+      montMin, montMax, montQtd,
+      limpMin, limpMax, limpQtd,
+      compMin, compMax, compQtd,
+      expMontDia, expLimpDia, expMontOnly, expCompOnly,
+      activeSectorsCount,
+      hasBoth,
+      totalAvg,
+      totalRecs
+    };
+  }).sort((a, b) => {
+    const dir = _modeloSortDir === 'asc' ? 1 : -1;
+    if(_modeloSortField === 'nome'){
+      return dir * a.nome.localeCompare(b.nome);
+    }
+    const valA = Number(a[_modeloSortField] || 0);
+    const valB = Number(b[_modeloSortField] || 0);
+    // Mantém registros sem valor (0) no final da lista na ordem crescente
+    if(_modeloSortDir === 'asc'){
+      if(valA <= 0 && valB > 0) return 1;
+      if(valB <= 0 && valA > 0) return -1;
+    }
+    if(valA !== valB) return dir * (valA - valB);
+    return a.nome.localeCompare(b.nome);
+  });
+
+  const montVis = showMont ? compRows.filter(c => c.mont && c.mont.n > 0) : [];
+  const limpVis = showLimp ? compRows.filter(c => c.limp && c.limp.n > 0) : [];
+  const compVis = showComp ? compRows.filter(c => c.comp && c.comp.n > 0) : [];
+
+  const montRecsAll = montVis.reduce((s, c) => s + c.mont.n, 0);
+  const montSumAll  = montVis.reduce((s, c) => s + c.mont.sum, 0);
+  const montAvgAll  = montRecsAll > 0 ? Math.round(montSumAll / montRecsAll) : 0;
+
+  const limpRecsAll = limpVis.reduce((s, c) => s + c.limp.n, 0);
+  const limpSumAll  = limpVis.reduce((s, c) => s + c.limp.sum, 0);
+  const limpAvgAll  = limpRecsAll > 0 ? Math.round(limpSumAll / limpRecsAll) : 0;
+
+  const compRecsAll = compVis.reduce((s, c) => s + c.comp.n, 0);
+  const compSumAll  = compVis.reduce((s, c) => s + c.comp.sum, 0);
+  const compAvgAll  = compRecsAll > 0 ? Math.round(compSumAll / compRecsAll) : 0;
+
+  const mcRecsAll   = montRecsAll + compRecsAll;
+  const mcSumAll    = montSumAll + compSumAll;
+  const mcAvgAll    = mcRecsAll > 0 ? Math.round(mcSumAll / mcRecsAll) : 0;
+  const expMontAll  = mcAvgAll   > 0 ? Math.round(EXP_SECS_MONT_DIA / mcAvgAll)   : 0;
+  const expLimpAll  = limpAvgAll > 0 ? Math.round(EXP_SECS_LIMP_DIA / limpAvgAll) : 0;
+
+  const bothCount  = compRows.filter(c => c.hasBoth).length;
+  const combAvgAll = montAvgAll + limpAvgAll + compAvgAll;
+
+  // Tempo médio geral para sair da revisão (Montagem + Limpeza, mesmo se algum setor estiver oculto no filtro visual)
+  const rawMontAllRows = compRows.filter(c => c.mont && c.mont.n > 0);
+  const rawLimpAllRows = compRows.filter(c => c.limp && c.limp.n > 0);
+  const rawMontRecsAll = rawMontAllRows.reduce((s, c) => s + c.mont.n, 0);
+  const rawMontSumAll  = rawMontAllRows.reduce((s, c) => s + c.mont.sum, 0);
+  const rawMontAvgAll  = rawMontRecsAll > 0 ? Math.round(rawMontSumAll / rawMontRecsAll) : 0;
+  const rawLimpRecsAll = rawLimpAllRows.reduce((s, c) => s + c.limp.n, 0);
+  const rawLimpSumAll  = rawLimpAllRows.reduce((s, c) => s + c.limp.sum, 0);
+  const rawLimpAvgAll  = rawLimpRecsAll > 0 ? Math.round(rawLimpSumAll / rawLimpRecsAll) : 0;
+  const tempoRevisaoAll = (rawMontAvgAll > 0 || rawLimpAvgAll > 0) ? Math.round((rawMontAvgAll + rawLimpAvgAll) / 2) : 0;
+  const expRevisaoDiaAll = tempoRevisaoAll > 0 ? Math.round(EXP_SECS_MONT_DIA / tempoRevisaoAll) : 0;
+
+  window._lastModeloComparativoRows = compRows;
+  window._lastModeloComparativoMeta = {
+    rangeLabel: range.label,
+    shortBadge: range.shortBadge,
+    totalModels: compRows.length,
+    bothCount,
+    showMont,
+    showLimp,
+    showComp,
+    montRecsAll,
+    montAvgAll,
+    limpRecsAll,
+    limpAvgAll,
+    compRecsAll,
+    compAvgAll,
+    mcRecsAll,
+    mcAvgAll,
+    expMontAll,
+    expLimpAll,
+    combAvgAll,
+    rawMontAvgAll,
+    rawLimpAvgAll,
+    tempoRevisaoAll,
+    expRevisaoDiaAll
+  };
+
+  const badgeEl = document.getElementById('modelo-comparativo-badge');
+  if(badgeEl) badgeEl.textContent = `${range.shortBadge} · ${compRows.length} modelo(s)`;
+
+  const compKpiEl = document.getElementById('modelo-comparativo-kpi');
+  if(compKpiEl){
+    const kpiMontLbl = (showMont && showComp) ? 'Mont+Comp' : (showMont ? 'Mont' : 'Comp');
+    const expPartsKpi = [];
+    if(showMont || showComp){
+      expPartsKpi.push(`
+        <div>
+          <span style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase">${kpiMontLbl}:</span>
+          <span class="sval" style="font-size:20px;color:${showMont ? 'var(--mont)' : 'var(--comp)'};margin-left:3px">${expMontAll > 0 ? expMontAll + '/dia' : '—'}</span>
+        </div>
+      `);
+    }
+    if(showLimp){
+      expPartsKpi.push(`
+        <div>
+          <span style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase">Limp:</span>
+          <span class="sval" style="font-size:20px;color:var(--limp);margin-left:3px">${expLimpAll > 0 ? expLimpAll + '/dia' : '—'}</span>
+        </div>
+      `);
+    }
+    const expSubParts = [];
+    if(showMont || showComp) expSubParts.push(`9 op. ${kpiMontLbl} (${mcAvgAll > 0 ? fmt(mcAvgAll) : '—'})`);
+    if(showLimp) expSubParts.push(`9 op. Limp (${limpAvgAll > 0 ? fmt(limpAvgAll) : '—'})`);
+    expSubParts.push('7h/dia');
+
+    compKpiEl.innerHTML = `
+      <div class="sum-card">
+        <div class="slbl">Modelos no Período</div>
+        <div class="sval" style="color:var(--text)">${compRows.length}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:3px">${showMont && showLimp ? `${bothCount} com Montagem + Limpeza` : `${_modeloVisibleSectors.size} setor(es) selecionado(s)`}</div>
+      </div>
+      ${showMont ? `<div class="sum-card">
+        <div class="slbl">Média Geral Montagem</div>
+        <div class="sval" style="color:var(--mont)">${montRecsAll > 0 ? fmt(montAvgAll) : '—'}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:3px">${montVis.length} modelos · ${montRecsAll} reg. ativos</div>
+      </div>` : ''}
+      ${showLimp ? `<div class="sum-card">
+        <div class="slbl">Média Geral Limpeza</div>
+        <div class="sval" style="color:var(--limp)">${limpRecsAll > 0 ? fmt(limpAvgAll) : '—'}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:3px">${limpVis.length} modelos · ${limpRecsAll} reg. ativos</div>
+      </div>` : ''}
+      ${showComp ? `<div class="sum-card">
+        <div class="slbl">Média Geral Complexa</div>
+        <div class="sval" style="color:var(--comp)">${compRecsAll > 0 ? fmt(compAvgAll) : '—'}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:3px">${compVis.length} modelos · ${compRecsAll} reg. ativos</div>
+      </div>` : ''}
+      <div class="sum-card" title="Expectativa diária considerando 9 operadores na Montagem (incluindo Complexas) e 9 operadores na Limpeza trabalhando 7h líquidas/dia (63h por setor)">
+        <div class="slbl">Expectativa / Dia (9 Op · 7h)</div>
+        <div style="display:flex;align-items:baseline;gap:12px;margin-top:4px;flex-wrap:wrap">
+          ${expPartsKpi.join('<span style="color:var(--border2);font-weight:700">|</span>')}
+        </div>
+        <div style="font-size:10px;color:var(--muted);margin-top:3px">${expSubParts.join(' · ')}</div>
+      </div>
+      <div class="sum-card" title="Tempo médio de saída de uma máquina da revisão: (Tempo Médio Montagem + Tempo Médio Limpeza) ÷ 2">
+        <div class="slbl">Saída da Revisão ((M + L) ÷ 2)</div>
+        <div class="sval" style="color:#a78bfa">${tempoRevisaoAll > 0 ? fmt(tempoRevisaoAll) : '—'}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:3px">(Mont ${rawMontAvgAll > 0 ? fmt(rawMontAvgAll) : '—'} + Limp ${rawLimpAvgAll > 0 ? fmt(rawLimpAvgAll) : '—'}) ÷ 2</div>
+      </div>
+      <div class="sum-card" title="Expectativa de produção diária com base no Tempo de Saída da Revisão ((Mont + Limp) ÷ 2), considerando 9 op × 7h (63h/dia)">
+        <div class="slbl">Expectativa Revisão / Dia</div>
+        <div class="sval" style="color:#38bdf8">${expRevisaoDiaAll > 0 ? expRevisaoDiaAll + '/dia' : '—'}</div>
+        <div style="font-size:10px;color:var(--muted);margin-top:3px">Base Saída (${tempoRevisaoAll > 0 ? fmt(tempoRevisaoAll) : '—'}) · 9 op · 7h/dia</div>
+      </div>
+    `;
+  }
+
+  const compBodyEl = document.getElementById('modelo-comparativo-body');
+  if(compBodyEl){
+    const totalVisibleCols = 4 + (_modeloVisibleSectors.size * 4);
+    if(!compRows.length){
+      compBodyEl.innerHTML = `<tr><td colspan="${totalVisibleCols}" class="empty">Nenhum equipamento registrado nos setores selecionados neste período.</td></tr>`;
+    } else {
+      compBodyEl.innerHTML = compRows.map(c => {
+        const escNome = c.nome.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+        const m = c.mont;
+        const l = c.limp;
+        const cp = c.comp;
+
+        const mQtdHtml = m ? `<button class="tbtn" onclick="abrirModeloDetalhes('${escNome}','MONTAGEM')" title="Ver SELBs de Montagem" style="font-family:var(--mono);font-size:11px;padding:2px 8px;color:var(--mont);border-color:rgba(79,142,247,.3)">${m.nTotal} 🔍</button>` : '<span style="color:var(--muted)">—</span>';
+        const mMinHtml = (m && m.n > 0) ? fmt(m.min) : '—';
+        const mAvgHtml = (m && m.n > 0) ? fmt(m.avg) : '—';
+        const mMaxHtml = (m && m.n > 0) ? fmt(m.max) : '—';
+
+        const lQtdHtml = l ? `<button class="tbtn" onclick="abrirModeloDetalhes('${escNome}','LIMPEZA')" title="Ver SELBs de Limpeza" style="font-family:var(--mono);font-size:11px;padding:2px 8px;color:var(--limp);border-color:rgba(61,214,140,.3)">${l.nTotal} 🔍</button>` : '<span style="color:var(--muted)">—</span>';
+        const lMinHtml = (l && l.n > 0) ? fmt(l.min) : '—';
+        const lAvgHtml = (l && l.n > 0) ? fmt(l.avg) : '—';
+        const lMaxHtml = (l && l.n > 0) ? fmt(l.max) : '—';
+
+        const cQtdHtml = cp ? `<button class="tbtn" onclick="abrirModeloDetalhes('${escNome}','COMPLEXA')" title="Ver SELBs de Complexa" style="font-family:var(--mono);font-size:11px;padding:2px 8px;color:var(--comp);border-color:rgba(245,166,35,.3)">${cp.nTotal} 🔍</button>` : '<span style="color:var(--muted)">—</span>';
+        const cMinHtml = (cp && cp.n > 0) ? fmt(cp.min) : '—';
+        const cAvgHtml = (cp && cp.n > 0) ? fmt(cp.avg) : '—';
+        const cMaxHtml = (cp && cp.n > 0) ? fmt(cp.max) : '—';
+
+        const montLabel = (c.mAvg > 0 && c.cAvg > 0) ? 'Mont+C' : (c.cAvg > 0 ? (showMont ? 'Mont (Comp)' : 'Comp') : 'Mont');
+        const montTip   = c.mcAvg > 0
+          ? `9 operadores × 7h (63h/dia) ÷ tempo médio ${fmt(c.mcAvg)} = ${c.expMontDia} máq./dia` + (c.mAvg > 0 && c.cAvg > 0 ? ` (Só Mont: ${c.expMontOnly}/dia · Só Comp: ${c.expCompOnly}/dia)` : '')
+          : 'Sem registros em Montagem/Complexa';
+        const limpTip   = c.lAvg > 0
+          ? `9 operadores × 7h (63h/dia) ÷ tempo médio ${fmt(c.lAvg)} = ${c.expLimpDia} máq./dia`
+          : 'Sem registros em Limpeza';
+
+        const badgesRow = [];
+        if(showMont || showComp){
+          badgesRow.push(`<span title="${montTip}" style="display:inline-flex;align-items:center;gap:3px;padding:3px 7px;border-radius:6px;background:rgba(79,142,247,.12);border:1px solid rgba(79,142,247,.32);color:${c.expMontDia > 0 ? (showMont ? 'var(--mont)' : 'var(--comp)') : 'var(--muted)'};font-family:var(--mono);font-size:11px;font-weight:800;white-space:nowrap">${montLabel}: ${c.expMontDia > 0 ? c.expMontDia + '/d' : '—'}</span>`);
+        }
+        if(showLimp){
+          badgesRow.push(`<span title="${limpTip}" style="display:inline-flex;align-items:center;gap:3px;padding:3px 7px;border-radius:6px;background:rgba(61,214,140,.12);border:1px solid rgba(61,214,140,.32);color:${c.expLimpDia > 0 ? 'var(--limp)' : 'var(--muted)'};font-family:var(--mono);font-size:11px;font-weight:800;white-space:nowrap">Limp: ${c.expLimpDia > 0 ? c.expLimpDia + '/d' : '—'}</span>`);
+        }
+
+        const expHtml = (c.expMontDia > 0 || c.expLimpDia > 0)
+          ? `<div style="display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:nowrap">
+               ${badgesRow.join('')}
+             </div>
+             ${c.mAvg > 0 && c.cAvg > 0 ? `<div style="font-size:9px;color:var(--muted);margin-top:2px;font-family:var(--mono)">Média M+C: ${fmt(c.mcAvg)} (Comp: ${c.expCompOnly}/d)</div>` : ''}`
+          : '<span style="color:var(--muted)">—</span>';
+
+        const revTip = c.tempoRevisao > 0
+          ? `Tempo de Saída da Revisão: (Montagem ${c.rawMontAvg > 0 ? fmt(c.rawMontAvg) : '00:00:00'} + Limpeza ${c.rawLimpAvg > 0 ? fmt(c.rawLimpAvg) : '00:00:00'}) ÷ 2 = ${fmt(c.tempoRevisao)}`
+          : 'Sem registros em Montagem/Limpeza';
+        const revHtml = c.tempoRevisao > 0
+          ? `<div title="${revTip}" style="font-family:var(--mono);font-size:12.5px;font-weight:800;color:#a78bfa">${fmt(c.tempoRevisao)}</div>
+             <div style="font-size:9px;color:var(--muted);margin-top:1px">(Mont + Limp) ÷ 2</div>`
+          : '<span style="color:var(--muted)">—</span>';
+
+        const expRevTip = c.tempoRevisao > 0
+          ? `9 operadores × 7h (63h/dia) ÷ Tempo Saída Revisão ${fmt(c.tempoRevisao)} = ${c.expRevisaoDia} máq./dia`
+          : 'Sem registros em Montagem/Limpeza';
+        const expRevHtml = c.tempoRevisao > 0
+          ? `<span title="${expRevTip}" style="display:inline-flex;align-items:center;gap:3px;padding:3px 9px;border-radius:6px;background:rgba(56,189,248,.12);border:1px solid rgba(56,189,248,.32);color:#38bdf8;font-family:var(--mono);font-size:12px;font-weight:800;white-space:nowrap">${c.expRevisaoDia}/dia</span>`
+          : '<span style="color:var(--muted)">—</span>';
+
+        return `<tr>
+          <td style="font-weight:600;max-width:260px;border-right:1px solid var(--border2)">${c.nome}</td>
+          ${showMont ? `
+            <td style="text-align:center">${mQtdHtml}</td>
+            <td style="text-align:center;font-family:var(--mono);font-size:11px;color:var(--muted)">${mMinHtml}</td>
+            <td style="text-align:center;font-family:var(--mono);font-weight:700;color:${m && m.n > 0 ? 'var(--mont)' : 'var(--muted)'};background:rgba(79,142,247,.05)">${mAvgHtml}</td>
+            <td style="text-align:center;font-family:var(--mono);font-size:11px;color:var(--muted);border-right:1px solid var(--border2)">${mMaxHtml}</td>
+          ` : ''}
+          ${showLimp ? `
+            <td style="text-align:center">${lQtdHtml}</td>
+            <td style="text-align:center;font-family:var(--mono);font-size:11px;color:var(--muted)">${lMinHtml}</td>
+            <td style="text-align:center;font-family:var(--mono);font-weight:700;color:${l && l.n > 0 ? 'var(--limp)' : 'var(--muted)'};background:rgba(61,214,140,.05)">${lAvgHtml}</td>
+            <td style="text-align:center;font-family:var(--mono);font-size:11px;color:var(--muted);border-right:1px solid var(--border2)">${lMaxHtml}</td>
+          ` : ''}
+          ${showComp ? `
+            <td style="text-align:center">${cQtdHtml}</td>
+            <td style="text-align:center;font-family:var(--mono);font-size:11px;color:var(--muted)">${cMinHtml}</td>
+            <td style="text-align:center;font-family:var(--mono);font-weight:700;color:${cp && cp.n > 0 ? 'var(--comp)' : 'var(--muted)'};background:rgba(245,166,35,.05)">${cAvgHtml}</td>
+            <td style="text-align:center;font-family:var(--mono);font-size:11px;color:var(--muted);border-right:1px solid var(--border2)">${cMaxHtml}</td>
+          ` : ''}
+          <td style="text-align:center;border-right:1px solid var(--border2)">${expHtml}</td>
+          <td style="text-align:center;background:rgba(167,139,250,.05);border-right:1px solid var(--border2)">${revHtml}</td>
+          <td style="text-align:center;background:rgba(56,189,248,.04)">${expRevHtml}</td>
+        </tr>`;
+      }).join('');
+    }
+  }
+
   const clr = { grid:'rgba(255,255,255,0.07)', text:'#7a83a0' };
 
   function renderSetorModelo(sector, colorVar, chartId, kpiId, bodyId, labelId){
-    const searchQ = (document.getElementById('modelo-search')?.value || '').toUpperCase().trim();
-    const sRows    = rows.filter(r => r.sector === sector && (!searchQ || r.nome.toUpperCase().includes(searchQ))).sort((a,b)=>b.avg-a.avg);
+    const sRows    = rows.filter(r => r.sector === sector && (!searchQ || r.nome.toUpperCase().includes(searchQ))).sort((a,b) => {
+      if(_modeloSortField === 'nome'){
+        return (_modeloSortDir === 'asc' ? 1 : -1) * a.nome.localeCompare(b.nome);
+      }
+      if(_modeloSortField === 'totalRecs'){
+        return (_modeloSortDir === 'asc' ? 1 : -1) * (a.nTotal - b.nTotal);
+      }
+      if(_modeloSortDir === 'asc'){
+        if(a.avg <= 0 && b.avg > 0) return 1;
+        if(b.avg <= 0 && a.avg > 0) return -1;
+        return a.avg - b.avg;
+      }
+      return b.avg - a.avg;
+    });
     const sRowsVis = sRows.filter(r => r.n > 0); // tem ao menos 1 registro ativo
     const sRecs    = sRowsVis.reduce((a,r)=>a+r.n, 0);
     const sTotal   = sRowsVis.reduce((a,r)=>a+r.sum, 0);
@@ -12149,7 +12766,7 @@ async function renderModeloRel(){
           labels: top.map(r => r.nome.length > 28 ? r.nome.slice(0,26)+'…' : r.nome),
           datasets: [
             { label:'Mínimo', data: top.map(r=>+(r.min/3600).toFixed(4)), backgroundColor:'rgba(61,214,140,0.5)', borderRadius:4 },
-            { label:'Médio',  data: top.map(r=>+(r.avg/3600).toFixed(4)), backgroundColor:colorVar.includes('mont')?'rgba(79,142,247,0.85)':'rgba(61,214,140,0.85)', borderRadius:4 },
+            { label:'Médio',  data: top.map(r=>+(r.avg/3600).toFixed(4)), backgroundColor:colorVar.includes('mont')?'rgba(79,142,247,0.85)':colorVar.includes('comp')?'rgba(245,166,35,0.85)':'rgba(61,214,140,0.85)', borderRadius:4 },
             { label:'Máximo', data: top.map(r=>+(r.max/3600).toFixed(4)), backgroundColor:'rgba(245,166,35,0.5)', borderRadius:4 }
           ]
         },
@@ -12208,6 +12825,461 @@ async function renderModeloRel(){
   renderSetorModelo('LIMPEZA',   'var(--limp)', 'chart-modelo-limp', 'modelo-limp-kpi', 'modelo-limp-body', 'modelo-limp-label');
   renderSetorModelo('COMPLEXA',  'var(--comp)', 'chart-modelo-comp', 'modelo-comp-kpi', 'modelo-comp-body', 'modelo-comp-label');
   renderSetorModelo('ELETRÔNICA','var(--elet)', 'chart-modelo-elet', 'modelo-elet-kpi', 'modelo-elet-body', 'modelo-elet-label');
+}
+
+function _fmtModeloTimeExcel(secs){
+  const s = Math.round(Number(secs) || 0);
+  if(s <= 0) return '';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
+function _getModeloComparativoSortedByVolume(){
+  const compRows = window._lastModeloComparativoRows || [];
+  return [...compRows].sort((a, b) => {
+    const volA = Number(a.totalRecs || 0);
+    const volB = Number(b.totalRecs || 0);
+    if(volB !== volA) return volB - volA;
+    if((b.montQtd || 0) !== (a.montQtd || 0)) return (b.montQtd || 0) - (a.montQtd || 0);
+    if((b.limpQtd || 0) !== (a.limpQtd || 0)) return (b.limpQtd || 0) - (a.limpQtd || 0);
+    if((b.compQtd || 0) !== (a.compQtd || 0)) return (b.compQtd || 0) - (a.compQtd || 0);
+    if((b.totalAvg || 0) !== (a.totalAvg || 0)) return (b.totalAvg || 0) - (a.totalAvg || 0);
+    return (a.nome || '').localeCompare(b.nome || '');
+  });
+}
+
+function _getModeloExportActiveSectors(meta){
+  const showMont = meta && typeof meta.showMont === 'boolean' ? meta.showMont : _modeloVisibleSectors.has('MONTAGEM');
+  const showLimp = meta && typeof meta.showLimp === 'boolean' ? meta.showLimp : _modeloVisibleSectors.has('LIMPEZA');
+  const showComp = meta && typeof meta.showComp === 'boolean' ? meta.showComp : _modeloVisibleSectors.has('COMPLEXA');
+  const activeSectors = [];
+  if(showMont) activeSectors.push({ key: 'mont', title: 'MONTAGEM', titleMixed: 'Montagem', short: 'M' });
+  if(showLimp) activeSectors.push({ key: 'limp', title: 'LIMPEZA',  titleMixed: 'Limpeza',  short: 'L' });
+  if(showComp) activeSectors.push({ key: 'comp', title: 'COMPLEXA', titleMixed: 'Complexa', short: 'C' });
+  const titleStr = activeSectors.map(s => s.titleMixed).join(' × ');
+  const sumShort = activeSectors.map(s => s.short).join(' + ');
+  return { showMont, showLimp, showComp, activeSectors, titleStr, sumShort };
+}
+
+function _formatModeloExpText(c, showMont, showLimp, showComp){
+  const parts = [];
+  if(showMont || showComp){
+    const lbl = (c.mAvg > 0 && c.cAvg > 0) ? 'Mont+C' : (c.cAvg > 0 ? (showMont ? 'Mont (Comp)' : 'Comp') : 'Mont');
+    if(c.expMontDia > 0) parts.push(`${lbl}: ${c.expMontDia}/d`);
+  }
+  if(showLimp && c.expLimpDia > 0){
+    parts.push(`Limp: ${c.expLimpDia}/d`);
+  }
+  return parts.join(' | ');
+}
+
+function _loadExternalScriptOnce(src, checkReady){
+  if(checkReady()) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('Falha ao carregar script: ' + src));
+    document.head.appendChild(s);
+  });
+}
+
+function _getModeloFilenameSlug(meta){
+  const raw = (meta && meta.shortBadge) || _modeloMonthFilter || `${_modeloWindowDays}dias`;
+  return raw
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+async function exportarModeloComparativoXLSX(){
+  const sortedRows = _getModeloComparativoSortedByVolume();
+  const meta       = window._lastModeloComparativoMeta || {};
+  if(!sortedRows.length){
+    alert('Nenhum dado para exportar no período selecionado.');
+    return;
+  }
+
+  try {
+    await _loadExternalScriptOnce(
+      'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js',
+      () => typeof ExcelJS !== 'undefined'
+    );
+  } catch (err) {
+    alert('Não foi possível carregar a biblioteca ExcelJS. Verifique sua conexão e tente novamente.');
+    return;
+  }
+
+  const { showMont, showLimp, showComp, activeSectors, titleStr, sumShort } = _getModeloExportActiveSectors(meta);
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'LabTech';
+  wb.created = new Date();
+
+  const ws = wb.addWorksheet('Tempo Médio por Modelo', {
+    views: [{ state: 'frozen', ySplit: 6 }],
+    pageSetup: { paperSize: 9, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 }
+  });
+
+  // Linha 1: Título Principal (Arial 14pt Negrito)
+  ws.getCell('A1').value = `Relatório Tempo Médio por Modelo — ${titleStr} (Lado a Lado)`;
+  ws.getCell('A1').font  = { name: 'Arial', size: 14, bold: true, color: { argb: 'FF000000' } };
+  ws.getRow(1).height    = 22;
+
+  // Linha 2: Subtítulo (Período, Ordem Decrescente por Maior Volume e Data/Hora)
+  ws.getCell('A2').value = `Período: ${meta.rangeLabel || ''} · Ordem: Decrescente (Maior Volume) · Gerado em ${new Date().toLocaleString('pt-BR')}`;
+  ws.getCell('A2').font  = { name: 'Arial', size: 10, bold: false, color: { argb: 'FF222222' } };
+  ws.getRow(2).height    = 16;
+
+  // Linhas 3 e 4 em branco (igual à imagem)
+  ws.getRow(3).height = 14;
+  ws.getRow(4).height = 14;
+
+  // Cabeçalho Duplo (Linhas 5 e 6) em Azul Marinho (#1F3864) com texto branco em negrito
+  const totalSectorCols = activeSectors.length * 4;
+  const sumCol    = 2 + totalSectorCols;
+  const expCol    = sumCol + 1;
+  const revCol    = expCol + 1;
+  const expRevCol = revCol + 1;
+  const totalCols = expRevCol;
+
+  ws.getCell(5, 1).value = 'EQUIPAMENTO (MODELO)';
+  ws.mergeCells(5, 1, 6, 1);
+
+  activeSectors.forEach((sec, idx) => {
+    const startCol = 2 + idx * 4;
+    ws.getCell(5, startCol).value = sec.title;
+    ws.mergeCells(5, startCol, 5, startCol + 3);
+    ws.getCell(6, startCol).value     = 'QTD';
+    ws.getCell(6, startCol + 1).value = 'MÍN';
+    ws.getCell(6, startCol + 2).value = 'MÉDIO';
+    ws.getCell(6, startCol + 3).value = 'MÁX';
+  });
+
+  ws.getCell(5, sumCol).value = `SOMA MÉDIA\n(${sumShort})`;
+  ws.mergeCells(5, sumCol, 6, sumCol);
+
+  ws.getCell(5, expCol).value = 'EXPECTATIVA / DIA\n(9 OP · 7H)';
+  ws.mergeCells(5, expCol, 6, expCol);
+
+  ws.getCell(5, revCol).value = 'SAÍDA DA REVISÃO\n((MONT + LIMP) ÷ 2)';
+  ws.mergeCells(5, revCol, 6, revCol);
+
+  ws.getCell(5, expRevCol).value = 'EXP. REVISÃO / DIA\n(BASE (M + L) ÷ 2)';
+  ws.mergeCells(5, expRevCol, 6, expRevCol);
+
+  ws.getRow(5).height = 18;
+  ws.getRow(6).height = 18;
+
+  const headerFill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F3864' } };
+  const headerFont = { name: 'Arial', size: 10, bold: true, color: { argb: 'FFFFFFFF' } };
+  const headerBorder = {
+    top:    { style: 'thin', color: { argb: 'FF8EA9DB' } },
+    bottom: { style: 'thin', color: { argb: 'FF8EA9DB' } },
+    left:   { style: 'thin', color: { argb: 'FF8EA9DB' } },
+    right:  { style: 'thin', color: { argb: 'FF8EA9DB' } }
+  };
+
+  for(let r = 5; r <= 6; r++){
+    for(let c = 1; c <= totalCols; c++){
+      const cell = ws.getCell(r, c);
+      cell.fill      = headerFill;
+      cell.font      = headerFont;
+      cell.border    = headerBorder;
+      cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+    }
+  }
+
+  // AutoFiltro na linha 6 (igual à imagem)
+  ws.autoFilter = {
+    from: { row: 6, column: 1 },
+    to:   { row: 6 + sortedRows.length, column: totalCols }
+  };
+
+  // Linhas de Dados (a partir da linha 7), sempre ordenadas por maior volume decrescente
+  const dividerCols = new Set([1, sumCol, expCol, revCol, expRevCol]);
+  activeSectors.forEach((_, idx) => dividerCols.add(2 + idx * 4 + 3));
+
+  sortedRows.forEach((c, idx) => {
+    const rowNum = 7 + idx;
+    const row = ws.getRow(rowNum);
+    row.height = 17;
+
+    row.getCell(1).value     = c.nome || '';
+    row.getCell(1).font      = { name: 'Arial', size: 10, bold: false, color: { argb: 'FF000000' } };
+    row.getCell(1).alignment = { vertical: 'middle', horizontal: 'left' };
+
+    activeSectors.forEach((sec, sIdx) => {
+      const startCol = 2 + sIdx * 4;
+      const sData = c[sec.key];
+      const hasData = sData && sData.n > 0;
+
+      const cQtd = row.getCell(startCol);
+      const cMin = row.getCell(startCol + 1);
+      const cAvg = row.getCell(startCol + 2);
+      const cMax = row.getCell(startCol + 3);
+
+      cQtd.value = hasData ? sData.n : '';
+      cMin.value = hasData ? _fmtModeloTimeExcel(sData.min) : '';
+      cAvg.value = hasData ? _fmtModeloTimeExcel(sData.avg) : '';
+      cMax.value = hasData ? _fmtModeloTimeExcel(sData.max) : '';
+
+      cQtd.font = { name: 'Arial', size: 10, bold: true,  color: { argb: 'FF000000' } };
+      cMin.font = { name: 'Arial', size: 10, bold: false, color: { argb: 'FF000000' } };
+      cAvg.font = { name: 'Arial', size: 10, bold: false, color: { argb: 'FF000000' } };
+      cMax.font = { name: 'Arial', size: 10, bold: false, color: { argb: 'FF000000' } };
+
+      cQtd.alignment = { vertical: 'middle', horizontal: 'center' };
+      cMin.alignment = { vertical: 'middle', horizontal: 'center' };
+      cAvg.alignment = { vertical: 'middle', horizontal: 'center' };
+      cMax.alignment = { vertical: 'middle', horizontal: 'center' };
+    });
+
+    const cellSum = row.getCell(sumCol);
+    cellSum.value     = c.totalAvg > 0 ? _fmtModeloTimeExcel(c.totalAvg) : '';
+    cellSum.font      = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF000000' } };
+    cellSum.alignment = { vertical: 'middle', horizontal: 'center' };
+
+    const cellExp = row.getCell(expCol);
+    cellExp.value     = _formatModeloExpText(c, showMont, showLimp, showComp);
+    cellExp.font      = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF1F3864' } };
+    cellExp.alignment = { vertical: 'middle', horizontal: 'center' };
+
+    const cellRev = row.getCell(revCol);
+    cellRev.value     = c.tempoRevisao > 0 ? _fmtModeloTimeExcel(c.tempoRevisao) : '';
+    cellRev.font      = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF000000' } };
+    cellRev.alignment = { vertical: 'middle', horizontal: 'center' };
+
+    const cellExpRev = row.getCell(expRevCol);
+    cellExpRev.value     = c.expRevisaoDia > 0 ? `${c.expRevisaoDia}/dia` : '';
+    cellExpRev.font      = { name: 'Arial', size: 10, bold: true, color: { argb: 'FF1F3864' } };
+    cellExpRev.alignment = { vertical: 'middle', horizontal: 'center' };
+
+    for(let col = 1; col <= totalCols; col++){
+      const isRightDivider = dividerCols.has(col);
+      row.getCell(col).border = {
+        top:    { style: 'thin', color: { argb: 'FFD9D9D9' } },
+        bottom: { style: 'thin', color: { argb: 'FFD9D9D9' } },
+        left:   { style: 'thin', color: { argb: 'FFD9D9D9' } },
+        right:  { style: 'thin', color: { argb: isRightDivider ? 'FF808080' : 'FFD9D9D9' } }
+      };
+    }
+  });
+
+  // Larguras das colunas proporcionais à imagem
+  ws.getColumn(1).width = 52;
+  activeSectors.forEach((_, idx) => {
+    const startCol = 2 + idx * 4;
+    ws.getColumn(startCol).width     = 9;
+    ws.getColumn(startCol + 1).width = 11;
+    ws.getColumn(startCol + 2).width = 11;
+    ws.getColumn(startCol + 3).width = 11;
+  });
+  ws.getColumn(sumCol).width    = 16;
+  ws.getColumn(expCol).width    = 24;
+  ws.getColumn(revCol).width    = 18;
+  ws.getColumn(expRevCol).width = 24;
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const slug = _getModeloFilenameSlug(meta);
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `Relatorio_Tempo_Medio_por_Modelo_${slug}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+// Mantém compatibilidade caso algum atalho chame exportarModeloComparativoCSV
+const exportarModeloComparativoCSV = exportarModeloComparativoXLSX;
+
+async function exportarModeloComparativoPDF(){
+  const sortedRows = _getModeloComparativoSortedByVolume();
+  const meta       = window._lastModeloComparativoMeta || {};
+  if(!sortedRows.length){
+    alert('Nenhum dado para exportar no período selecionado.');
+    return;
+  }
+
+  try {
+    await _loadExternalScriptOnce(
+      'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js',
+      () => typeof window.jspdf !== 'undefined'
+    );
+    await _loadExternalScriptOnce(
+      'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js',
+      () => window.jspdf && window.jspdf.jsPDF && typeof window.jspdf.jsPDF.API.autoTable === 'function'
+    );
+  } catch (err) {
+    alert('Não foi possível carregar a biblioteca de geração de PDF. Verifique sua conexão.');
+    return;
+  }
+
+  const { showMont, showLimp, showComp, activeSectors, titleStr, sumShort } = _getModeloExportActiveSectors(meta);
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.setTextColor(0, 0, 0);
+  doc.text(`Relatório Tempo Médio por Modelo — ${titleStr} (Lado a Lado)`, 10, 12);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(45, 45, 45);
+  doc.text(`Período: ${meta.rangeLabel || ''} · Ordem: Decrescente (Maior Volume) · Gerado em ${new Date().toLocaleString('pt-BR')}`, 10, 17);
+
+  const headRow1 = [
+    { content: 'EQUIPAMENTO (MODELO)', rowSpan: 2, styles: { valign: 'middle', halign: 'center' } }
+  ];
+  const headRow2 = [];
+
+  activeSectors.forEach(sec => {
+    headRow1.push({ content: sec.title, colSpan: 4, styles: { halign: 'center', valign: 'middle' } });
+    headRow2.push(
+      { content: 'QTD',   styles: { halign: 'center' } },
+      { content: 'MÍN',   styles: { halign: 'center' } },
+      { content: 'MÉDIO', styles: { halign: 'center' } },
+      { content: 'MÁX',   styles: { halign: 'center' } }
+    );
+  });
+
+  headRow1.push(
+    { content: `SOMA MÉDIA\n(${sumShort})`, rowSpan: 2, styles: { valign: 'middle', halign: 'center' } },
+    { content: 'EXPECTATIVA / DIA\n(9 OP · 7H)', rowSpan: 2, styles: { valign: 'middle', halign: 'center' } },
+    { content: 'SAÍDA DA REVISÃO\n((MONT + LIMP) ÷ 2)', rowSpan: 2, styles: { valign: 'middle', halign: 'center' } },
+    { content: 'EXP. REVISÃO / DIA\n(BASE (M + L) ÷ 2)', rowSpan: 2, styles: { valign: 'middle', halign: 'center' } }
+  );
+
+  const bodyRows = sortedRows.map(c => {
+    const row = [
+      { content: c.nome || '', styles: { halign: 'left', fontStyle: 'normal' } }
+    ];
+    activeSectors.forEach(sec => {
+      const sData = c[sec.key];
+      const hasData = sData && sData.n > 0;
+      row.push(
+        { content: hasData ? String(sData.n) : '',                      styles: { halign: 'center', fontStyle: 'bold' } },
+        { content: hasData ? _fmtModeloTimeExcel(sData.min) : '',       styles: { halign: 'center' } },
+        { content: hasData ? _fmtModeloTimeExcel(sData.avg) : '',       styles: { halign: 'center' } },
+        { content: hasData ? _fmtModeloTimeExcel(sData.max) : '',       styles: { halign: 'center' } }
+      );
+    });
+    row.push(
+      { content: c.totalAvg > 0 ? _fmtModeloTimeExcel(c.totalAvg) : '', styles: { halign: 'center', fontStyle: 'bold' } },
+      { content: _formatModeloExpText(c, showMont, showLimp, showComp), styles: { halign: 'center', fontStyle: 'bold' } },
+      { content: c.tempoRevisao > 0 ? _fmtModeloTimeExcel(c.tempoRevisao) : '', styles: { halign: 'center', fontStyle: 'bold' } },
+      { content: c.expRevisaoDia > 0 ? `${c.expRevisaoDia}/dia` : '', styles: { halign: 'center', fontStyle: 'bold' } }
+    );
+    return row;
+  });
+
+  doc.autoTable({
+    startY: 21,
+    margin: { left: 10, right: 10, bottom: 10 },
+    head: [headRow1, headRow2],
+    body: bodyRows,
+    theme: 'grid',
+    styles: {
+      font: 'helvetica',
+      fontSize: 7.5,
+      cellPadding: 1.4,
+      textColor: [15, 15, 15],
+      lineColor: [205, 205, 205],
+      lineWidth: 0.15,
+      valign: 'middle'
+    },
+    headStyles: {
+      fillColor: [31, 56, 100], // #1F3864 igual à planilha da imagem
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 7.8,
+      lineColor: [142, 169, 219],
+      lineWidth: 0.2
+    },
+    alternateRowStyles: {
+      fillColor: [250, 251, 253]
+    },
+    columnStyles: {
+      0: { cellWidth: 68 }
+    }
+  });
+
+  const slug = _getModeloFilenameSlug(meta);
+  doc.save(`Relatorio_Tempo_Medio_por_Modelo_${slug}.pdf`);
+}
+
+function imprimirModeloComparativo(){
+  const sortedRows = _getModeloComparativoSortedByVolume();
+  const meta       = window._lastModeloComparativoMeta || {};
+  if(!sortedRows.length){
+    alert('Nenhum dado para imprimir no período selecionado.');
+    return;
+  }
+  const { showMont, showLimp, showComp, activeSectors, titleStr, sumShort } = _getModeloExportActiveSectors(meta);
+  const win = window.open('', '_blank', 'width=1240,height=840');
+  if(!win) return;
+
+  const headSecTop = activeSectors.map(s => `<th colspan="4">${s.title}</th>`).join('');
+  const headSecSub = activeSectors.map(() => `<th>QTD</th><th>MÍN</th><th>MÉDIO</th><th>MÁX</th>`).join('');
+
+  const rowsHtml = sortedRows.map(c => {
+    const secCells = activeSectors.map(sec => {
+      const sData = c[sec.key];
+      const hasData = sData && sData.n > 0;
+      return `
+        <td style="text-align:center;font-weight:700">${hasData ? sData.n : ''}</td>
+        <td style="text-align:center">${hasData ? _fmtModeloTimeExcel(sData.min) : ''}</td>
+        <td style="text-align:center">${hasData ? _fmtModeloTimeExcel(sData.avg) : ''}</td>
+        <td style="text-align:center;border-right:1px solid #999">${hasData ? _fmtModeloTimeExcel(sData.max) : ''}</td>
+      `;
+    }).join('');
+    const expTxt = _formatModeloExpText(c, showMont, showLimp, showComp);
+    const expRevTxt = c.expRevisaoDia > 0 ? `${c.expRevisaoDia}/dia` : '';
+    return `<tr>
+      <td style="text-align:left;border-right:1px solid #999">${c.nome}</td>
+      ${secCells}
+      <td style="text-align:center;font-weight:700;border-right:1px solid #999">${c.totalAvg > 0 ? _fmtModeloTimeExcel(c.totalAvg) : ''}</td>
+      <td style="text-align:center;font-weight:700;color:#1f3864;border-right:1px solid #999">${expTxt}</td>
+      <td style="text-align:center;font-weight:700;border-right:1px solid #999">${c.tempoRevisao > 0 ? _fmtModeloTimeExcel(c.tempoRevisao) : ''}</td>
+      <td style="text-align:center;font-weight:700;color:#1f3864">${expRevTxt}</td>
+    </tr>`;
+  }).join('');
+
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Relatório Tempo Médio por Modelo — ${meta.rangeLabel || ''}</title>
+  <style>
+    @page { size: A4 landscape; margin: 10mm; }
+    body { font-family: Arial, sans-serif; margin: 16px; color: #000; }
+    h1 { font-size: 17px; font-weight: 700; margin: 0 0 4px; }
+    p.sub { font-size: 11.5px; color: #222; margin: 0 0 14px; }
+    table { width: 100%; border-collapse: collapse; font-size: 10px; }
+    th, td { border: 1px solid #d0d0d0; padding: 4px 6px; }
+    thead th { background: #1f3864; color: #fff; font-weight: 700; text-transform: uppercase; font-size: 9.5px; border-color: #8ea9db; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    @media print { button { display: none; } }
+  </style></head><body>
+    <button onclick="window.print()" style="float:right;padding:8px 16px;font-weight:700;cursor:pointer;background:#1f3864;color:#fff;border:none;border-radius:6px">🖨️ Imprimir / Salvar PDF</button>
+    <h1>Relatório Tempo Médio por Modelo — ${titleStr} (Lado a Lado)</h1>
+    <p class="sub">Período: ${meta.rangeLabel || ''} · Ordem: Decrescente (Maior Volume) · Gerado em ${new Date().toLocaleString('pt-BR')}</p>
+    <table>
+      <thead>
+        <tr>
+          <th rowspan="2">EQUIPAMENTO (MODELO)</th>
+          ${headSecTop}
+          <th rowspan="2">SOMA MÉDIA<br>(${sumShort})</th>
+          <th rowspan="2">EXPECTATIVA / DIA<br>(9 OP · 7H)</th>
+          <th rowspan="2">SAÍDA DA REVISÃO<br>((MONT + LIMP) ÷ 2)</th>
+          <th rowspan="2">EXP. REVISÃO / DIA<br>(BASE (M + L) ÷ 2)</th>
+        </tr>
+        <tr>
+          ${headSecSub}
+        </tr>
+      </thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+  </body></html>`);
+  win.document.close();
 }
 
 // (Relatório Mensal removido — não é mais utilizado)
@@ -17100,7 +18172,7 @@ async function salvarQualRegistro(){
 
     // FluxoLAB: ao incluir registro na Qualidade, move o SELB de QUALIDADE → LIBERADAS.
     if(selb && typeof fluxolabFinalizarSelb === 'function'){
-      fluxolabFinalizarSelb(selb, 'QUALIDADE', 'ok').catch(e => console.warn('[FluxoLAB] Erro ao mover SELB para LIBERADAS:', e));
+      await fluxolabFinalizarSelb(selb, 'QUALIDADE', 'ok').catch(e => console.warn('[FluxoLAB] Erro ao mover SELB para LIBERADAS:', e));
     }
 
     // FluxoLAB: modelo aprovado na Qualidade — abate 1 checklist pendente das
@@ -17214,7 +18286,7 @@ window.toggleEtiquetaImpressaManual = async function(regId, checked, el){
       const selbToRelease = reg ? (reg.selb || '') : '';
       if(selbToRelease){
         const bolsaoAnterior = (typeof _fmovGetBolsaoAtual === 'function') ? _fmovGetBolsaoAtual(selbToRelease) : 'LIBERADAS';
-        fluxolabRemoveSelbGlobal(selbToRelease).then(() => {
+        fluxolabRemoveSelbGlobal(selbToRelease, { force: true }).then(() => {
           _fluxolabLogEntry(selbToRelease, bolsaoAnterior || 'LIBERADAS', '—', reg.equipamento || '', {
             tipo: 'finalizar', setor: 'QUALIDADE', resultado: 'concluido', automatico: true,
             obs: 'Máquina concluída/liberada — removida de todos os bolsões',
@@ -21058,8 +22130,9 @@ function _fluxolabGetSelbEntryTs(selbCode) {
   if (!selbCode || !_fluxolabData) return null;
   const code = String(selbCode).toUpperCase().trim();
   for (const bolsao of Object.keys(_fluxolabData)) {
+    if (!bolsao || bolsao.charAt(0) === '_') continue;
     const items = _fluxolabData[bolsao];
-    if (!items) continue;
+    if (!items || typeof items !== 'object') continue;
     for (const val of Object.values(items)) {
       if (val && String(val.selb || '').toUpperCase().trim() === code && val.ts) {
         return val.ts;
@@ -21069,6 +22142,59 @@ function _fluxolabGetSelbEntryTs(selbCode) {
   return null;
 }
 
+// ── Sanitização e desduplicação automática em tempo real dos bolsões ──
+// Garante que:
+//  1) chaves internas (_*) nunca apareçam como bolsão;
+//  2) cada SELB exista em NO MÁXIMO UM bolsão (mantendo sempre o maior "ts");
+//  3) se alguma duplicidade for detectada no payload vindo do banco, limpa em
+//     memória imediatamente (nunca exibe duplicado na tela) e dispara a
+//     varredura atômica no banco em background automaticamente.
+let _fluxolabAutoDedupeTimer = null;
+let _fluxolabAutoDedupeLastTs = 0;
+
+function _fluxolabSanitizeAndAutoDedupe(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  const clean = {};
+  const best = new Map(); // normCode -> { bolsao, key, ts }
+  let foundDuplicate = false;
+
+  for (const [bolsao, items] of Object.entries(raw)) {
+    if (!bolsao || bolsao.charAt(0) === '_' || !items || typeof items !== 'object') continue;
+    clean[bolsao] = {};
+    for (const [k, v] of Object.entries(items)) {
+      if (!v || typeof v !== 'object') continue;
+      const norm = String(v.selb || k || '').trim().toUpperCase();
+      if (!norm || norm.charAt(0) === '_') continue;
+      const ts = Number(v.ts) || 0;
+      const prev = best.get(norm);
+      if (!prev) {
+        best.set(norm, { bolsao, key: k, ts });
+        clean[bolsao][k] = v;
+      } else {
+        foundDuplicate = true;
+        if (ts >= prev.ts) {
+          if (clean[prev.bolsao]) delete clean[prev.bolsao][prev.key];
+          best.set(norm, { bolsao, key: k, ts });
+          clean[bolsao][k] = v;
+        }
+      }
+    }
+  }
+
+  if (foundDuplicate && _db && typeof _db.fluxolabDedupeSelbs === 'function') {
+    const now = Date.now();
+    if (now - _fluxolabAutoDedupeLastTs > 10000 && !_fluxolabAutoDedupeTimer) {
+      _fluxolabAutoDedupeTimer = setTimeout(() => {
+        _fluxolabAutoDedupeTimer = null;
+        _fluxolabAutoDedupeLastTs = Date.now();
+        _db.fluxolabDedupeSelbs().catch(() => {});
+      }, 600);
+    }
+  }
+
+  return clean;
+}
+
 // ── Estado do painel de movimentacao MULTI-SELB ───────────────
 // Cada item: { code, equip, bolsaoAtual, status }
 // status: 'ok' | 'notfound' | 'duplicate'
@@ -21076,24 +22202,14 @@ let _fmovQueue = [];   // array de { code, equip, bolsaoAtual }
 
 function fluxolabStartListener() {
   if (_fluxolabListener) return;
-  // Antes: _db.ref('/fluxolab').on('value', ...) — canal Realtime aberto por
-  // TODO cliente conectado, e /fluxolab é reescrito a cada movimentação de
-  // SELB no chão de fábrica (alta frequência) → maior consumidor provável
-  // de Realtime Messages. Agora: atualiza a cada 5min via poll e atualiza
-  // imediatamente ao voltar à aba (pollRef). Isso evita que cada tela aberta
-  // faça 1.440 leituras/dia desta árvore grande;
-  // o anti-flicker já evita re-render quando nada mudou).
-  _fluxolabListener = pollRef(_db.ref('/fluxolab'), 300000, snap => {
-    _fluxolabData = snap.val() || {};
+  // Usa .on('value') conectado ao shim_bus compartilhado (USE_PG_CHANGES = false,
+  // 0 canais extras) para atualizar os bolsões em tempo real em todas as telas
+  // e manter _fluxolabData sempre sincronizado.
+  _fluxolabListener = _db.ref('/fluxolab').on('value', snap => {
+    _fluxolabData = _fluxolabSanitizeAndAutoDedupe(snap.val() || {});
     _fluxolabScheduleSyncLiberados();
     const viewEl = document.getElementById('view-fluxolab');
     if (viewEl && viewEl.classList.contains('active')) {
-      // ── ANTI-FLICKER ──────────────────────────────────────────────
-      // O poll roda a cada 4s. Antes, re-renderizava o grid e as subabas
-      // via innerHTML mesmo quando NADA mudou — o que causava o "piscar"
-      // ao navegar entre as subabas. Agora só re-renderiza quando o
-      // snapshot realmente mudou (com um refresh forçado a cada 60s para
-      // atualizar textos relativos do tipo "5min atrás").
       let _sig = '';
       try { _sig = JSON.stringify(_fluxolabData); } catch(e) { _sig = String(Date.now()); }
       const _now = Date.now();
@@ -21103,7 +22219,6 @@ function fluxolabStartListener() {
         window._fluxolabLastRenderTs = _now;
         _fluxolabRenderGrid();
         _fluxolabUpdateTimestamp();
-        // Re-renderiza aba checklists se estiver ativa para atualizar Lab/Doca
         if (_fluxolabActiveTab === 'checklists') {
           try { fluxolabRenderChecklistsImported(); } catch(e) {}
         }
@@ -21111,7 +22226,6 @@ function fluxolabStartListener() {
         _fluxolabUpdateTimestamp();
       }
     }
-    // Atualiza chips se a fila estiver aberta
     if (_fmovQueue.length) _fmovRefreshChips();
   }, err => console.warn('[FluxoLAB] listener error:', err));
 }
@@ -21155,19 +22269,16 @@ function renderFluxoLAB() {
   _fluxolabScheduleSyncLiberados();
 }
 
-function fluxolabForceRefresh() {
-  // OTIMIZAÇÃO: se já temos dados via listener realtime, apenas re-renderiza
-  // sem novo GET. Só busca do servidor se realmente não houver cache.
-  if (typeof _fluxolabData === 'object' && _fluxolabData && Object.keys(_fluxolabData).length) {
-    _fluxolabRenderGrid();
-    _fluxolabUpdateTimestamp();
-    return;
-  }
-  dbGet('/fluxolab').then(data => {
-    _fluxolabData = data || {};
-    _fluxolabRenderGrid();
-    _fluxolabUpdateTimestamp();
-  }).catch(() => {});
+async function fluxolabForceRefresh() {
+  try {
+    const data = (_db && typeof _db.reloadBlob === 'function')
+      ? await _db.reloadBlob('fluxolab')
+      : await dbGet('/fluxolab');
+    _fluxolabData = _fluxolabSanitizeAndAutoDedupe(data || {});
+  } catch (e) {}
+  _fluxolabRenderGrid();
+  _fluxolabUpdateTimestamp();
+  _fluxolabScheduleSyncLiberados();
 }
 
 function _fluxolabUpdateTimestamp() {
@@ -21221,13 +22332,22 @@ function _fmovOnDestChange(radio) {
 
 // ── Busca o bolsão atual de um SELB nos dados locais ─────────
 function _fmovGetBolsaoAtual(code) {
-  const key = code.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const normCode = String(code || '').trim().toUpperCase();
+  if (!normCode) return '';
+  const key = normCode.replace(/[^a-zA-Z0-9_-]/g, '_');
   let found = '';
-  Object.entries(_fluxolabData).forEach(([bolsao, items]) => {
-    if (!items || found) return;
-    if (items[key]) { found = bolsao; return; }
+  let bestTs = -1;
+  Object.entries(_fluxolabData || {}).forEach(([bolsao, items]) => {
+    if (!bolsao || bolsao.charAt(0) === '_' || !items || typeof items !== 'object') return;
+    if (items[key]) {
+      const ts = Number(items[key].ts) || 0;
+      if (ts >= bestTs) { bestTs = ts; found = bolsao; }
+    }
     Object.values(items).forEach(v => {
-      if (v && v.selb && v.selb.trim().toUpperCase() === code) found = bolsao;
+      if (v && v.selb && String(v.selb).trim().toUpperCase() === normCode) {
+        const ts = Number(v.ts) || 0;
+        if (ts >= bestTs) { bestTs = ts; found = bolsao; }
+      }
     });
   });
   return found;
@@ -21678,6 +22798,9 @@ function _fluxolabRenderGrid() {
   const grid = document.getElementById('fluxolab-grid');
   if (!grid) return;
 
+  // Garante em toda renderização que nenhum SELB apareça duplicado entre bolsões
+  _fluxolabData = _fluxolabSanitizeAndAutoDedupe(_fluxolabData);
+
   // ── Preserva a rolagem (da página e de cada bolsão) entre re-renders ──
   // O grid inteiro é reconstruído a cada movimentação — a própria ou a de
   // QUALQUER outro usuário, via realtime — o que sem isso jogava a tela de
@@ -21790,16 +22913,17 @@ function _fluxolabRenderGrid() {
       // Urgência do modelo deste SELB
       const _urgQ = _fluxolabModeloUrgenteQtd(modeloSelb);
       const _urgCor = _urgQ ? _fluxolabModeloUrgenteCor(modeloSelb) : '';
-      const urgChip = _fluxolabUrgBadge(_urgQ, 'sm', _urgCor);
+      const urgChip = _urgQ ? _fluxolabModeloUrgBadgesHtml(modeloSelb, 'xs') : '';
       const _urgBg = _urgCor === 'laranja' ? 'rgba(234,179,8,.15)' : 'rgba(239,68,68,.12)';
       const _urgBd = _urgCor === 'laranja' ? 'rgba(234,179,8,.75)' : 'rgba(239,68,68,.75)';
-      return '<div style="position:relative;display:flex;align-items:center;justify-content:space-between;gap:6px;background:' + (_urgQ ? _urgBg : chipBg) + ';border:1px solid ' + (_urgQ ? _urgBd : chipBd) + ';border-radius:8px;padding:6px 10px;transition:background .15s,opacity .15s;opacity:' + chipOp + '" onmouseover="this.style.background=\'var(--bg4)\'" onmouseout="this.style.background=\'' + chipBg + '\'">'
-        + (urgChip ? '<div style="position:absolute;top:4px;right:' + (adminRemoveBtn ? '36px' : '6px') + ';z-index:2;pointer-events:none">' + urgChip + '</div>' : '')
+      const _baseBg = _urgQ ? _urgBg : chipBg;
+      return '<div style="position:relative;display:flex;align-items:center;justify-content:space-between;gap:6px;background:' + _baseBg + ';border:1px solid ' + (_urgQ ? _urgBd : chipBd) + ';border-radius:8px;padding:6px 10px;transition:background .15s,opacity .15s;opacity:' + chipOp + '" onmouseover="this.style.background=\'var(--bg4)\'" onmouseout="this.style.background=\'' + _baseBg + '\'">'
         + '<div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1">'
-          + '<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:' + b.color + ';white-space:nowrap">' + selbCode + warnBadge + starBadge + '</span>'
+          + '<span style="font-family:var(--mono);font-size:13px;font-weight:700;color:#ffffff;white-space:nowrap">' + selbCode + warnBadge + starBadge + '</span>'
           + '<div style="min-width:0;flex:1">'
             + (v.userName ? '<div style="font-size:10px;color:var(--muted);white-space:normal;word-break:break-word;line-height:1.25">' + v.userName + (v.movidoPor && v.movidoPor !== v.userName ? ' · mov. por ' + v.movidoPor : '') + '</div>' : '')
-            + (modeloSelb ? '<div title="Modelo do equipamento" style="font-size:10px;font-weight:600;color:' + b.color + ';white-space:normal;word-break:break-word;line-height:1.25;opacity:.9;margin-top:2px">📦 ' + modeloSelb + '</div>' : '')
+            + (modeloSelb ? '<div title="Modelo do equipamento" style="font-size:10px;font-weight:600;color:#ffffff;white-space:normal;word-break:break-word;line-height:1.25;margin-top:2px">📦 ' + modeloSelb + '</div>' : '')
+            + (urgChip ? '<div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-top:4px">' + urgChip + '</div>' : '')
             + (timeAgo ? (function(){var _d=v.ts?Math.floor((Date.now()-v.ts)/86400000):0;var _fs=_d>=9?15:_d>=6?13:_d>=3?11:9;var _fw=_d>=9?800:_d>=6?700:_d>=3?600:400;var _col=_d>=9?'var(--danger)':_d>=6?'var(--warn)':_d>=3?'var(--text)':'var(--muted)';return '<div style="font-size:'+_fs+'px;font-weight:'+_fw+';color:'+_col+'">' + timeAgo + '</div>';})() : '')
           + '</div>'
         + '</div>'
@@ -22023,10 +23147,24 @@ function _fluxolabRemoveLsSetTs(key, ts) {
   } catch (e) { /* localStorage indisponível (modo privado, quota etc.) — degrada pro cooldown por aba */ }
 }
 
+function _fluxolabRemoveLsClear(key) {
+  const _k = String(key || '').trim().toUpperCase();
+  if (!_k) return;
+  _fluxolabRemoveDone.delete(_k);
+  try {
+    const map = _fluxolabRemoveLsRead();
+    if (map[_k] !== undefined) {
+      delete map[_k];
+      localStorage.setItem(FLUXOLAB_REMOVE_LS_KEY, JSON.stringify(map));
+    }
+  } catch (e) {}
+}
+
 async function fluxolabRemoveSelbGlobal(selbCode, opts) {
   const _k = String(selbCode || '').trim().toUpperCase();
   if (!_k) return;
   const _force = !!(opts && opts.force);
+  const _onlyIfInMemory = !!(opts && opts.onlyIfInMemory);
   const _inflight = _fluxolabRemoveInflight.get(_k);
   if (_inflight) return _inflight;
   if (!_force) {
@@ -22041,27 +23179,26 @@ async function fluxolabRemoveSelbGlobal(selbCode, opts) {
       return;
     }
 
-    // OTIMIZAÇÃO MASSIVA (Anti-Storm de RPCs): Verifica se o SELB ainda existe no cache antes de chamar o banco.
-    // Como loops de sincronia (ex: _fluxolabSyncLiberados) rodam periodicamente em TODAS as abas,
-    // se houver 200 itens liberados no dia, isso gerava (200 requests * N abas) = picos de 4.000+ requests!
-    // Se o SELB não estiver em nenhum bolsão localmente, nós abortamos e salvamos o request.
-    let _exists = false;
-    if (typeof _fluxolabData === 'object' && _fluxolabData) {
-      const selfKey = _k.replace(/[^a-zA-Z0-9_-]/g, '_');
-      for (const b of Object.values(_fluxolabData)) {
-        if (b && (b[selfKey] || Object.values(b).some(v => v && String(v.selb).toUpperCase().trim() === _k))) {
-          _exists = true;
-          break;
+    // Se chamado pelo loop periódico (_fluxolabSyncLiberados), só dispara RPC
+    // se o SELB realmente constar em algum bolsão no snapshot em memória.
+    // Chamadas explícitas (SCRAP, Concluída, Revisada, Retorno Estoque) sempre
+    // vão ao banco mesmo que a aba atual ainda não tenha aberto o FluxoLAB.
+    if (_onlyIfInMemory) {
+      let _exists = false;
+      if (typeof _fluxolabData === 'object' && _fluxolabData) {
+        const selfKey = _k.replace(/[^a-zA-Z0-9_-]/g, '_');
+        for (const [bKey, b] of Object.entries(_fluxolabData)) {
+          if (!bKey || bKey.charAt(0) === '_' || !b || typeof b !== 'object') continue;
+          if (b[selfKey] || Object.values(b).some(v => v && String(v.selb).toUpperCase().trim() === _k)) {
+            _exists = true;
+            break;
+          }
         }
       }
-    }
-    if (!_exists) {
-      _fluxolabRemoveDone.set(_k, _now);
-      _fluxolabRemoveLsSetTs(_k, _now);
-      return;
+      if (!_exists) return;
     }
   }
-  const _p = _fluxolabRemoveSelbGlobalRaw(selbCode)
+  const _p = _fluxolabRemoveSelbGlobalRaw(_k)
     .then(r => {
       const _doneTs = Date.now();
       _fluxolabRemoveDone.set(_k, _doneTs);
@@ -22075,45 +23212,32 @@ async function fluxolabRemoveSelbGlobal(selbCode, opts) {
 
 async function _fluxolabRemoveSelbGlobalRaw(selbCode) {
   try {
+    const normCode = String(selbCode || '').trim().toUpperCase();
+    if (!normCode) return;
     // ── Caminho ATÔMICO (correto) ──────────────────────────────────
-    // Remove o SELB de TODOS os bolsões num único UPDATE travado no
-    // Postgres (fluxolab_remove_selb_everywhere), em vez de decidir o
-    // que apagar com base no cache local _fluxolabData. Usar o cache
-    // local era a causa da duplicação: se este navegador ainda não
-    // tinha recebido (via poll/realtime) uma entrada gravada por OUTRO
-    // usuário/aba há poucos segundos, a remoção simplesmente não sabia
-    // que precisava apagá-la — e o SELB ficava "esquecido" no bolsão
-    // antigo enquanto era registrado no novo. Ver fluxolab_fix_duplicacao.sql.
     if (_db && typeof _db.fluxolabRemoveSelbEverywhere === 'function') {
       try {
-        const fresh = await _db.fluxolabRemoveSelbEverywhere(selbCode);
-        _fluxolabData = fresh || {};
+        const fresh = await _db.fluxolabRemoveSelbEverywhere(normCode);
+        _fluxolabData = _fluxolabSanitizeAndAutoDedupe(fresh || {});
         return;
       } catch (rpcErr) {
-        // Ex.: PGRST202 (função ainda não criada no Supabase). NÃO pode
-        // parar aqui: se a remoção não acontecer, o SELB fica no bolsão
-        // antigo E entra no novo = duplicidade. Cai para o fallback.
-        console.warn('[FluxoLAB] RPC fluxolab_remove_selb_everywhere falhou — usando fallback local. Rode fluxolab_varrer_duplicados.sql no Supabase.', rpcErr && rpcErr.message);
+        console.warn('[FluxoLAB] RPC fluxolab_remove_selb_everywhere falhou — usando fallback local.', rpcErr && rpcErr.message);
       }
     }
 
-    // ── Fallback (apenas se o RPC acima não existir no banco ainda) ──
-    // Mesmo comportamento de antes: pode perder deleções em corrida com
-    // outra aba/usuário. Mantido só para não quebrar o app antes de
-    // rodar o script fluxolab_fix_duplicacao.sql no Supabase.
-    console.warn('[FluxoLAB] fluxolabRemoveSelbEverywhere indisponível — usando fallback não-atômico (rode fluxolab_fix_duplicacao.sql no Supabase).');
-    const snap = (typeof _fluxolabData === 'object' && _fluxolabData) ? _fluxolabData : await dbGet('/fluxolab');
-    if (!snap) return;
-    const selfKey = selbCode.replace(/[^a-zA-Z0-9_-]/g, '_');
+    // ── Fallback (apenas se o RPC acima falhar) ──
+    const snap = await dbGet('/fluxolab') || _fluxolabData || {};
+    const selfKey = normCode.replace(/[^a-zA-Z0-9_-]/g, '_');
     const delPromises = [];
     Object.keys(snap).forEach(bolsao => {
+      if (!bolsao || bolsao.charAt(0) === '_') return;
       const items = snap[bolsao];
-      if (!items) return;
+      if (!items || typeof items !== 'object') return;
       if (items[selfKey]) {
         delPromises.push(dbDelete('/fluxolab/' + bolsao + '/' + selfKey));
       }
       Object.entries(items).forEach(([k, v]) => {
-        if (v && v.selb && v.selb.trim().toUpperCase() === selbCode.trim().toUpperCase() && k !== selfKey) {
+        if (v && v.selb && String(v.selb).trim().toUpperCase() === normCode && k !== selfKey) {
           delPromises.push(dbDelete('/fluxolab/' + bolsao + '/' + k));
         }
       });
@@ -22128,30 +23252,32 @@ async function _fluxolabRemoveSelbGlobalRaw(selbCode) {
 // bolsão onde ele esteja e insere no destino num único passo dentro do
 // Postgres (fluxolab_move_selb), eliminando a corrida entre "remover" e
 // "gravar no bolsão novo" que causava SELBs aparecendo em dois bolsões
-// ao mesmo tempo. `record` é o mesmo objeto que hoje é passado pro dbSet.
+// ao mesmo tempo.
 async function fluxolabMoveSelbAtomic(selbCode, destBolsao, record) {
-  const selfKey = selbCode.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const normCode = String(selbCode || '').trim().toUpperCase();
+  if (!normCode || !destBolsao) return;
+  const selfKey = normCode.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const normRecord = Object.assign({}, record || {}, { selb: normCode });
+  // Limpa qualquer cooldown de remoção anterior para este SELB
+  _fluxolabRemoveLsClear(normCode);
+
   if (_db && typeof _db.fluxolabMoveSelb === 'function') {
     try {
-      const fresh = await _db.fluxolabMoveSelb(selfKey, destBolsao, record);
-      _fluxolabData = fresh || {};
+      const fresh = await _db.fluxolabMoveSelb(selfKey, destBolsao, normRecord);
+      _fluxolabData = _fluxolabSanitizeAndAutoDedupe(fresh || {});
       return;
     } catch (rpcErr) {
-      console.warn('[FluxoLAB] RPC fluxolab_move_selb falhou — usando fallback local. Rode fluxolab_varrer_duplicados.sql no Supabase.', rpcErr && rpcErr.message);
+      console.warn('[FluxoLAB] RPC fluxolab_move_selb falhou — usando fallback local.', rpcErr && rpcErr.message);
     }
   }
-  // Fallback não-atômico (só até rodar fluxolab_fix_duplicacao.sql no Supabase).
-  console.warn('[FluxoLAB] fluxolabMoveSelb indisponível — usando fallback não-atômico (rode fluxolab_fix_duplicacao.sql no Supabase).');
-  await fluxolabRemoveSelbGlobal(selbCode);
-  await dbSet('/fluxolab/' + destBolsao + '/' + selfKey, record);
+  // Fallback com force:true para nunca pular a remoção do bolsão anterior
+  await fluxolabRemoveSelbGlobal(normCode, { force: true });
+  await dbSet('/fluxolab/' + destBolsao + '/' + selfKey, normRecord);
 }
 
 // ════════════════════════════════════════════════════════════════════════
 // VARRER BOLSÕES — remove SELBs duplicados (mantém o registro mais recente)
 // Regra do fluxo: um SELB só pode existir em UM bolsão por vez.
-// A varredura roda 100% dentro do Postgres (fluxolab_dedupe_selbs), numa
-// transação travada, então é segura mesmo com operadores bipando ao mesmo
-// tempo. Fallback local só existe caso o SQL ainda não tenha sido rodado.
 // ════════════════════════════════════════════════════════════════════════
 function _fluxolabNormSelb(k, v) {
   const raw = (v && v.selb) ? String(v.selb) : String(k || '');
@@ -22163,6 +23289,7 @@ async function _fluxolabDedupeFallback() {
   const best = {};   // selb -> { bolsao, k, ts }
   const removidos = [];
   Object.keys(snap).forEach(bolsao => {
+    if (!bolsao || bolsao.charAt(0) === '_') return;
     const items = snap[bolsao];
     if (!items || typeof items !== 'object') return;
     Object.entries(items).forEach(([k, v]) => {
@@ -22174,6 +23301,7 @@ async function _fluxolabDedupeFallback() {
   });
   const dels = [];
   Object.keys(snap).forEach(bolsao => {
+    if (!bolsao || bolsao.charAt(0) === '_') return;
     const items = snap[bolsao];
     if (!items || typeof items !== 'object') return;
     Object.entries(items).forEach(([k, v]) => {
@@ -22200,20 +23328,19 @@ async function fluxolabVarrerBolsoes() {
     if (_db && typeof _db.fluxolabDedupeSelbs === 'function') {
       try {
         const res = await _db.fluxolabDedupeSelbs();
-        removidos = res.removidos || [];
-        _fluxolabData = res.data || {};
+        removidos = (res.removidos || []).filter(r =>
+          r && (!r.bolsao || String(r.bolsao).charAt(0) !== '_') && (!r.mantido_em || String(r.mantido_em).charAt(0) !== '_')
+        );
+        _fluxolabData = _fluxolabSanitizeAndAutoDedupe(res.data || {});
         usouRpc = true;
       } catch (rpcErr) {
         console.warn('[FluxoLAB] RPC fluxolab_dedupe_selbs indisponível — varredura local.', rpcErr && rpcErr.message);
       }
     }
-    if (usouRpc) {
-      /* já resolvido pelo banco */
-    } else {
-      console.warn('[FluxoLAB] fluxolabDedupeSelbs indisponível — usando varredura local (rode fluxolab_varrer_duplicados.sql no Supabase).');
+    if (!usouRpc) {
       const res = await _fluxolabDedupeFallback();
       removidos = res.removidos || [];
-      _fluxolabData = await dbGet('/fluxolab') || {};
+      _fluxolabData = _fluxolabSanitizeAndAutoDedupe(await dbGet('/fluxolab') || {});
     }
 
     // Registra no log de movimentações cada remoção feita pela varredura
@@ -22264,7 +23391,7 @@ async function fluxolabFinalizarSelb(selbCode, sector, res, destinoOverride, det
 
     // Sentinela: Retorno Estoque — sai de todos os bolsões
     if(dest === '__ESTOQUE__'){
-      await fluxolabRemoveSelbGlobal(selbCode);
+      await fluxolabRemoveSelbGlobal(selbCode, { force: true });
       _fluxolabLogEntry(selbCode, bolsaoAtual || sector, '— (Retorno Estoque)', equipNome, {
         tipo: 'finalizar', setor: sector, resultado: res, destinoEscolhido: 'Retorno Estoque', automatico: !destinoOverride,
       });
@@ -22279,7 +23406,7 @@ async function fluxolabFinalizarSelb(selbCode, sector, res, destinoOverride, det
     }
 
     if(!dest){
-      await fluxolabRemoveSelbGlobal(selbCode);
+      await fluxolabRemoveSelbGlobal(selbCode, { force: true });
       _fluxolabLogEntry(selbCode, bolsaoAtual || sector, '—', equipNome, {
         tipo: 'finalizar', setor: sector, resultado: res, automatico: !destinoOverride,
       });
@@ -22380,7 +23507,7 @@ async function _fluxolabSyncLiberados(){
   try {
     // Revisadas e etiquetas concluídas não podem permanecer em nenhum bolsão.
     for(const code of paraRemover){
-      await fluxolabRemoveSelbGlobal(code);
+      await fluxolabRemoveSelbGlobal(code, { onlyIfInMemory: true });
     }
 
     // Apenas os registros pendentes de qualidade seguem para LIBERADAS.
@@ -22411,8 +23538,11 @@ function _fluxolabScheduleSyncLiberados(){
 async function fluxolabRemoveItem(bolsao, selfKey) {
   if (!currentUser) return;
   try {
-    await dbDelete('/fluxolab/' + bolsao + '/' + selfKey);
-    if(typeof toast === 'function') toast('SELB removido do bolsao ' + bolsao.replace(/_/g,' '));
+    const item = _fluxolabData && _fluxolabData[bolsao] && _fluxolabData[bolsao][selfKey];
+    const code = (item && item.selb) ? String(item.selb).trim().toUpperCase() : selfKey;
+    await fluxolabRemoveSelbGlobal(code, { force: true });
+    if (typeof _fluxolabRenderGrid === 'function') _fluxolabRenderGrid();
+    if (typeof toast === 'function') toast('SELB removido do bolsao ' + bolsao.replace(/_/g,' '));
   } catch (e) {
     alert('Erro ao remover: ' + e.message);
   }
@@ -23232,6 +24362,17 @@ function fluxolabRenderModelos() {
           </div>`;
         }
       }
+    } else if (window._fluxolabBadgeFilter === 'urgtt') {
+      const matchRows = info.rows.filter(r => _fluxolabRowStatusUrg(r) === 'TT');
+      if (matchRows.length > 0) {
+        rowsToRender = matchRows;
+        if (matchRows.length < info.rows.length) {
+          badgeNote = `<div style="padding:6px 14px;background:rgba(249,115,22,.12);border-bottom:1px solid rgba(249,115,22,.35);color:#fed7aa;font-size:11px;display:flex;align-items:center;justify-content:space-between">
+            <span>Exibindo apenas os <b>${matchRows.length}</b> pedidos em <b>URG.TT</b> deste modelo (total: ${info.rows.length}).</span>
+            <button type="button" onclick="event.stopPropagation();fluxolabFiltrarPorBadge(null)" style="background:none;border:none;color:#fb923c;font-weight:700;text-decoration:underline;cursor:pointer;font-size:11px">Mostrar todos os ${info.rows.length}</button>
+          </div>`;
+        }
+      }
     } else if (window._fluxolabBadgeFilter === 'urgencias') {
       const matchRows = info.rows.filter(_fluxolabRowUrgente);
       if (matchRows.length > 0) {
@@ -23261,7 +24402,7 @@ function fluxolabRenderModelos() {
     ).join('');
     const trs = rowsToRender.map(r => {
       const _urgRow = _fluxolabRowUrgente(r);
-      const _isTroca = _urgRow && _fluxolabIsTrocaTecnica(r, k.tipo);
+      const _isTroca = _fluxolabIsTrocaTecnica(r, k.tipo);
       const tds = headers.map(([, key]) => {
         let val = '—';
         if (key === k.customer || key === k.telefone || key === (k.customer || k.telefone)) {
@@ -23276,15 +24417,14 @@ function fluxolabRenderModelos() {
         } else if (key && r[key] != null && String(r[key]).trim() !== '') {
           val = _escDet(r[key]);
         }
-        if (key && key === k.tipo && _urgRow) {
-          const pillBg = _isTroca ? 'rgba(234,179,8,0.25)' : 'rgba(239,68,68,0.30)';
-          const pillBd = _isTroca ? '#eab308' : '#ef4444';
-          const pillTx = _isTroca ? '#fef08a' : '#fee2e2';
-          const icone  = _isTroca ? '⚡' : '🚨';
-          const tagPill = _isTroca
-            ? '<span style="background:#eab308;color:#000000;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:900;letter-spacing:.04em;margin-left:4px">TROCA TÉCNICA</span>'
-            : '<span style="background:#ef4444;color:#ffffff;padding:1px 5px;border-radius:3px;font-size:9px;font-weight:900;letter-spacing:.04em;margin-left:4px">A INSTALAR</span>';
-          val = `<span style="display:inline-flex;align-items:center;gap:5px;background:${pillBg};border:1.5px solid ${pillBd};color:${pillTx};padding:3px 9px;border-radius:6px;font-weight:800;font-size:11px;white-space:nowrap;box-shadow:0 0 8px ${_isTroca ? 'rgba(234,179,8,0.45)' : 'rgba(239,68,68,0.45)'}"><span class="fx-urg-icon">${icone}</span> ${val} ${tagPill}</span>`;
+        let _cellBadge = '';
+        if (key && key === k.tipo && _fluxolabRowEhTT(r, k.tipo)) _cellBadge = _fluxolabBadgeTT(1);
+        if (key && key === k.status) {
+          const _st = _fluxolabRowStatusUrg(r);
+          _cellBadge = _st === 'TT' ? _fluxolabBadgeURGTT(1) : (_st === 'URG' ? _fluxolabBadgeURG(1) : '');
+        }
+        if (_cellBadge) {
+          val = `<span style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap"><span>${val}</span>${_cellBadge}</span>`;
         }
         return `<td style="padding:7px 12px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border);vertical-align:top">${val}</td>`;
       }).join('');
@@ -23472,6 +24612,10 @@ function fluxolabRenderModelos() {
       const kTipoDet = det ? det.keys.tipo : null;
       return det && det.rows.some(r => _fluxolabIsTrocaTecnica(r, kTipoDet));
     }
+    if (badgeFilter === 'urgtt') {
+      const det = checklistDetalhes.get(normKey);
+      return det && det.rows.some(r => _fluxolabRowStatusUrg(r) === 'TT');
+    }
     if (badgeFilter === 'urgencias') {
       const det = checklistDetalhes.get(normKey);
       return _fluxolabModeloUrgenteQtd(modelo) > 0 || (det && det.rows.some(_fluxolabRowUrgente));
@@ -23650,38 +24794,16 @@ function fluxolabRenderModelos() {
     const hasDet = clTotal > 0;
     const isOpen = window._fluxolabModelosExpanded.has(normKey);
 
-    // Urgência: modelos com checklist "Urgência Laboratório"
-    const _urgRows = (() => {
-      const det = checklistDetalhes.get(normKey);
-      if (!det || !det.rows.length) return [];
-      return det.rows.filter(_fluxolabRowUrgente);
-    })();
-    const _urgQtd = _urgRows.length;
-    const _detKeys = checklistDetalhes.get(normKey)?.keys;
-    const _kTipoDet = _detKeys ? _detKeys.tipo : null;
-    const _trocaUrgRows = _urgRows.filter(r => _fluxolabIsTrocaTecnica(r, _kTipoDet));
-    const _instalarUrgRows = _urgRows.filter(r => !_fluxolabIsTrocaTecnica(r, _kTipoDet));
-
-    let _urgBadge = '';
-    let _urgCor = '';
+    // Badges pequenos: Urgências (vermelho), Troca Técnica (amarelo) e Urgência TT (badge compacto "Urgência TT")
+    const _detInfo = checklistDetalhes.get(normKey);
+    const _detRows = (_detInfo && _detInfo.rows) ? _detInfo.rows : [];
+    const _kTipoDet = (_detInfo && _detInfo.keys) ? _detInfo.keys.tipo : null;
+    let _urgBadge = _fluxolabRowsBadgesHtml(_detRows, _kTipoDet);
     let rowBgFinal = rowBg;
     let rowInset = '';
 
     const foraDoPlano = !modelosNoPlano.has(normKey);
     const _foraBadge = foraDoPlano ? _fluxolabBadgeForaProgramacao() : '';
-
-    if (_urgQtd > 0) {
-      if (_trocaUrgRows.length > 0 && _instalarUrgRows.length === 0) {
-        _urgCor = 'laranja';
-        _urgBadge = _fluxolabUrgBadge(_trocaUrgRows.length, null, 'laranja');
-      } else if (_instalarUrgRows.length > 0 && _trocaUrgRows.length === 0) {
-        _urgCor = 'red';
-        _urgBadge = _fluxolabUrgBadge(_instalarUrgRows.length, null, 'red');
-      } else {
-        _urgCor = 'misto';
-        _urgBadge = _fluxolabUrgBadge(_instalarUrgRows.length, null, 'red') + ' ' + _fluxolabUrgBadge(_trocaUrgRows.length, null, 'laranja');
-      }
-    }
 
     if (foraDoPlano) {
       rowBgFinal = 'rgba(59,130,246,.08)';
@@ -23729,12 +24851,14 @@ function fluxolabRenderModelos() {
   // Totais globais de Urgências e Troca Técnica
   let _sumUrgencias = 0;
   let _sumTrocaTec = 0;
+  let _sumUrgTT = 0;
   if (Array.isArray(_fluxolabChecklistsImported) && _fluxolabChecklistsImported.length) {
     const sample = _fluxolabChecklistsImported[0];
     const kTipoGlobal = _fluxolabFindKey(sample, 'Tipo') || Object.keys(sample).find(k => k.trim().toLowerCase() === 'status');
     for (const r of _fluxolabChecklistsImported) {
       if (_fluxolabRowUrgente(r)) _sumUrgencias++;
       if (_fluxolabIsTrocaTecnica(r, kTipoGlobal)) _sumTrocaTec++;
+      if (_fluxolabRowStatusUrg(r) === 'TT') _sumUrgTT++;
     }
   }
 
@@ -23772,6 +24896,7 @@ function fluxolabRenderModelos() {
     'faltantes':  { label: 'Faltantes',     icon: '⚠',  desc: 'modelos com checklists sem equipamento suficiente no LAB' },
     'foraplano':  { label: 'Fora do plano', icon: '●',  desc: 'modelos que não estão na Programação Entrada em Lote nem em Pendências' },
     'troca':      { label: 'Troca Técnica', icon: '⚡', desc: 'modelos com pedidos de Troca Técnica' },
+    'urgtt':      { label: 'URG.TT',        icon: '🔥', desc: 'modelos com checklists em Urgência TT' },
     'urgencias':  { label: 'Urgências',     icon: '🚨', desc: 'modelos com pedidos com prioridade de Urgência Laboratório' },
     'checklists': { label: 'Checklists',    icon: '📋', desc: 'modelos com checklists importados da planilha' }
   };
@@ -23825,6 +24950,7 @@ function fluxolabRenderModelos() {
       ${_sumCard('faltantes',  'Faltantes',      _sumFaltantes, _sumFaltantes > 0 ? '#ef4444' : '#22c55e', '⚠')}
       ${_sumCard('foraplano',  'Fora do plano',  _sumForaPlano, _sumForaPlano > 0 ? '#60a5fa' : '#22c55e', '●')}
       ${_sumCard('troca',      'Troca Técnica',  _sumTrocaTec,  '#eab308',      '⚡')}
+      ${_sumCard('urgtt',      'URG.TT',         _sumUrgTT,     '#fb923c',      '🔥')}
       ${_sumCard('urgencias',  'Urgências',      _sumUrgencias, _sumUrgencias > 0 ? '#ef4444' : '#22c55e', '🚨')}
     </div>
     ${filterBanner}
@@ -23889,6 +25015,10 @@ function fluxolabStartChecklistsListener(){
           fluxolabRenderPendencias();
         }
       } catch(_e) { console.warn('[FluxoLAB] Erro ao re-ordenar pendências por urgência:', _e); }
+    }
+    if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'planejamento'
+        && typeof fluxolabRenderPlanejamento === 'function') {
+      try { fluxolabRenderPlanejamento(); } catch(_e) {}
     }
     // Re-renderiza a tabela de Qualidade se estiver visível, para que o badge
     // "📋 Checklist" apareça nos registros assim que os dados chegarem do Firebase
@@ -24224,7 +25354,7 @@ function fluxolabRenderChecklistsImported(){
            onclick="(function(el,id){var t=document.getElementById(id);var open=t.style.display!=='none';t.style.display=open?'none':'';el.querySelector('.cl-arr').style.transform=open?'':'rotate(180deg)';})(this,'${detailId}')"
            onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background='${_grpUrg ? 'rgba(239,68,68,.08)' : ''}'">
         ${atrBadge}
-        ${_fluxolabUrgBadge(g.items.filter(_fluxolabRowUrgente).length)}
+        ${_fluxolabModeloUrgBadgesHtml(modelo)}
         <span style="flex:1;font-size:14px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">${esc(modelo)}</span>
         <span style="flex-shrink:0;font-size:13px;font-weight:700;color:${avgColor};white-space:nowrap">Avg: ${avg}d</span>
         <span style="flex-shrink:0;font-size:13px;font-weight:600;color:var(--muted);white-space:nowrap">${g.total} Peds</span>
@@ -24421,7 +25551,7 @@ function fluxolabRenderCaindoHoje() {
     const labQtd = labPorModelo.get(normKey) || 0;
     const faltantes = Math.max(0, items.length - labQtd);
     const _urgQtd = items.filter(_fluxolabRowUrgente).length;
-    const _urgBadge = _fluxolabUrgBadge(_urgQtd);
+    const _urgBadge = _fluxolabRowsBadgesHtml(items, k.tipo);
 
     const cellNum = (val, color) => val == null
       ? `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:12px">—</td>`
@@ -24549,7 +25679,7 @@ function fluxolabRenderLiberadosHoje() {
         }).join('');
       return `<div style="border-bottom:1px solid var(--border2)">
         <div style="padding:12px 16px;background:var(--bg3);display:flex;align-items:center;justify-content:space-between">
-          <span style="font-size:13px;font-weight:700;color:var(--text);display:inline-flex;align-items:center;gap:8px"><span>${esc(modelo)}</span>${(function(){var q=_fluxolabModeloUrgenteQtd(modelo);return q?_fluxolabUrgBadge(q,null,_fluxolabModeloUrgenteCor(modelo)):'';})()}</span>
+          <span style="font-size:13px;font-weight:700;color:var(--text);display:inline-flex;align-items:center;gap:8px"><span>${esc(modelo)}</span>${_fluxolabModeloUrgBadgesHtml(modelo)}</span>
           <span style="font-size:12px;font-weight:800;color:#4ade80;background:rgba(74,222,128,.12);border:1px solid rgba(74,222,128,.4);border-radius:10px;padding:2px 10px">${items.length}</span>
         </div>
         <table style="width:100%;border-collapse:collapse">
@@ -24750,12 +25880,40 @@ function _fluxolabRowTipo(r, kTipo) {
 
 function _fluxolabIsTrocaTecnica(r, kTipo) {
   const t = _fluxolabRowTipo(r, kTipo).toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  if (t.includes('TROCA')) return true;
+  if (t.includes('TROCA') || /\bTT\b/.test(t)) return true;
   for (const k of Object.keys(r)) {
     const val = String(r[k] || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    if (val.includes('TROCA TECNICA')) return true;
+    if (val.includes('TROCA TECNICA') || val.includes('URGENCIA TT') || /\bURG\.?\s*TT\b/.test(val)) return true;
   }
   return false;
+}
+
+function _fluxolabRowUrgenciaTT(r, kTipo) {
+  if (!r || typeof r !== 'object') return false;
+  for (const k of Object.keys(r)) {
+    const val = String(r[k] || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (val.includes('URGENCIA TT') || /\bURG\.?\s*TT\b/.test(val)) return true;
+  }
+  return _fluxolabRowUrgente(r) && _fluxolabIsTrocaTecnica(r, kTipo);
+}
+
+// Renderiza os badges pequenos: redondos (só com o número) para Urgências (vermelho) e Troca Técnica (amarelo),
+// e o badge pequeno compacto "Urgência TT" (do tamanho de ✓ CHECKLIST) quando o status for Urgência TT
+function _fluxolabSmallCountBadgesHtml(urgencias, trocas, urgenciasTT) {
+  let html = '';
+  const nUrg = Number(urgencias || 0);
+  const nTroca = Number(trocas || 0);
+  const nUrgTT = Number(urgenciasTT || 0);
+  if (nUrg > 0) {
+    html += '<span title="' + nUrg + ' Urgência(s) na planilha de checklists" style="display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:18px;padding:0 5px;border-radius:999px;background:rgba(239,68,68,0.28);border:1.5px solid #ef4444;color:#fee2e2;font-family:var(--mono);font-size:10px;font-weight:900;line-height:1;box-shadow:0 0 8px rgba(239,68,68,0.35);white-space:nowrap;flex-shrink:0">' + nUrg + '</span>';
+  }
+  if (nTroca > 0) {
+    html += '<span title="' + nTroca + ' Troca(s) Técnica(s) na planilha de checklists" style="display:inline-flex;align-items:center;justify-content:center;min-width:19px;height:18px;padding:0 5px;border-radius:999px;background:rgba(234,179,8,0.26);border:1.5px solid #eab308;color:#fef08a;font-family:var(--mono);font-size:10px;font-weight:900;line-height:1;box-shadow:0 0 8px rgba(234,179,8,0.35);white-space:nowrap;flex-shrink:0">' + nTroca + '</span>';
+  }
+  if (nUrgTT > 0) {
+    html += _fluxolabUrgBadge(nUrgTT, null, 'laranja');
+  }
+  return html;
 }
 // modelo normalizado -> qtd de checklists em urgência
 function _fluxolabBuildUrgenciaIndex(){
@@ -24785,29 +25943,73 @@ function _fluxolabModeloUrgenteQtd(modeloTexto){
   }
   return 0;
 }
-// Badge padrão de urgência (usado em todas as abas)
+// Badge pequeno compacto (mesmo porte do badge "✓ CHECKLIST"):
+// exibe "Urgência TT" (amarelo/dourado) para Troca Técnica urgente, ou "Urgência" (vermelho) para A Instalar urgente
 function _fluxolabUrgBadge(qtd, size, corTipo){
   if (!qtd) return '';
-  const sm = size === 'sm';
   const isLaranja = corTipo === 'laranja' || corTipo === 'orange' || corTipo === 'troca' || corTipo === 'amarelo' || corTipo === 'yellow';
-  const icon = isLaranja ? '⚡' : '🚨';
-  const tagText = isLaranja ? 'TROCA TÉCNICA' : 'A INSTALAR';
-  const bg = isLaranja ? 'rgba(234,179,8,.25)' : 'rgba(239,68,68,.30)';
-  const border = isLaranja ? '1.5px solid #eab308' : '1.5px solid #ef4444';
-  const color = isLaranja ? '#fef08a' : '#fee2e2';
-  const tagBg = isLaranja ? '#eab308' : '#ef4444';
-  const tagColor = isLaranja ? '#000000' : '#ffffff';
-  const shadow = isLaranja ? 'box-shadow:0 0 10px rgba(234,179,8,.40);' : 'box-shadow:0 0 10px rgba(239,68,68,.45);';
-  const tagPill = sm ? '' : ' <span style="background:' + tagBg + ';color:' + tagColor + ';padding:1.5px 6px;border-radius:4px;font-size:9.5px;font-weight:900;letter-spacing:.04em;margin-left:4px">' + tagText + '</span>';
+  const label = isLaranja ? 'Urgência TT' : 'Urgência';
+  const countSuffix = qtd > 1 ? ' (' + qtd + ')' : '';
+  const bg = isLaranja ? 'rgba(234,179,8,0.18)' : 'rgba(239,68,68,0.18)';
+  const border = isLaranja ? '1px solid rgba(234,179,8,0.45)' : '1px solid rgba(239,68,68,0.45)';
+  const color = isLaranja ? '#fde047' : '#f87171';
+  const titleText = qtd + ' checklist(s) em ' + (isLaranja ? 'Urgência TT (Troca Técnica)' : 'Urgência Laboratório');
+  return '<span class="fx-urg" title="' + titleText + '"'
+    + ' style="background:' + bg + ';color:' + color + ';border:' + border + ';font-size:13px;font-weight:900;padding:3px 10px;border-radius:12px;white-space:nowrap;flex-shrink:0;letter-spacing:0.03em;line-height:1.2;display:inline-flex;align-items:center">'
+    + label + countSuffix + '</span>';
+}
 
-  const iconAnimated = '<span class="fx-urg-icon" style="display:inline-block">' + icon + '</span>';
-  return '<span class="fx-urg" title="' + qtd + ' checklist(s) em Urgência Laboratório (' + (isLaranja ? 'Troca Técnica' : 'A Instalar') + ')"'
-    + ' style="flex-shrink:0;display:inline-flex;align-items:center;gap:4px;'
-    + 'background:' + bg + ';' + shadow
-    + 'border:' + border + ';color:' + color + ';border-radius:6px;'
-    + (sm ? 'padding:2px 6px;font-size:8.5px;' : 'padding:3px 9px;font-size:11px;')
-    + 'font-weight:900;letter-spacing:.04em;white-space:nowrap;text-shadow:0 1px 3px rgba(0,0,0,.7)">'
-    + iconAnimated + ' URG' + (qtd > 1 ? ' ' + qtd : '') + tagPill + '</span>';
+// ── Regras dos badges pequenos ──────────────────────────────────────
+// Tipo = TROCA TÉCNICA  → badge "TT" (amarelo)
+// Tipo = A INSTALAR     → nenhum badge
+// Status Checklist = Urgência TT → badge "URG.TT" (laranja)
+// Status Checklist = Urgência (outras) → badge "URG." (vermelho)
+function _fluxolabRowStatusUrg(r) {
+  if (!r || typeof r !== 'object') return '';
+  let res = '';
+  for (const k of Object.keys(r)) {
+    if (!String(k).toLowerCase().includes('status')) continue;
+    const v = String(r[k] == null ? '' : r[k]).toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (v.includes('URGENCIA TT') || /URG\.?\s*TT/.test(v)) return 'TT';
+    if (v.includes('URG')) res = 'URG';
+  }
+  return res;
+}
+function _fluxolabRowEhTT(r, kTipo) {
+  const t = _fluxolabRowTipo(r, kTipo).toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return t.includes('TROCA') || /\bTT\b/.test(t);
+}
+function _fluxolabBadgeSm(label, qtd, bg, color, border, title, size) {
+  const isXs = size === 'xs';
+  const fs = isXs ? '10px' : '13px';
+  const pad = isXs ? '2px 7px' : '3px 10px';
+  const br = isXs ? '10px' : '12px';
+  return '<span title="' + title + '" style="background:' + bg + ';color:' + color + ';border:1px solid ' + border + ';font-size:' + fs + ';font-weight:900;padding:' + pad + ';border-radius:' + br + ';white-space:nowrap;flex-shrink:0;letter-spacing:0.03em;line-height:1.2;display:inline-flex;align-items:center">' + label + (qtd > 1 ? ' (' + qtd + ')' : '') + '</span>';
+}
+function _fluxolabBadgeTT(qtd, size) { return qtd > 0 ? _fluxolabBadgeSm('TT', qtd, 'rgba(234,179,8,0.20)', '#fde047', 'rgba(234,179,8,0.55)', 'Troca Técnica', size) : ''; }
+function _fluxolabBadgeURGTT(qtd, size) { return qtd > 0 ? _fluxolabBadgeSm('URG.TT', qtd, 'rgba(249,115,22,0.20)', '#fb923c', 'rgba(249,115,22,0.55)', 'Urgência TT', size) : ''; }
+function _fluxolabBadgeURG(qtd, size) { return qtd > 0 ? _fluxolabBadgeSm('URG.', qtd, 'rgba(239,68,68,0.20)', '#f87171', 'rgba(239,68,68,0.55)', 'Urgência', size) : ''; }
+function _fluxolabRowsBadgesHtml(rows, kTipo, size) {
+  let tt = 0, urgtt = 0, urg = 0;
+  for (const r of (rows || [])) {
+    if (_fluxolabRowEhTT(r, kTipo)) tt++;
+    const s = _fluxolabRowStatusUrg(r);
+    if (s === 'TT') urgtt++; else if (s === 'URG') urg++;
+  }
+  return _fluxolabBadgeTT(tt, size) + _fluxolabBadgeURGTT(urgtt, size) + _fluxolabBadgeURG(urg, size);
+}
+function _fluxolabModeloUrgBadgesHtml(modeloTexto, size){
+  if (!modeloTexto || !Array.isArray(_fluxolabChecklistsImported) || !_fluxolabChecklistsImported.length) return '';
+  const sample = _fluxolabChecklistsImported[0];
+  const kMod = _fluxolabFindKey(sample, 'Descrição Equipamento') || _fluxolabFindKey(sample, 'Descricao Equipamento');
+  const kTipo = _fluxolabFindKey(sample, 'Tipo') || Object.keys(sample).find(x => x.trim().toLowerCase() === 'status');
+  const nk = _fluxolabNormModel(modeloTexto);
+  let rows = _fluxolabChecklistsImported.filter(r => _fluxolabNormModel(r[kMod]) === nk);
+  if (!rows.length) {
+    const tokens = nk.split(/\s+/).filter(t => t.length >= 4);
+    if (tokens.length) rows = _fluxolabChecklistsImported.filter(r => tokens.every(t => _fluxolabNormModel(r[kMod]).includes(t)));
+  }
+  return _fluxolabRowsBadgesHtml(rows, kTipo, size);
 }
 
 function _fluxolabModeloUrgenteCor(modeloTexto){
@@ -25051,7 +26253,7 @@ async function fluxolabConsumirChecklistPorModelo(modeloTexto, meta){
       sector:   currentUser ? currentUser.sector : '',
       ts:       Date.now(),
     };
-    _db.ref('/fluxolab/_checklist_liberados').push(liberadoEntry).catch(err => {
+    _db.ref('/fluxolab_checklist_liberados').push(liberadoEntry).catch(err => {
       console.warn('[FluxoLAB] Falha ao registrar checklist liberado:', err);
     });
 
@@ -30845,13 +32047,13 @@ window.fluxolabVarrerDuplicados = async function() {
     return;
   }
 
-  // Agrupa todas as entradas de todos os bolsões por SELB normalizado
+  // Agrupa todas as entradas de todos os bolsões por SELB normalizado (ignora chaves internas _*)
   const grupos = {}; // code -> [{ bolsao, key, record }]
   Object.entries(dados).forEach(([bolsao, items]) => {
-    if (!items || typeof items !== 'object') return;
+    if (!bolsao || bolsao.charAt(0) === '_' || !items || typeof items !== 'object') return;
     Object.entries(items).forEach(([key, record]) => {
       const code = String(record && record.selb ? record.selb : '').trim().toUpperCase();
-      if (!code) return;
+      if (!code || code.charAt(0) === '_') return;
       if (!grupos[code]) grupos[code] = [];
       grupos[code].push({ bolsao, key, record });
     });
