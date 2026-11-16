@@ -41,15 +41,85 @@ function fluxolabGetRowChkCount(row, statsChk) {
   return st.count || 0;
 }
 
+// Retorna a quantia excedente se a soma das linhas manuais do modelo ultrapassar o total de checklists
+function fluxolabGetChkExcess(tableName, rowIdx) {
+  const list = _fluxolabPlanejamentoState[tableName];
+  if (!Array.isArray(list) || !list[rowIdx]) return 0;
+  const row = list[rowIdx];
+  const mVal = String(row.modelo || '').trim();
+  if (!mVal || row.chk_auto_rem || String(row.chk_manual != null ? row.chk_manual : '').trim() === '') return 0;
+
+  const statsChk = fluxolabPlanGetChecklistStats(mVal);
+  const totalModel = statsChk.count || 0;
+  const normTarget = (typeof _fluxolabNormModel === 'function')
+    ? _fluxolabNormModel(mVal)
+    : mVal.toUpperCase().replace(/\s+/g, '');
+
+  let sumManual = 0;
+  list.forEach(r => {
+    if (!r || r.chk_auto_rem || String(r.chk_manual != null ? r.chk_manual : '').trim() === '') return;
+    const rm = String(r.modelo || '').trim();
+    if (!rm) return;
+    const nm = (typeof _fluxolabNormModel === 'function')
+      ? _fluxolabNormModel(rm)
+      : rm.toUpperCase().replace(/\s+/g, '');
+    if (nm === normTarget) {
+      sumManual += fluxolabGetRowChkCount(r, statsChk);
+    }
+  });
+
+  return sumManual > totalModel ? (sumManual - totalModel) : 0;
+}
+
+// Atualiza visualmente o aviso vermelho de excedente em todas as linhas de um modelo na tabela
+function fluxolabSyncChkExcessForModel(tableName, modeloName) {
+  const list = _fluxolabPlanejamentoState[tableName];
+  const mVal = String(modeloName || '').trim();
+  if (!Array.isArray(list) || !mVal) return;
+  const normTarget = (typeof _fluxolabNormModel === 'function')
+    ? _fluxolabNormModel(mVal)
+    : mVal.toUpperCase().replace(/\s+/g, '');
+  const statsChk = fluxolabPlanGetChecklistStats(mVal);
+
+  list.forEach((r, i) => {
+    if (!r || !String(r.modelo || '').trim()) return;
+    const nm = (typeof _fluxolabNormModel === 'function')
+      ? _fluxolabNormModel(r.modelo)
+      : String(r.modelo).toUpperCase().replace(/\s+/g, '');
+    if (nm !== normTarget) return;
+
+    const excedente = fluxolabGetChkExcess(tableName, i);
+    const inpChk = document.getElementById(`plan-${tableName}-r${i}-chk_manual`);
+    const excEl = document.getElementById(`plan-${tableName}-r${i}-chk-exc`);
+    if (inpChk) {
+      const eff = fluxolabGetRowChkCount(r, statsChk);
+      inpChk.classList.toggle('plan-chk-exceeded', excedente > 0);
+      inpChk.style.color = excedente > 0 ? '#f87171' : (eff > 0 ? '#4ade80' : '#f87171');
+    }
+    if (excEl) {
+      if (excedente > 0) {
+        excEl.innerText = `+${excedente} excedente`;
+        excEl.style.display = 'block';
+        excEl.title = `Quantidade excedente: +${excedente} acima do total do modelo (${statsChk.count || 0})`;
+      } else {
+        excEl.innerText = '';
+        excEl.style.display = 'none';
+      }
+    }
+  });
+}
+
 // Sincroniza o input da coluna Checklists (valor, cor, readonly e tooltip)
-function fluxolabSyncChkInputElem(inpChk, rowObj, statsChk) {
+function fluxolabSyncChkInputElem(inpChk, rowObj, statsChk, excedente) {
   if (!inpChk) return;
   const mVal = rowObj && rowObj.modelo ? String(rowObj.modelo).trim() : '';
   const st = statsChk || (mVal ? fluxolabPlanGetChecklistStats(mVal) : { count: 0 });
   const hasMan = rowObj && String(rowObj.chk_manual != null ? rowObj.chk_manual : '').trim() !== '';
   inpChk.value = mVal ? (hasMan ? rowObj.chk_manual : (st.count || '-')) : '';
   const eff = fluxolabGetRowChkCount(rowObj, st);
-  inpChk.style.color = !mVal ? 'var(--muted)' : (eff > 0 ? '#4ade80' : '#f87171');
+  const exc = Number(excedente || 0);
+  inpChk.classList.toggle('plan-chk-exceeded', exc > 0);
+  inpChk.style.color = !mVal ? 'var(--muted)' : (exc > 0 ? '#f87171' : (eff > 0 ? '#4ade80' : '#f87171'));
   inpChk.readOnly = !mVal;
   inpChk.style.cursor = !mVal ? 'default' : 'text';
   inpChk.title = mVal ? `Clique para definir a quantidade de checklists manualmente (total do modelo: ${st.count || 0})` : '';
@@ -309,6 +379,10 @@ function fluxolabApplyRemoteSync(remoteData) {
         }
       });
     }
+    for (let i = 0; i < remoteData[t].length; i++) {
+      const lr = _fluxolabPlanejamentoState[t][i];
+      if (lr && lr.modelo) fluxolabSyncChkExcessForModel(t, lr.modelo);
+    }
     if (fluxolabCompactPlanTable(t)) {
       if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'planejamento') {
         fluxolabScheduleRerender(t);
@@ -411,8 +485,11 @@ function fluxolabUpdateRowChkInput(elem, tableName) {
 
   const statsChk = row.modelo ? fluxolabPlanGetChecklistStats(row.modelo) : { count: 0 };
   const eff = fluxolabGetRowChkCount(row, statsChk);
-  elem.style.color = !row.modelo ? 'var(--muted)' : (eff > 0 ? '#4ade80' : '#f87171');
+  const exc = fluxolabGetChkExcess(tableName, index);
+  elem.classList.toggle('plan-chk-exceeded', exc > 0);
+  elem.style.color = !row.modelo ? 'var(--muted)' : (exc > 0 ? '#f87171' : (eff > 0 ? '#4ade80' : '#f87171'));
 
+  fluxolabSyncChkExcessForModel(tableName, row.modelo);
   fluxolabUpdateTotalChk(tableName);
   fluxolabSavePlanejamentoDebounced();
 
@@ -546,8 +623,9 @@ function fluxolabCommitRowChkByIndex(tableName, index, fromDebounce) {
           return;
         }
       }
-      if (elem) fluxolabSyncChkInputElem(elem, row, statsChk);
+      if (elem) fluxolabSyncChkInputElem(elem, row, statsChk, fluxolabGetChkExcess(tableName, index));
     }
+    fluxolabSyncChkExcessForModel(tableName, modeloTxt);
     fluxolabUpdateTotalChk(tableName);
     fluxolabSavePlanejamentoDebounced();
     return;
@@ -558,7 +636,7 @@ function fluxolabCommitRowChkByIndex(tableName, index, fromDebounce) {
   // Se é a única definição manual e o valor digitado já é igual ao total do modelo, volta ao automático sem criar linha extra
   if (manualIndices.length === 1 && manualIndices[0] === index && val === totalModel) {
     row.chk_manual = '';
-    if (elem) fluxolabSyncChkInputElem(elem, row, statsChk);
+    if (elem) fluxolabSyncChkInputElem(elem, row, statsChk, 0);
     if (autoRemIdx >= 0 && !rowHasOtherFields(list[autoRemIdx])) {
       list.splice(autoRemIdx, 1);
       fluxolabCompactPlanTable(tableName);
@@ -566,12 +644,13 @@ function fluxolabCommitRowChkByIndex(tableName, index, fromDebounce) {
       rerenderPreservingFocus();
       return;
     }
+    fluxolabSyncChkExcessForModel(tableName, modeloTxt);
     fluxolabUpdateTotalChk(tableName);
     fluxolabSavePlanejamentoDebounced();
     return;
   }
 
-  if (totalModel > 0) {
+  if (totalModel > 0 || val > 0) {
     const sumManual = manualIndices.reduce((s, i) => s + fluxolabGetRowChkCount(list[i], statsChk), 0);
     const faltante = totalModel - sumManual;
 
@@ -580,7 +659,8 @@ function fluxolabCommitRowChkByIndex(tableName, index, fromDebounce) {
         // Já existe uma linha automática de restante para este modelo: atualiza a quantia faltante nela
         list[autoRemIdx].chk_manual = String(faltante);
         const remEl = document.getElementById(`plan-${tableName}-r${autoRemIdx}-chk_manual`);
-        if (remEl) fluxolabSyncChkInputElem(remEl, list[autoRemIdx], statsChk);
+        if (remEl) fluxolabSyncChkInputElem(remEl, list[autoRemIdx], statsChk, 0);
+        fluxolabSyncChkExcessForModel(tableName, modeloTxt);
         fluxolabUpdateTotalChk(tableName);
         fluxolabSavePlanejamentoNow();
         return;
@@ -620,7 +700,8 @@ function fluxolabCommitRowChkByIndex(tableName, index, fromDebounce) {
       } else {
         list[autoRemIdx].chk_manual = '0';
         const remEl = document.getElementById(`plan-${tableName}-r${autoRemIdx}-chk_manual`);
-        if (remEl) fluxolabSyncChkInputElem(remEl, list[autoRemIdx], statsChk);
+        if (remEl) fluxolabSyncChkInputElem(remEl, list[autoRemIdx], statsChk, 0);
+        fluxolabSyncChkExcessForModel(tableName, modeloTxt);
         fluxolabUpdateTotalChk(tableName);
         fluxolabSavePlanejamentoNow();
         return;
@@ -628,6 +709,7 @@ function fluxolabCommitRowChkByIndex(tableName, index, fromDebounce) {
     }
   }
 
+  fluxolabSyncChkExcessForModel(tableName, modeloTxt);
   fluxolabUpdateTotalChk(tableName);
   fluxolabSavePlanejamentoDebounced();
 }
@@ -737,7 +819,7 @@ function planDropTr(e, tableName) {
         const inp = tr.querySelector(`[id$="-${f}"]`);
         if (inp) inp.id = `plan-${tableName}-r${i}-${f}`;
       });
-      ['chk','media','doca','lab','qual','badge'].forEach(f => {
+      ['chk','chk-exc','media','doca','lab','qual','badge'].forEach(f => {
         const cell = tr.querySelector(`[id$="-${f}"]`);
         if (cell) cell.id = `plan-${tableName}-r${i}-${f}`;
       });
@@ -997,8 +1079,9 @@ function fluxolabBuildPlanRowHtml(tableName, row, idx, themeColor, savedSizes) {
   
   const hasManualChk = String(row.chk_manual != null ? row.chk_manual : '').trim() !== '';
   const effChk = fluxolabGetRowChkCount(row, statsChk);
+  const excedente = isFilled ? fluxolabGetChkExcess(tableName, idx) : 0;
   const chkDisplayVal = !isFilled ? '' : (hasManualChk ? row.chk_manual : (statsChk.count || '-'));
-  const chkColor = !isFilled ? 'var(--muted)' : (effChk > 0 ? '#4ade80' : '#f87171');
+  const chkColor = !isFilled ? 'var(--muted)' : (excedente > 0 ? '#f87171' : (effChk > 0 ? '#4ade80' : '#f87171'));
   
   return `
       <tr style="background:${rowBg};transition:background .2s" 
@@ -1031,15 +1114,19 @@ function fluxolabBuildPlanRowHtml(tableName, row, idx, themeColor, savedSizes) {
         </td>
         
         <td id="plan-${tableName}-r${idx}-chk" class="chk-cell" style="${tdStyle};overflow:hidden">
-          <input id="plan-${tableName}-r${idx}-chk_manual" type="text" inputmode="numeric" value="${chkDisplayVal}"
-                 ${!isFilled ? 'readonly' : ''}
-                 title="${isFilled ? 'Clique para definir a quantidade de checklists manualmente (total do modelo: ' + (statsChk.count || 0) + ')' : ''}"
-                 onfocus="this.style.background='rgba(255,255,255,0.05)';this._justFocused=true;if(this.value&&this.value!=='-')this.select();setTimeout(()=>{this._justFocused=false;},250)"
-                 onmouseup="if(this._justFocused){this._justFocused=false;return false;}"
-                 onblur="${inpBlur};fluxolabCommitRowChk(this, '${tableName}')"
-                 onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}"
-                 oninput="fluxolabUpdateRowChkInput(this, '${tableName}')"
-                 style="${inpBase};font-weight:900;color:${chkColor};min-width:0;box-sizing:border-box;${!isFilled ? 'cursor:default' : 'cursor:text'}" />
+          <div style="display:flex;flex-direction:column;align-items:center;justify-content:center">
+            <input id="plan-${tableName}-r${idx}-chk_manual" type="text" inputmode="numeric" value="${chkDisplayVal}"
+                   class="${excedente > 0 ? 'plan-chk-exceeded' : ''}"
+                   ${!isFilled ? 'readonly' : ''}
+                   title="${isFilled ? 'Clique para definir a quantidade de checklists manualmente (total do modelo: ' + (statsChk.count || 0) + ')' : ''}"
+                   onfocus="this.style.background='rgba(255,255,255,0.05)';this._justFocused=true;if(this.value&&this.value!=='-')this.select();setTimeout(()=>{this._justFocused=false;},250)"
+                   onmouseup="if(this._justFocused){this._justFocused=false;return false;}"
+                   onblur="${inpBlur};fluxolabCommitRowChk(this, '${tableName}')"
+                   onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}"
+                   oninput="fluxolabUpdateRowChkInput(this, '${tableName}')"
+                   style="${inpBase};font-weight:900;color:${chkColor};min-width:0;box-sizing:border-box;${!isFilled ? 'cursor:default' : 'cursor:text'}" />
+            <div id="plan-${tableName}-r${idx}-chk-exc" class="plan-chk-exc" title="${excedente > 0 ? 'Quantidade excedente: +' + excedente + ' acima do total do modelo (' + (statsChk.count || 0) + ')' : ''}" style="display:${excedente > 0 ? 'block' : 'none'};font-size:10px;font-weight:900;color:#f87171;line-height:1.1;padding:0 4px 4px;white-space:nowrap">${excedente > 0 ? '+' + excedente + ' excedente' : ''}</div>
+          </div>
         </td>
         <td id="plan-${tableName}-r${idx}-media" class="media-cell" style="${tdStyle};color:${statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'};font-weight:900;font-size:18px">
           ${isFilled ? (statsChk.media || '-') : ''}
@@ -1177,6 +1264,7 @@ function _planInjectLightCss(){
     .plan-light table button[onclick^="fluxolabClearPlanTable"]{background:#dc2626 !important;color:#fff !important;border-color:#dc2626 !important}
     .plan-light table button.plan-row-del-btn{background:#fef2f2 !important;color:#dc2626 !important;border-color:#fca5a5 !important}
     .plan-light table button.plan-row-del-btn:hover{background:#dc2626 !important;color:#fff !important}
+    .plan-light table .plan-chk-exc,.plan-light table input.plan-chk-exceeded{color:#dc2626 !important}
     .plan-light table [id$="-colmenu"]{background:#fff !important;border-color:#94a3b8 !important;box-shadow:0 12px 32px rgba(0,0,0,.25) !important}
   `;
   document.head.appendChild(st);

@@ -14,6 +14,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
 <!-- Etiquetador: JsBarcode Code 128 -->
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
@@ -2858,7 +2859,13 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
         <div class="se-controls">
           <select id="se-sel-mes" title="Mês do relatório" style="font-family:var(--font);font-size:13px;font-weight:600;background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:9px;padding:8px 14px;cursor:pointer;outline:none"></select>
           <button onclick="seGerarRelatorio()" style="background:rgba(124,58,237,0.18);border:1px solid rgba(124,58,237,0.5);color:#c4b5fd;font-family:var(--font);font-size:13px;font-weight:600;border-radius:9px;padding:8px 14px;cursor:pointer">🔄 Gerar Relatório</button>
-          <button onclick="seExportarExcel()" style="background:rgba(34,211,238,0.1);border:1px solid rgba(34,211,238,0.35);color:#22d3ee;font-family:var(--font);font-size:12px;font-weight:600;border-radius:9px;padding:8px 14px;cursor:pointer">📊 Excel</button>
+          <div style="display:inline-flex;align-items:center;background:var(--bg3);border:1px solid var(--border2);border-radius:9px;padding:2px;gap:2px">
+            <button onclick="seExportarImagem('png')" title="Exportar Relatório como Imagem PNG" style="background:transparent;color:#38bdf8;border:none;border-radius:7px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:4px">📸 PNG</button>
+            <div style="width:1px;height:14px;background:var(--border2)"></div>
+            <button onclick="seExportarImagem('jpeg')" title="Exportar Relatório como Imagem JPEG" style="background:transparent;color:#38bdf8;border:none;border-radius:7px;padding:6px 10px;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:4px">JPEG</button>
+          </div>
+          <button onclick="seExportarExcel()" title="Exportar Relatório em Planilha Excel" style="background:rgba(34,211,238,0.1);border:1px solid rgba(34,211,238,0.35);color:#22d3ee;font-family:var(--font);font-size:12px;font-weight:600;border-radius:9px;padding:8px 14px;cursor:pointer">📊 Excel</button>
+          <button onclick="seImprimirRelatorio()" title="Imprimir ou Salvar em PDF" style="background:rgba(255,255,255,0.06);border:1px solid var(--border2);color:var(--text);font-family:var(--font);font-size:12px;font-weight:600;border-radius:9px;padding:8px 14px;cursor:pointer">🖨️ PDF / Imprimir</button>
         </div>
       </div>
 
@@ -5064,8 +5071,8 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="supabase-compat-shim.js?v=3"></script>
-<script src="app.js?v=74"></script>
-<script src="planejamento.js?v=11"></script>
+<script src="app.js?v=85"></script>
+<script src="planejamento.js?v=12"></script>
 <script src="pendencias.js?v=11"></script>
 
 
@@ -6979,10 +6986,28 @@ function pedPrintLabels() {
   "Epson ET-5180": "https://drive.google.com/file/d/1aHyzi7Ul_EUR_Brb1g0mYzIf0CZRiCWO/view?usp=sharing",
   "Epson ET-5150": "https://drive.google.com/file/d/1aHyzi7Ul_EUR_Brb1g0mYzIf0CZRiCWO/view?usp=sharing",
   "Epson L6490": "https://drive.google.com/file/d/1aHyzi7Ul_EUR_Brb1g0mYzIf0CZRiCWO/view?usp=sharing",
-  "Epson WF-C5810": "https://drive.google.com/drive/folders/1uYOrqP_I4_KKtaxn4j-wZx74DR_DdWj0",
-  "Epson WF-C5890": "https://drive.google.com/drive/folders/1uYOrqP_I4_KKtaxn4j-wZx74DR_DdWj0",
-  "Epson WF-C5310": "https://drive.google.com/drive/folders/1uYOrqP_I4_KKtaxn4j-wZx74DR_DdWj0",
-  "Epson WF-C5390": "https://drive.google.com/drive/folders/1uYOrqP_I4_KKtaxn4j-wZx74DR_DdWj0",
+  "Epson WF-C5790": "https://drive.google.com/file/d/12s2Scqlur30t0TVeAXHNsVgI6Cn0tvhN/view?usp=sharing",
+  "Epson WF-C5710": "https://drive.google.com/file/d/12s2Scqlur30t0TVeAXHNsVgI6Cn0tvhN/view?usp=sharing",
+  "Epson WF-C5290": "https://drive.google.com/file/d/12s2Scqlur30t0TVeAXHNsVgI6Cn0tvhN/view?usp=sharing",
+  "Epson WF-C5210": "https://drive.google.com/file/d/12s2Scqlur30t0TVeAXHNsVgI6Cn0tvhN/view?usp=sharing",
+  "Epson C5790": "https://drive.google.com/file/d/12s2Scqlur30t0TVeAXHNsVgI6Cn0tvhN/view?usp=sharing",
+  "Epson C5710": "https://drive.google.com/file/d/12s2Scqlur30t0TVeAXHNsVgI6Cn0tvhN/view?usp=sharing",
+  "Epson C5290": "https://drive.google.com/file/d/12s2Scqlur30t0TVeAXHNsVgI6Cn0tvhN/view?usp=sharing",
+  "Epson C5210": "https://drive.google.com/file/d/12s2Scqlur30t0TVeAXHNsVgI6Cn0tvhN/view?usp=sharing",
+  "WF-C5790": "https://drive.google.com/file/d/12s2Scqlur30t0TVeAXHNsVgI6Cn0tvhN/view?usp=sharing",
+  "WF-C5710": "https://drive.google.com/file/d/12s2Scqlur30t0TVeAXHNsVgI6Cn0tvhN/view?usp=sharing",
+  "WF-C5290": "https://drive.google.com/file/d/12s2Scqlur30t0TVeAXHNsVgI6Cn0tvhN/view?usp=sharing",
+  "WF-C5210": "https://drive.google.com/file/d/12s2Scqlur30t0TVeAXHNsVgI6Cn0tvhN/view?usp=sharing",
+  "Epson WF-C5810": "https://drive.google.com/file/d/17H_G48ekW2b6Kigxfmhp8TT0rkpRbHwb/view?usp=sharing",
+  "Epson WF-C5890": "https://drive.google.com/file/d/17H_G48ekW2b6Kigxfmhp8TT0rkpRbHwb/view?usp=sharing",
+  "Epson WF-C5310": "https://drive.google.com/file/d/17H_G48ekW2b6Kigxfmhp8TT0rkpRbHwb/view?usp=sharing",
+  "Epson WF-C5390": "https://drive.google.com/file/d/17H_G48ekW2b6Kigxfmhp8TT0rkpRbHwb/view?usp=sharing",
+  "Epson WF-5890": "https://drive.google.com/file/d/17H_G48ekW2b6Kigxfmhp8TT0rkpRbHwb/view?usp=sharing",
+  "Epson WF-5390": "https://drive.google.com/file/d/17H_G48ekW2b6Kigxfmhp8TT0rkpRbHwb/view?usp=sharing",
+  "WF-C5810": "https://drive.google.com/file/d/17H_G48ekW2b6Kigxfmhp8TT0rkpRbHwb/view?usp=sharing",
+  "WF-C5890": "https://drive.google.com/file/d/17H_G48ekW2b6Kigxfmhp8TT0rkpRbHwb/view?usp=sharing",
+  "WF-C5310": "https://drive.google.com/file/d/17H_G48ekW2b6Kigxfmhp8TT0rkpRbHwb/view?usp=sharing",
+  "WF-C5390": "https://drive.google.com/file/d/17H_G48ekW2b6Kigxfmhp8TT0rkpRbHwb/view?usp=sharing",
   "Kyocera ECOSYS M3655idn": "https://drive.google.com/file/d/1JFXXa3kA302RNLOhryfGaOun-wPTME_N/view?usp=sharing",
   "Kyocera ECOSYS M3660idn": "https://drive.google.com/file/d/1JFXXa3kA302RNLOhryfGaOun-wPTME_N/view?usp=sharing",
   "Kyocera M3655idn": "https://drive.google.com/file/d/1JFXXa3kA302RNLOhryfGaOun-wPTME_N/view?usp=sharing",
@@ -7088,8 +7113,11 @@ function pedPrintLabels() {
     }
     // Epson WorkForce Pro Monochrome
     if (s.includes('5799') || s.includes('WF-M5') || s.includes('WFM5') || s.includes('5299') || s.includes('5899')) return 'Epson WorkForce Pro';
-    // Epson WorkForce Pro Colorido
-    if (s.includes('WF-C') || s.includes('WFC') || s.includes('C5810') || s.includes('C5890') || s.includes('C5310') || s.includes('C5390')) return 'Epson WF-C5810';
+    // Epson WorkForce Pro Colorido (Série C5790 / C5710 / C5210 / C5290)
+    if (s.includes('C5790') || s.includes('C5710') || s.includes('C5210') || s.includes('C5290') || s.includes('5790') || s.includes('5710') || s.includes('5210') || s.includes('5290')) return 'Epson WF-C5790';
+    // Epson WorkForce Pro Colorido (Série C5810 / C5890 / C5310 / C5390)
+    if (s.includes('C5810') || s.includes('C5890') || s.includes('C5310') || s.includes('C5390') || s.includes('5810') || s.includes('5310')) return 'Epson WF-C5810';
+    if (s.includes('WF-C') || s.includes('WFC')) return 'Epson WF-C5790';
     // Epson EcoTank / L series
     if (s.includes('ET-5') || s.includes('L6490') || s.includes('ET5')) return 'Epson ET-5170';
     // Epson genérico

@@ -5685,15 +5685,45 @@ async function fetchDashboardSaudeEquipe() {
     // (_TH_SETORES_FORA_DA_SAUDE). Antes essa lista estava fixa e incompleta
     // aqui (só Montagem/Limpeza/Complexa), o que fazia o badge do dashboard
     // divergir do percentual mostrado no Admin.
-    const equipeElegivel = (typeof _qualEquipeElegivel === 'function')
-      ? _qualEquipeElegivel()
-      : (users || []).filter(u => {
-          const uSec = (u.sector || '').toUpperCase().trim();
-          return uSec && !(typeof _TH_SETORES_FORA_DA_SAUDE !== 'undefined' && _TH_SETORES_FORA_DA_SAUDE.has(uSec));
-        });
+    let overallTotal = 0;
+    let overallActive = 0;
 
-    const overallTotal = equipeElegivel.length;
-    const overallActive = equipeElegivel.filter(u => checkinUids.has(String(u.id))).length;
+    if (typeof seGetActiveRoster === 'function') {
+      const activeRoster = seGetActiveRoster().filter(m => !m.excludeFromHealth);
+      overallTotal = activeRoster.length;
+
+      let manualPresencas = {};
+      try {
+        const allMp = JSON.parse(localStorage.getItem('se_manual_presencas') || '{}');
+        manualPresencas = allMp[dateKey] || {};
+      } catch(e) {}
+
+      activeRoster.forEach(m => {
+        if (manualPresencas[m.id] === true) { overallActive++; return; }
+        if (manualPresencas[m.id] === false) return;
+        if (checkinUids.has('roster_' + m.id)) { overallActive++; return; }
+        const allU = Array.isArray(users) ? users : [];
+        for (const u of allU) {
+          const raw = (u.raw && typeof u.raw === 'object') ? u.raw : {};
+          const uName = raw.name || raw.nome || u.name || '';
+          const match = (typeof seMatchRoster === 'function') ? seMatchRoster(uName) : null;
+          if (match && match.id === m.id && checkinUids.has(String(u.id))) {
+            overallActive++;
+            return;
+          }
+        }
+      });
+    } else {
+      const equipeElegivel = (typeof _qualEquipeElegivel === 'function')
+        ? _qualEquipeElegivel()
+        : (users || []).filter(u => {
+            const uSec = (u.sector || '').toUpperCase().trim();
+            return uSec && !(typeof _TH_SETORES_FORA_DA_SAUDE !== 'undefined' && _TH_SETORES_FORA_DA_SAUDE.has(uSec));
+          });
+
+      overallTotal = equipeElegivel.length;
+      overallActive = equipeElegivel.filter(u => checkinUids.has(String(u.id))).length;
+    }
 
     const pct = overallTotal > 0 ? Math.round((overallActive / overallTotal) * 100) : 0;
     window._dashSaudeEquipePct = pct;
@@ -9046,19 +9076,24 @@ async function loadTeamHealthHistory() {
   datePicker.style.color = 'var(--muted)';
 
   try {
+    if (typeof seLoadRosterCustomsFromDb === 'function') {
+      await seLoadRosterCustomsFromDb();
+    }
     const dObj = new Date(dateVal + 'T00:00:00');
     const dateKey = dObj.toDateString().replace(/ /g,'_');
 
     // Check-ins do dia selecionado — fonte única de presença.
     let checkinUids = new Set();
+    let checkinNames = new Set();
     let noDataAtAll = false;
     try {
       const { data: _ci, error: _ciErr } = await _supaAuthed()
         .from('operator_checkins')
-        .select('uid')
+        .select('uid, name')
         .eq('date_key', dateKey);
       if (_ciErr) throw _ciErr;
       checkinUids = new Set((_ci || []).map(r => String(r.uid)));
+      checkinNames = new Set((_ci || []).map(r => String(r.name || '')));
 
       // Se não há nenhum check-in nessa data, precisa distinguir:
       // "ninguém veio nesse dia" (ex: feriado) vs "esse recurso ainda não
@@ -9084,10 +9119,32 @@ async function loadTeamHealthHistory() {
       if (!error && data) prodCount = data.length;
     } catch(e) { console.warn('Erro ao buscar produção:', e); }
 
-    renderTeamHealth(dateVal, checkinUids, prodCount, noDataAtAll);
+    // Presenças Manuais do Supabase (app_config -> 'manual_presencas')
+    let manualPresencas = {};
+    try {
+      const { data: mpData } = await _supa.from('app_config').select('value').eq('key', 'manual_presencas').maybeSingle();
+      if (mpData && mpData.value && typeof mpData.value === 'object') {
+        localStorage.setItem('se_manual_presencas', JSON.stringify(mpData.value));
+        manualPresencas = mpData.value[dateKey] || {};
+      } else {
+        const localAll = JSON.parse(localStorage.getItem('se_manual_presencas') || '{}');
+        manualPresencas = localAll[dateKey] || {};
+      }
+    } catch(e) {
+      try {
+        const localAll = JSON.parse(localStorage.getItem('se_manual_presencas') || '{}');
+        manualPresencas = localAll[dateKey] || {};
+      } catch(e2) {}
+    }
+
+    if (Object.keys(manualPresencas).length > 0) {
+      noDataAtAll = false;
+    }
+
+    renderTeamHealth(dateVal, checkinUids, prodCount, noDataAtAll, checkinNames, manualPresencas);
   } catch(e) {
     console.warn('Erro no histórico da equipe:', e);
-    renderTeamHealth(dateVal, new Set(), 0, true);
+    renderTeamHealth(dateVal, new Set(), 0, true, new Set(), {});
   } finally {
     const d2 = document.getElementById('team-health-date');
     if(d2) { d2.disabled = false; d2.style.color = origColor; }
@@ -9102,104 +9159,1030 @@ function _toggleTeamHealth(el){
   body.style.display = isNowCollapsed ? 'block' : 'none';
   arrow.textContent = isNowCollapsed ? '▲' : '▼';
   c.dataset.collapsed = isNowCollapsed ? '0' : '1';
-  el.querySelector('.th-hint') && (el.querySelector('.th-hint').textContent = 'Clique para ' + (isNowCollapsed ? 'recolher' : 'expandir') + ' • Desmembramento, Montagem, Limpeza, Complexa, Qualidade, Eletrônica');
+  el.querySelector('.th-hint') && (el.querySelector('.th-hint').textContent = 'Clique para ' + (isNowCollapsed ? 'recolher' : 'expandir') + ' • Desmembramento, Montagem, Limpeza, Complexa, Qualidade');
 }
 
 // Setores que ficam FORA do cálculo de saúde da equipe (mas seguem visíveis).
 const _TH_SETORES_FORA_DA_SAUDE = new Set(['ELETRÔNICA','ELETRONICA']);
 
-function renderTeamHealth(dateVal, checkinUids, prodCount, noDataAtAll){
-  dateVal = dateVal || null; checkinUids = checkinUids || new Set(); prodCount = (prodCount !== undefined ? prodCount : null);
+// Quadro Fixo Oficial de 32 Membros
+if (typeof SE_ROSTER_32 === 'undefined') {
+  var SE_ROSTER_32 = [
+    { id: 'leandro_schmidt', name: 'Leandro Schmidt', defaultSector: 'LIDER', aliases: ['leandro schmidt', 'leandro'] },
+    { id: 'geraldo_polanski', name: 'Geraldo Jose Polanski Junior', defaultSector: 'LIDER', aliases: ['geraldo jose polanski junior', 'geraldo polanski', 'geraldo', 'junior polanski'] },
+    { id: 'adilson_hammes', name: 'Adilson Luiz Hammes', defaultSector: 'COMPLEXA', aliases: ['adilson luiz hammes', 'adilson hammes', 'adilson'] },
+    { id: 'ana_claudia', name: 'Ana Claudia Risso Harkbart Telles', defaultSector: 'DESMEMBRAMENTO', aliases: ['ana claudia risso harkbart telles', 'ana claudia telles', 'ana claudia harkbart', 'ana claudia', 'ana'] },
+    { id: 'angel_romero', name: 'Angel Xavier Quevedo Romero', defaultSector: 'MONTAGEM', aliases: ['angel xavier quevedo romero', 'angel romero', 'angel'] },
+    { id: 'angelo_prebianca', name: 'Angelo Gabriel Prebianca', defaultSector: 'MONTAGEM', aliases: ['angelo gabriel prebianca', 'angelo gabriel', 'angelo prebianca', 'angelo'] },
+    { id: 'cleiton_tummler', name: 'Cleiton Tummler', defaultSector: 'MONTAGEM', aliases: ['cleiton tummler', 'cleiton'] },
+    { id: 'douglas_maia', name: 'Douglas Ricardo da Maia', defaultSector: 'DESMEMBRAMENTO', aliases: ['douglas ricardo da maia', 'douglas maia', 'douglas'] },
+    { id: 'eduardo_saldanha', name: 'Eduardo Saldanha', defaultSector: 'MONTAGEM', aliases: ['eduardo saldanha', 'eduardo'] },
+    { id: 'frederico_azambuja', name: 'Frederico dos Santos Azambuja', defaultSector: 'LIMPEZA', aliases: ['frederico dos santos azambuja', 'frederico azambuja', 'frederico'] },
+    { id: 'gabriel_mikuska', name: 'Gabriel de Brito Mikuska', defaultSector: 'LIMPEZA', aliases: ['gabriel de brito mikuska', 'gabriel mikuska', 'mikuska'] },
+    { id: 'gabriel_feitosa', name: 'Gabriel Feitosa Borges', defaultSector: 'LIMPEZA', aliases: ['gabriel status borges', 'gabriel status', 'gabriel feitosa borges', 'gabriel feitosa', 'feitosa'] },
+    { id: 'gabriel_martins', name: 'Gabriel Henrique Martins', defaultSector: 'LIMPEZA', aliases: ['gabriel henrique martins', 'gabriel martins'] },
+    { id: 'gabriel_poletini', name: 'Gabriel Matheus Poletini', defaultSector: 'QUALIDADE', aliases: ['gabriel matheus poletini', 'gabriel poletini', 'poletini', 'gabriel'] },
+    { id: 'guilherme_harger', name: 'Guilherme Henrique da Silva Harger', defaultSector: 'LIMPEZA', aliases: ['guilherme henrique da silva harger', 'guilherme harger', 'harger'] },
+    { id: 'henrique_soares', name: 'Henrique Soares', defaultSector: 'LIMPEZA', aliases: ['henrique soares', 'henrique marques soares', 'henrique marques'] },
+    { id: 'idenilson_voigt', name: 'Idenilson Voigt', defaultSector: 'COMPLEXA', aliases: ['idenilson voigt', 'idenilson'] },
+    { id: 'jackson_deretti', name: 'Jackson Natalino Deretti', defaultSector: 'COMPLEXA', aliases: ['jackson natalino deretti', 'jackson deretti', 'deretti'] },
+    { id: 'jean_blachechen', name: 'Jean Richards Blachechen', defaultSector: 'COMPLEXA', aliases: ['jean richards blachechen', 'jean blachechen', 'blachechen'] },
+    { id: 'jhoan_medina', name: 'Jhoan Alberto Linares Medina', defaultSector: 'COMPLEXA', aliases: ['jhoan alberto linares medina', 'jhoan medina', 'jhoan'] },
+    { id: 'joelma_miguel', name: 'Joelma Albuquerque Miguel', defaultSector: 'LIMPEZA', aliases: ['joelma albuquerque miguel', 'joelma miguel', 'joelma'] },
+    { id: 'joao_gama', name: 'Joao Gabriel Gripp Gama', defaultSector: 'MONTAGEM', aliases: ['joao gabriel gripp gama', 'joao gama', 'joao gabriel gama', 'joão gama'] },
+    { id: 'luis_oliveira', name: 'Luis Guilherme Gomes de Oliveira', defaultSector: 'COMPLEXA', aliases: ['luis guilherme gomes de oliveira', 'luis oliveira', 'luis guilherme'] },
+    { id: 'malcolm_pandini', name: 'Malcolm Ryan Pandini', defaultSector: 'QUALIDADE', aliases: ['malcolm ryan pandini', 'malcolm pandini', 'malcolm'] },
+    { id: 'matheus_daumann', name: 'Matheus Jeferson Daumann', defaultSector: 'LIMPEZA', aliases: ['matheus jeferson daumann', 'matheus daumann', 'matheus'] },
+    { id: 'neilor_cabral', name: 'Neilor Cabral', defaultSector: 'DESMEMBRAMENTO', aliases: ['neilor cabral', 'neilor'] },
+    { id: 'ricardo_zezinho', name: 'Ricardo Zezinho da Silva', defaultSector: 'MONTAGEM', aliases: ['ricardo zezinho da silva', 'ricardo zezinho', 'zezinho'] },
+    { id: 'rubens_miyamoto', name: 'Rubens Kiyoshi Miyamoto', defaultSector: 'COMPLEXA', aliases: ['rubens kiyoshi miyamoto', 'rubens miyamoto', 'miyamoto'] },
+    { id: 'victor_cunha', name: 'Victor Franca da Cunha', defaultSector: 'LIMPEZA', aliases: ['victor franca da cunha', 'victor cunha'] },
+    { id: 'victor_carradore', name: 'Victor Gabriel Carradore de Andrade', defaultSector: 'LIMPEZA', aliases: ['victor gabriel carradore de andrade', 'victor gabriel', 'carradore'] },
+    { id: 'willian_cavalcante', name: 'Willian Cavalcante', defaultSector: 'MONTAGEM', aliases: ['willian cavalcante', 'willian'] },
+    { id: 'livre', name: 'LIVRE', defaultSector: 'DESMEMBRAMENTO', aliases: ['livre', 'vaga livre', 'reserva', 'scrap'] },
+  ];
+}
+
+if (typeof seMatchRoster === 'undefined') {
+  var seMatchRoster = function(dbName) {
+    const n = String(dbName || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+    if (!n) return null;
+    const rosterList = (typeof seGetActiveRoster === 'function') ? seGetActiveRoster() : SE_ROSTER_32;
+    for (const item of rosterList) {
+      if (String(item.name).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() === n) return item;
+      if (item.aliases && item.aliases.some(a => String(a).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() === n)) return item;
+    }
+    for (const item of rosterList) {
+      const iname = String(item.name).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+      if (iname.includes(n) || n.includes(iname)) return item;
+    }
+    return null;
+  };
+}
+
+// ── Customização Persistente de Nomes, Setores e Integrantes Adicionais ──
+function seGetCustomRosterData() {
+  let data = null;
+  try {
+    data = JSON.parse(localStorage.getItem('se_roster_32_custom') || 'null');
+  } catch(e) {}
+  if (!data || typeof data !== 'object') {
+    data = { overrides: {}, added: [], removedIds: [] };
+  }
+  if (!data.overrides && !data.added) {
+    const overrides = {};
+    const added = Array.isArray(data.__added) ? data.__added : [];
+    const removedIds = Array.isArray(data.__removedIds) ? data.__removedIds : [];
+    Object.keys(data).forEach(k => {
+      if (k !== '__added' && k !== '__removedIds') overrides[k] = data[k];
+    });
+    data = { overrides, added, removedIds };
+  }
+  data.overrides = data.overrides || {};
+  data.added = Array.isArray(data.added) ? data.added : [];
+  data.removedIds = Array.isArray(data.removedIds) ? data.removedIds : [];
+  return data;
+}
+
+function seGetActiveRoster() {
+  const custom = seGetCustomRosterData();
+  const list = [];
+  const removed = new Set(custom.removedIds || []);
+
+  // 1. Integrantes base
+  SE_ROSTER_32.forEach(base => {
+    if (removed.has(base.id)) return;
+    const ov = custom.overrides[base.id];
+    list.push({
+      id: base.id,
+      name: (ov && ov.name) ? ov.name : base.name,
+      defaultSector: (ov && ov.defaultSector) ? ov.defaultSector : base.defaultSector,
+      aliases: base.aliases || [],
+      isCustomAdded: false,
+      excludeFromHealth: (ov && ov.excludeFromHealth !== undefined) ? !!ov.excludeFromHealth : false
+    });
+  });
+
+  // 2. Integrantes adicionados dinamicamente
+  (custom.added || []).forEach(add => {
+    if (removed.has(add.id)) return;
+    list.push({
+      id: add.id,
+      name: add.name,
+      defaultSector: add.defaultSector || 'MONTAGEM',
+      aliases: [add.name.toLowerCase()],
+      isCustomAdded: true,
+      excludeFromHealth: !!add.excludeFromHealth
+    });
+  });
+
+  return list;
+}
+
+function seApplyRosterCustoms() {
+  // Mantido para compatibilidade — agora unificado via seGetActiveRoster()
+}
+seApplyRosterCustoms();
+
+async function seLoadRosterCustomsFromDb() {
+  try {
+    const { data } = await _supa.from('app_config').select('value').eq('key', 'se_roster_32_custom').maybeSingle();
+    if (data && data.value && typeof data.value === 'object') {
+      localStorage.setItem('se_roster_32_custom', JSON.stringify(data.value));
+    }
+  } catch(e) {
+    console.warn('[Roster] Erro ao carregar customizações do Supabase:', e);
+  }
+}
+
+async function seSaveRosterCustom(memberId, newName, newSector, excludeFromHealth) {
+  const custom = seGetCustomRosterData();
+  const addedItem = custom.added.find(x => x.id === memberId);
+  if (addedItem) {
+    if (newName) addedItem.name = newName.trim();
+    if (newSector) addedItem.defaultSector = newSector;
+    if (excludeFromHealth !== undefined) addedItem.excludeFromHealth = !!excludeFromHealth;
+  } else {
+    custom.overrides[memberId] = custom.overrides[memberId] || {};
+    if (newName) custom.overrides[memberId].name = newName.trim();
+    if (newSector) custom.overrides[memberId].defaultSector = newSector;
+    if (excludeFromHealth !== undefined) custom.overrides[memberId].excludeFromHealth = !!excludeFromHealth;
+  }
+  localStorage.setItem('se_roster_32_custom', JSON.stringify(custom));
+
+  try {
+    await _supa.from('app_config').upsert({
+      key: 'se_roster_32_custom',
+      value: custom
+    }, { onConflict: 'key' });
+  } catch(e) {
+    console.warn('[Roster] Erro ao salvar customização no Supabase:', e);
+  }
+
+  // Atualiza também no array de operadores e no Supabase se existir operador correspondente
+  const allUsers = Array.isArray(users) ? users : [];
+  for (const u of allUsers) {
+    const raw = (u.raw && typeof u.raw === 'object') ? u.raw : {};
+    const uName = raw.name || raw.nome || u.name || '';
+    const match = (typeof seMatchRoster === 'function') ? seMatchRoster(uName) : null;
+    if (match && match.id === memberId) {
+      if (newName) {
+        u.name = newName.trim();
+        if (u.raw) u.raw.name = newName.trim();
+      }
+      if (newSector) {
+        u.sector = newSector;
+        if (u.raw) { u.raw.sector = newSector; u.raw.setor = newSector; }
+      }
+      try {
+        await _supaAuthed().from('operadores').update({
+          name: u.name,
+          sector: u.sector,
+          raw: u.raw
+        }).eq('id', u.id);
+      } catch(errOp) {}
+      break;
+    }
+  }
+}
+
+window.updateRosterMemberSector = async function(id, newSector) {
+  const activeRoster = seGetActiveRoster();
+  const m = activeRoster.find(x => x.id === id);
+  if (!m) return;
+  await seSaveRosterCustom(id, m.name, newSector, m.excludeFromHealth);
+  await loadTeamHealthHistory();
+};
+
+window.removeRosterMember = async function(id) {
+  const activeRoster = seGetActiveRoster();
+  const m = activeRoster.find(x => x.id === id);
+  if (!m) return;
+
+  if (!confirm('Deseja remover "' + m.name + '" da lista de presença da equipe?')) return;
+
+  const custom = seGetCustomRosterData();
+  if (m.isCustomAdded) {
+    custom.added = custom.added.filter(x => x.id !== id);
+  } else {
+    custom.removedIds = custom.removedIds || [];
+    if (!custom.removedIds.includes(id)) custom.removedIds.push(id);
+  }
+  localStorage.setItem('se_roster_32_custom', JSON.stringify(custom));
+
+  try {
+    await _supa.from('app_config').upsert({
+      key: 'se_roster_32_custom',
+      value: custom
+    }, { onConflict: 'key' });
+  } catch(e) {}
+
+  await loadTeamHealthHistory();
+};
+
+function _ensureAddPersonModal() {
+  if (document.getElementById('modal-add-roster')) return;
+  const div = document.createElement('div');
+  div.id = 'modal-add-roster';
+  div.className = 'modal-overlay hidden';
+  div.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);backdrop-filter:blur(5px);z-index:99999;display:none;align-items:center;justify-content:center;padding:16px;';
+  div.innerHTML = 
+    '<div style="background:var(--bg2);border:1px solid var(--border2);border-radius:16px;width:100%;max-width:440px;padding:22px 26px;box-shadow:0 24px 60px rgba(0,0,0,0.7);display:flex;flex-direction:column;gap:16px">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between">'
+        +'<div>'
+          +'<div style="font-size:16px;font-weight:800;color:var(--text)">➕ Adicionar Integrante à Equipe</div>'
+          +'<div style="font-size:11px;color:var(--muted);margin-top:2px">Inclua um novo colaborador no quadro oficial de presença</div>'
+        +'</div>'
+        +'<button onclick="closeAddPersonModal()" style="background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;padding:4px;line-height:1">&times;</button>'
+      +'</div>'
+      +'<div style="display:flex;flex-direction:column;gap:14px">'
+        +'<div>'
+          +'<label style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:6px">Nome Completo</label>'
+          +'<input type="text" id="roster-add-name" placeholder="Ex: Lucas Ferreira" style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);padding:8px 12px;font-size:13px;outline:none;font-family:var(--font)" onfocus="this.style.borderColor=\'var(--accent)\'" onblur="this.style.borderColor=\'var(--border2)\'">'
+        +'</div>'
+        +'<div>'
+          +'<label style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:6px">Setor Oficial</label>'
+          +'<select id="roster-add-sector" style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);padding:8px 12px;font-size:13px;outline:none;font-family:var(--font);cursor:pointer" onfocus="this.style.borderColor=\'var(--accent)\'" onblur="this.style.borderColor=\'var(--border2)\'">'
+            +'<option value="MONTAGEM" selected>🛠️ Montagem</option>'
+            +'<option value="LIMPEZA">🧹 Limpeza</option>'
+            +'<option value="COMPLEXA">🧩 Complexas</option>'
+            +'<option value="QUALIDADE">✅ Qualidade</option>'
+            +'<option value="DESMEMBRAMENTO">📦 Desmembramento</option>'
+            +'<option value="LIDER">👑 Líder</option>'
+          +'</select>'
+        +'</div>'
+        +'<div style="display:flex;align-items:center;gap:10px;background:rgba(255,255,255,0.03);border:1px solid var(--border2);border-radius:8px;padding:10px 12px">'
+          +'<input type="checkbox" id="roster-add-present" checked style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer">'
+          +'<label for="roster-add-present" style="font-size:12px;font-weight:700;color:var(--text);cursor:pointer">Marcar como Presente na data selecionada</label>'
+        +'</div>'
+        +'<div style="display:flex;align-items:center;gap:10px;background:rgba(245,166,35,0.06);border:1px solid rgba(245,166,35,0.25);border-radius:8px;padding:10px 12px">'
+          +'<input type="checkbox" id="roster-add-exclude-health" style="width:16px;height:16px;accent-color:#f5a623;cursor:pointer">'
+          +'<div>'
+            +'<label for="roster-add-exclude-health" style="font-size:12px;font-weight:700;color:var(--text);cursor:pointer;display:block">Ocultar esse usuário da saúde geral da equipe</label>'
+            +'<div style="font-size:10px;color:var(--muted);margin-top:2px">Não entra no cálculo de % de saúde da equipe</div>'
+          +'</div>'
+        +'</div>'
+      +'</div>'
+      +'<div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:6px">'
+        +'<button onclick="closeAddPersonModal()" style="background:transparent;border:1px solid var(--border2);color:var(--muted);padding:8px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700">Cancelar</button>'
+        +'<button onclick="saveNewPersonModal()" id="btn-save-new-roster" style="background:var(--accent);border:none;color:#fff;font-weight:800;padding:8px 18px;border-radius:8px;cursor:pointer;font-size:12px">➕ Adicionar Pessoa</button>'
+      +'</div>'
+    +'</div>';
+  document.body.appendChild(div);
+}
+
+window.openAddPersonModal = function() {
+  _ensureAddPersonModal();
+  document.getElementById('roster-add-name').value = '';
+  document.getElementById('roster-add-sector').value = 'MONTAGEM';
+  document.getElementById('roster-add-present').checked = true;
+  const chkEx = document.getElementById('roster-add-exclude-health');
+  if (chkEx) chkEx.checked = false;
+  const modal = document.getElementById('modal-add-roster');
+  modal.style.display = 'flex';
+  modal.classList.remove('hidden');
+  setTimeout(() => document.getElementById('roster-add-name').focus(), 50);
+};
+
+window.closeAddPersonModal = function() {
+  const modal = document.getElementById('modal-add-roster');
+  if (modal) {
+    modal.style.display = 'none';
+    modal.classList.add('hidden');
+  }
+};
+
+window.saveNewPersonModal = async function() {
+  const name = document.getElementById('roster-add-name').value.trim();
+  const sector = document.getElementById('roster-add-sector').value;
+  const markPresent = document.getElementById('roster-add-present').checked;
+  const excludeFromHealth = document.getElementById('roster-add-exclude-health') ? document.getElementById('roster-add-exclude-health').checked : false;
+
+  if (!name) {
+    alert('Informe o nome do colaborador.');
+    return;
+  }
+
+  const btn = document.getElementById('btn-save-new-roster');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Salvando...';
+  }
+
+  try {
+    const newId = 'custom_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4);
+    const custom = seGetCustomRosterData();
+    custom.added.push({
+      id: newId,
+      name: name,
+      defaultSector: sector,
+      excludeFromHealth: !!excludeFromHealth
+    });
+    localStorage.setItem('se_roster_32_custom', JSON.stringify(custom));
+
+    try {
+      await _supa.from('app_config').upsert({
+        key: 'se_roster_32_custom',
+        value: custom
+      }, { onConflict: 'key' });
+    } catch(e) {}
+
+    if (markPresent) {
+      await togglePresencaManual(newId, true);
+    } else {
+      await loadTeamHealthHistory();
+    }
+    closeAddPersonModal();
+  } catch(err) {
+    console.error('Erro ao adicionar:', err);
+    alert('Erro ao adicionar: ' + (err.message || err));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '➕ Adicionar Pessoa';
+    }
+  }
+};
+
+function _ensureEditRosterModal() {
+  if (document.getElementById('modal-edit-roster')) return;
+  const div = document.createElement('div');
+  div.id = 'modal-edit-roster';
+  div.className = 'modal-overlay hidden';
+  div.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);backdrop-filter:blur(5px);z-index:99999;display:none;align-items:center;justify-content:center;padding:16px;';
+  div.innerHTML = 
+    '<div style="background:var(--bg2);border:1px solid var(--border2);border-radius:16px;width:100%;max-width:440px;padding:22px 26px;box-shadow:0 24px 60px rgba(0,0,0,0.7);display:flex;flex-direction:column;gap:16px">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between">'
+        +'<div>'
+          +'<div style="font-size:16px;font-weight:800;color:var(--text)">Editar Integrante da Equipe</div>'
+          +'<div style="font-size:11px;color:var(--muted);margin-top:2px">Altere o nome oficial e o setor do colaborador</div>'
+        +'</div>'
+        +'<button onclick="closeEditRosterModal()" style="background:none;border:none;color:var(--muted);font-size:22px;cursor:pointer;padding:4px;line-height:1">&times;</button>'
+      +'</div>'
+      +'<input type="hidden" id="roster-modal-id">'
+      +'<div style="display:flex;flex-direction:column;gap:14px">'
+        +'<div>'
+          +'<label style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:6px">Nome Oficial</label>'
+          +'<input type="text" id="roster-modal-name" style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);padding:8px 12px;font-size:13px;outline:none;font-family:var(--font)" onfocus="this.style.borderColor=\'var(--accent)\'" onblur="this.style.borderColor=\'var(--border2)\'">'
+        +'</div>'
+        +'<div>'
+          +'<label style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;display:block;margin-bottom:6px">Setor Oficial</label>'
+          +'<select id="roster-modal-sector" style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);padding:8px 12px;font-size:13px;outline:none;font-family:var(--font);cursor:pointer" onfocus="this.style.borderColor=\'var(--accent)\'" onblur="this.style.borderColor=\'var(--border2)\'">'
+            +'<option value="LIDER">👑 Líder</option>'
+            +'<option value="DESMEMBRAMENTO">📦 Desmembramento</option>'
+            +'<option value="MONTAGEM">🛠️ Montagem</option>'
+            +'<option value="LIMPEZA">🧹 Limpeza</option>'
+            +'<option value="COMPLEXA">🧩 Complexas</option>'
+            +'<option value="QUALIDADE">✅ Qualidade</option>'
+          +'</select>'
+        +'</div>'
+        +'<div style="display:flex;align-items:center;gap:10px;background:rgba(255,255,255,0.03);border:1px solid var(--border2);border-radius:8px;padding:10px 12px">'
+          +'<input type="checkbox" id="roster-modal-present" style="width:16px;height:16px;accent-color:var(--accent);cursor:pointer">'
+          +'<label for="roster-modal-present" style="font-size:12px;font-weight:700;color:var(--text);cursor:pointer">Presente na data selecionada</label>'
+        +'</div>'
+        +'<div style="display:flex;align-items:center;gap:10px;background:rgba(245,166,35,0.06);border:1px solid rgba(245,166,35,0.25);border-radius:8px;padding:10px 12px">'
+          +'<input type="checkbox" id="roster-modal-exclude-health" style="width:16px;height:16px;accent-color:#f5a623;cursor:pointer">'
+          +'<div>'
+            +'<label for="roster-modal-exclude-health" style="font-size:12px;font-weight:700;color:var(--text);cursor:pointer;display:block">Ocultar esse usuário da saúde geral da equipe</label>'
+            +'<div style="font-size:10px;color:var(--muted);margin-top:2px">Quando marcado, este colaborador não conta no total nem na porcentagem de saúde</div>'
+          +'</div>'
+        +'</div>'
+      +'</div>'
+      +'<div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;margin-top:6px">'
+        +'<button onclick="closeEditRosterModal()" style="background:transparent;border:1px solid var(--border2);color:var(--muted);padding:8px 14px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700">Cancelar</button>'
+        +'<button onclick="saveEditRosterModal()" id="btn-save-roster-modal" style="background:var(--accent);border:none;color:#fff;font-weight:800;padding:8px 18px;border-radius:8px;cursor:pointer;font-size:12px">💾 Salvar Alterações</button>'
+      +'</div>'
+    +'</div>';
+  document.body.appendChild(div);
+}
+
+window.openEditRosterModal = function(id) {
+  _ensureEditRosterModal();
+  const activeRoster = (typeof seGetActiveRoster === 'function') ? seGetActiveRoster() : SE_ROSTER_32;
+  const m = activeRoster.find(x => x.id === id);
+  if (!m) return;
+  document.getElementById('roster-modal-id').value = m.id;
+  document.getElementById('roster-modal-name').value = m.name;
+  document.getElementById('roster-modal-sector').value = (m.defaultSector === 'COMPLEXAS' ? 'COMPLEXA' : m.defaultSector);
+
+  const row = document.querySelector('.th-roster-row[data-id="' + id + '"]');
+  const isPresent = row ? (row.dataset.status === 'present') : false;
+  document.getElementById('roster-modal-present').checked = isPresent;
+  document.getElementById('roster-modal-present').dataset.origPresent = isPresent ? '1' : '0';
+
+  const chkEx = document.getElementById('roster-modal-exclude-health');
+  if (chkEx) chkEx.checked = !!m.excludeFromHealth;
+
+  const modal = document.getElementById('modal-edit-roster');
+  modal.style.display = 'flex';
+  modal.classList.remove('hidden');
+  setTimeout(() => document.getElementById('roster-modal-name').focus(), 50);
+};
+
+window.closeEditRosterModal = function() {
+  const modal = document.getElementById('modal-edit-roster');
+  if (modal) {
+    modal.style.display = 'none';
+    modal.classList.add('hidden');
+  }
+};
+
+window.saveEditRosterModal = async function() {
+  const id = document.getElementById('roster-modal-id').value;
+  const newName = document.getElementById('roster-modal-name').value.trim();
+  const newSector = document.getElementById('roster-modal-sector').value;
+  const newPresent = document.getElementById('roster-modal-present').checked;
+  const origPresent = document.getElementById('roster-modal-present').dataset.origPresent === '1';
+  const excludeFromHealth = document.getElementById('roster-modal-exclude-health') ? document.getElementById('roster-modal-exclude-health').checked : false;
+
+  if (!newName) {
+    alert('Informe o nome do colaborador.');
+    return;
+  }
+
+  const btn = document.getElementById('btn-save-roster-modal');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Salvando...';
+  }
+
+  try {
+    await seSaveRosterCustom(id, newName, newSector, excludeFromHealth);
+
+    if (newPresent !== origPresent) {
+      await togglePresencaManual(id, newPresent);
+    } else {
+      await loadTeamHealthHistory();
+    }
+    closeEditRosterModal();
+  } catch(e) {
+    console.error('Erro ao salvar:', e);
+    alert('Erro ao salvar: ' + (e.message || e));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '💾 Salvar Alterações';
+    }
+  }
+};
+
+// ── Modos de Visualização e Presença Manual ──
+window._teamHealthViewMode = window._teamHealthViewMode || 'list';
+window._teamHealthSectorFilter = window._teamHealthSectorFilter || 'ALL';
+
+window.setTeamHealthViewMode = function(mode) {
+  window._teamHealthViewMode = mode;
+  loadTeamHealthHistory();
+};
+
+window.togglePresencaManual = async function(rosterId, setPresent) {
+  const datePicker = document.getElementById('team-health-date');
+  const todayISO = new Date().toISOString().slice(0,10);
+  const dateVal = (datePicker && datePicker.value) ? datePicker.value : todayISO;
+  const dObj = new Date(dateVal + 'T00:00:00');
+  const dateKey = dObj.toDateString().replace(/ /g,'_');
+
+  const activeRoster = (typeof seGetActiveRoster === 'function') ? seGetActiveRoster() : SE_ROSTER_32;
+  const member = activeRoster.find(m => m.id === rosterId);
+  if (!member) return;
+
+  // 1) Grava IMEDIATAMENTE no localStorage (resposta instantânea garantida)
+  let allMp = {};
+  try {
+    allMp = JSON.parse(localStorage.getItem('se_manual_presencas') || '{}');
+  } catch(e) {}
+  if (!allMp[dateKey]) allMp[dateKey] = {};
+  allMp[dateKey][rosterId] = !!setPresent;
+  localStorage.setItem('se_manual_presencas', JSON.stringify(allMp));
+
+  // 2) Feedback visual instantâneo na linha da tabela
+  const row = document.querySelector('.th-roster-row[data-id="' + rosterId + '"]');
+  if (row) {
+    row.dataset.status = setPresent ? 'present' : 'absent';
+  }
+
+  // 3) Persiste em app_config no Supabase (não sofre com RLS)
+  try {
+    await _supa.from('app_config').upsert({
+      key: 'manual_presencas',
+      value: allMp
+    }, { onConflict: 'key' });
+  } catch(errAppCfg) {
+    console.warn('[ManualPresenca] app_config:', errAppCfg);
+  }
+
+  // 4) Também tenta gravar em operator_checkins para compatibilidade com outras consultas
+  const allUsers = Array.isArray(users) ? users : [];
+  let matchedUser = null;
+  for (const u of allUsers) {
+    const raw = (u.raw && typeof u.raw === 'object') ? u.raw : {};
+    const uName = raw.name || raw.nome || u.name || '';
+    const match = (typeof seMatchRoster === 'function') ? seMatchRoster(uName) : null;
+    if (match && match.id === member.id) {
+      matchedUser = u;
+      break;
+    }
+  }
+
+  const targetUid = matchedUser ? String(matchedUser.id) : ('roster_' + member.id);
+  const targetName = (matchedUser && (matchedUser.name || (matchedUser.raw && matchedUser.raw.name))) ? (matchedUser.name || matchedUser.raw.name) : member.name;
+  const targetSector = (matchedUser && (matchedUser.sector || (matchedUser.raw && matchedUser.raw.sector))) ? (matchedUser.sector || matchedUser.raw.sector) : member.defaultSector;
+
+  try {
+    if (setPresent) {
+      if (dateVal === todayISO && matchedUser) {
+        try {
+          await _supaAuthed().rpc('record_checkin', {
+            p_uid: targetUid,
+            p_name: targetName,
+            p_sector: targetSector,
+            p_date_key: dateKey
+          });
+        } catch(rpcErr) {}
+      }
+      try {
+        await _supaAuthed().from('operator_checkins').upsert({
+          uid: targetUid,
+          name: targetName,
+          sector: targetSector,
+          date_key: dateKey,
+          created_at: new Date().toISOString()
+        }, { onConflict: 'uid,date_key' });
+      } catch(insErr) {}
+    } else {
+      try {
+        await _supaAuthed().from('operator_checkins').delete().eq('date_key', dateKey).in('uid', [targetUid, 'roster_' + member.id]);
+        await _supaAuthed().from('operator_checkins').delete().eq('date_key', dateKey).eq('name', member.name);
+      } catch(delErr) {}
+    }
+  } catch(e) {}
+
+  // 5) Recarrega os dados completos da tela
+  await loadTeamHealthHistory();
+};
+
+window.marcarTodosPresentesManual = async function() {
+  const datePicker = document.getElementById('team-health-date');
+  const todayISO = new Date().toISOString().slice(0,10);
+  const dateVal = (datePicker && datePicker.value) ? datePicker.value : todayISO;
+  const dObj = new Date(dateVal + 'T00:00:00');
+  const dateKey = dObj.toDateString().replace(/ /g,'_');
+
+  const activeList = (typeof seGetActiveRoster === 'function') ? seGetActiveRoster() : SE_ROSTER_32;
+  if (!confirm('Deseja confirmar a presença de TODOS os ' + activeList.length + ' colaboradores da equipe para a data ' + dateVal + '?')) return;
+
+  let allMp = {};
+  try {
+    allMp = JSON.parse(localStorage.getItem('se_manual_presencas') || '{}');
+  } catch(e) {}
+  if (!allMp[dateKey]) allMp[dateKey] = {};
+  activeList.forEach(m => {
+    allMp[dateKey][m.id] = true;
+  });
+  localStorage.setItem('se_manual_presencas', JSON.stringify(allMp));
+
+  try {
+    await _supa.from('app_config').upsert({
+      key: 'manual_presencas',
+      value: allMp
+    }, { onConflict: 'key' });
+  } catch(e) {}
+
+  await loadTeamHealthHistory();
+};
+
+window.exportarPresencaImagem = async function(format) {
+  const fmt = (format || 'png').toLowerCase();
+  const isJpeg = (fmt === 'jpeg' || fmt === 'jpg');
+  const mimeType = isJpeg ? 'image/jpeg' : 'image/png';
+  const fileExt = isJpeg ? 'jpg' : 'png';
+
+  // Verifica se a biblioteca html2canvas está carregada, senão tenta carregar dinamicamente
+  if (typeof html2canvas === 'undefined') {
+    try {
+      if (typeof showToast === 'function') showToast('Carregando biblioteca de captura...', false);
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+    } catch (e) {
+      alert('Não foi possível carregar a ferramenta de exportação de imagem. Verifique a conexão com a internet.');
+      return;
+    }
+  }
+
+  if (typeof showToast === 'function') {
+    showToast('📸 Gerando imagem ' + fileExt.toUpperCase() + ' da Lista de Presença... aguarde!', false);
+  }
+
+  // Recupera os dados mais recentes do painel ou do DOM/Roster
+  const cachedData = window._lastTeamHealthData || {};
+  const dateInput = document.getElementById('team-health-date');
+  const dateVal = cachedData.dateVal || (dateInput ? dateInput.value : new Date().toISOString().slice(0,10));
+  
+  // Formatação amigável da data em português
+  let formattedDate = dateVal;
+  try {
+    const parts = dateVal.split('-');
+    if (parts.length === 3) {
+      const dObj = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+      const diasSemana = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+      const meses = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+      formattedDate = diasSemana[dObj.getDay()] + ', ' + parts[2] + ' de ' + meses[dObj.getMonth()] + ' de ' + parts[0];
+    }
+  } catch(e) {}
+
+  const prodCount = (cachedData.prodCount !== undefined && cachedData.prodCount !== null) ? cachedData.prodCount : (function(){
+    const prodEl = document.querySelector('#admin-team-health-panel [style*="Produção do Dia"] + div');
+    if (prodEl) {
+      const num = parseInt(prodEl.innerText);
+      return isNaN(num) ? 0 : num;
+    }
+    return 0;
+  })();
+
+  const activeRoster = (typeof seGetActiveRoster === 'function') ? seGetActiveRoster() : SE_ROSTER_32;
+  const roster = cachedData.roster || activeRoster.map(item => ({
+    id: item.id,
+    name: item.name,
+    sector: item.defaultSector,
+    isCustomAdded: !!item.isCustomAdded,
+    excludeFromHealth: !!item.excludeFromHealth
+  }));
+
+  const isMemberPresent = cachedData.isMemberPresent || function(m) {
+    let mp = {};
+    try {
+      const dObj = new Date(dateVal + 'T00:00:00');
+      const dKey = dObj.toDateString().replace(/ /g,'_');
+      const allMp = JSON.parse(localStorage.getItem('se_manual_presencas') || '{}');
+      mp = allMp[dKey] || {};
+    } catch(e) {}
+    return !!mp[m.id];
+  };
+
+  const healthRoster = roster.filter(m => !m.excludeFromHealth);
+  const healthTotal = healthRoster.length;
+  let healthActive = 0;
+  healthRoster.forEach(m => { if (isMemberPresent(m)) healthActive++; });
+
+  const rosterTotal = roster.length;
+  let rosterActive = 0;
+  roster.forEach(m => { if (isMemberPresent(m)) rosterActive++; });
+
+  const overallPct = healthTotal > 0 ? Math.round((healthActive / healthTotal) * 100) : 0;
+  let overallColor = '#4ade80';
+  if (overallPct < 50) overallColor = '#f25757';
+  else if (overallPct < 80) overallColor = '#f5a623';
+
+  const baseSectors = [
+    { key: 'LIDER',          name: 'Líder',          icon: '👑', color: '#fbbf24', bg: 'rgba(251,191,36,0.15)', border: 'rgba(251,191,36,0.35)' },
+    { key: 'DESMEMBRAMENTO', name: 'Desmembramento', icon: '📦', color: '#38bdf8', bg: 'rgba(56,189,248,0.15)', border: 'rgba(56,189,248,0.35)' },
+    { key: 'MONTAGEM',       name: 'Montagem',       icon: '🛠️', color: '#4ade80', bg: 'rgba(74,222,128,0.15)', border: 'rgba(74,222,128,0.35)' },
+    { key: 'LIMPEZA',        name: 'Limpeza',        icon: '🧹', color: '#a78bfa', bg: 'rgba(167,139,250,0.15)', border: 'rgba(167,139,250,0.35)' },
+    { key: 'COMPLEXA',       name: 'Complexas',      icon: '🧩', color: '#f5a623', bg: 'rgba(245,166,35,0.15)', border: 'rgba(245,166,35,0.35)' },
+    { key: 'QUALIDADE',      name: 'Qualidade',      icon: '✅', color: '#22d3ee', bg: 'rgba(34,211,238,0.15)', border: 'rgba(34,211,238,0.35)' }
+  ];
+
+  // Setores HTML
+  const sectorSummaryHtml = baseSectors.map(sec => {
+    const secMembers = roster.filter(m => {
+      const s = m.sector;
+      if (sec.key === 'COMPLEXA') return s === 'COMPLEXA' || s === 'COMPLEXAS';
+      return s === sec.key;
+    });
+    const secHealthMembers = secMembers.filter(m => !m.excludeFromHealth);
+    const presCount = secHealthMembers.filter(isMemberPresent).length;
+    const totCount = secHealthMembers.length;
+    const secPct = totCount > 0 ? Math.round((presCount / totCount) * 100) : 0;
+    return '<div style="background:rgba(15,23,42,0.7);border:1px solid ' + sec.border + ';border-radius:8px;padding:6px 10px;display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:140px">'
+      + '<div style="display:flex;align-items:center;gap:6px">'
+        + '<span style="font-size:13px">' + sec.icon + '</span>'
+        + '<span style="font-size:11px;font-weight:700;color:#e2e8f0">' + sec.name + '</span>'
+      + '</div>'
+      + '<span style="font-family:\'Courier New\', Courier, monospace;font-size:11px;font-weight:800;color:' + sec.color + '">' + presCount + '/' + totCount + ' (' + secPct + '%)</span>'
+    + '</div>';
+  }).join('');
+
+  // Tabela de Colaboradores
+  const rowsHtml = roster.map((m, idx) => {
+    const isPresent = isMemberPresent(m);
+    const secObj = baseSectors.find(s => s.key === m.sector || (s.key === 'COMPLEXA' && (m.sector === 'COMPLEXA' || m.sector === 'COMPLEXAS'))) || {
+      name: m.sector, icon: '🏷️', color: '#94a3b8', bg: 'rgba(148,163,184,0.1)', border: 'rgba(148,163,184,0.3)'
+    };
+    const rowBg = idx % 2 === 0 ? 'rgba(15,23,42,0.45)' : 'rgba(30,41,59,0.3)';
+    const customBadge = m.isCustomAdded ? ' <span style="background:rgba(56,189,248,0.15);border:1px solid rgba(56,189,248,0.4);color:#38bdf8;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;margin-left:4px">Novo</span>' : '';
+    const healthBadge = m.excludeFromHealth ? ' <span style="background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.4);color:#fbbf24;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;margin-left:4px">Fora da Saúde</span>' : '';
+
+    const presenceBadge = isPresent
+      ? '<span style="display:inline-flex;align-items:center;gap:5px;background:rgba(74,222,128,0.15);border:1px solid rgba(74,222,128,0.45);color:#4ade80;font-size:11px;font-weight:800;padding:3px 10px;border-radius:6px"><span style="width:6px;height:6px;border-radius:50%;background:#4ade80;display:inline-block"></span>Presente</span>'
+      : '<span style="display:inline-flex;align-items:center;gap:5px;background:rgba(242,87,87,0.15);border:1px solid rgba(242,87,87,0.45);color:#f25757;font-size:11px;font-weight:800;padding:3px 10px;border-radius:6px"><span style="width:6px;height:6px;border-radius:50%;background:#f25757;display:inline-block"></span>Ausente</span>';
+
+    return '<tr style="background:' + rowBg + ';border-bottom:1px solid rgba(51,65,85,0.4)">'
+      + '<td style="padding:7px 10px;text-align:center;font-family:\'Courier New\', monospace;font-size:11px;color:#64748b;width:34px">' + (idx + 1) + '</td>'
+      + '<td style="padding:7px 12px;font-size:12px;font-weight:700;color:#f8fafc">' + m.name + customBadge + healthBadge + '</td>'
+      + '<td style="padding:7px 12px">'
+        + '<span style="display:inline-flex;align-items:center;gap:4px;background:' + secObj.bg + ';border:1px solid ' + secObj.border + ';color:' + secObj.color + ';padding:2px 8px;border-radius:6px;font-size:11px;font-weight:700">'
+          + secObj.icon + ' ' + secObj.name
+        + '</span>'
+      + '</td>'
+      + '<td style="padding:7px 12px;text-align:center">' + presenceBadge + '</td>'
+    + '</tr>';
+  }).join('');
+
+  // Container temporário fora da tela
+  const wrapper = document.createElement('div');
+  wrapper.style.position = 'fixed';
+  wrapper.style.left = '-9999px';
+  wrapper.style.top = '0';
+  wrapper.style.width = '960px';
+  wrapper.style.background = '#090e17';
+  wrapper.style.color = '#f1f5f9';
+  wrapper.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+  wrapper.style.padding = '26px 30px';
+  wrapper.style.boxSizing = 'border-box';
+  wrapper.style.zIndex = '-9999';
+
+  wrapper.innerHTML =
+    '<div style="background:#0d1424;border:1px solid #1e293b;border-radius:14px;padding:22px;box-shadow:0 10px 25px rgba(0,0,0,0.5)">'
+      // Cabeçalho Principal
+      + '<div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #1e293b;padding-bottom:16px;margin-bottom:16px">'
+        + '<div>'
+          + '<div style="display:flex;align-items:center;gap:8px">'
+            + '<div style="width:34px;height:34px;border-radius:8px;background:rgba(56,189,248,0.15);border:1px solid rgba(56,189,248,0.35);display:flex;align-items:center;justify-content:center;font-size:18px">🩺</div>'
+            + '<div>'
+              + '<div style="font-size:19px;font-weight:900;color:#f8fafc;letter-spacing:-0.02em">LabTech<span style="color:#38bdf8">.</span> <span style="font-size:14px;font-weight:700;color:#94a3b8;margin-left:6px">— Lista de Presença &amp; Saúde</span></div>'
+              + '<div style="font-size:11px;font-weight:600;color:#64748b;margin-top:2px">Relatório oficial diário de contingente e produtividade</div>'
+            + '</div>'
+          + '</div>'
+        + '</div>'
+        + '<div style="text-align:right">'
+          + '<div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:6px 12px;display:inline-flex;align-items:center;gap:6px">'
+            + '<span style="font-size:12px">📅</span>'
+            + '<span style="font-size:12px;font-weight:800;color:#f1f5f9">' + formattedDate + '</span>'
+          + '</div>'
+        + '</div>'
+      + '</div>'
+
+      // Blocos de KPI (Produção do Dia, Saúde da Equipe, Quadro Geral)
+      + '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px">'
+        // KPI Produção do Dia
+        + '<div style="background:rgba(74,222,128,0.06);border:1px solid rgba(74,222,128,0.3);border-radius:10px;padding:12px 14px;display:flex;align-items:center;gap:12px">'
+          + '<div style="font-size:26px">📦</div>'
+          + '<div>'
+            + '<div style="font-size:10px;font-weight:800;color:#4ade80;text-transform:uppercase;letter-spacing:0.05em">Produção do Dia</div>'
+            + '<div style="font-size:22px;font-weight:900;color:#4ade80;font-family:\'Courier New\', monospace;line-height:1.1;margin-top:2px">' + prodCount + ' <span style="font-size:11px;font-weight:600;color:#94a3b8">liberados</span></div>'
+          + '</div>'
+        + '</div>'
+        // KPI Saúde Geral
+        + '<div style="background:rgba(56,189,248,0.06);border:1px solid ' + overallColor + '55;border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between">'
+          + '<div>'
+            + '<div style="font-size:10px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em">Saúde da Equipe</div>'
+            + '<div style="font-size:11px;color:#f1f5f9;margin-top:2px"><b style="color:#4ade80">' + healthActive + ' presentes</b> de <b>' + healthTotal + '</b>'
+              + (rosterTotal > healthTotal ? ' <span style="font-size:9px;color:#f5a623">(' + (rosterTotal - healthTotal) + ' fora)</span>' : '')
+            + '</div>'
+          + '</div>'
+          + '<div style="font-size:22px;font-weight:900;color:' + overallColor + ';font-family:\'Courier New\', monospace;background:rgba(0,0,0,0.35);border:1px solid ' + overallColor + '44;padding:4px 10px;border-radius:8px">' + overallPct + '%</div>'
+        + '</div>'
+        // KPI Contingente Total
+        + '<div style="background:rgba(255,255,255,0.02);border:1px solid #1e293b;border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between">'
+          + '<div>'
+            + '<div style="font-size:10px;font-weight:800;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em">Total de Colaboradores</div>'
+            + '<div style="font-size:11px;color:#cbd5e1;margin-top:2px"><span style="color:#4ade80;font-weight:700">' + rosterActive + ' presentes</span> • <span style="color:#f25757;font-weight:700">' + (rosterTotal - rosterActive) + ' ausentes</span></div>'
+          + '</div>'
+          + '<div style="font-size:20px;font-weight:900;color:#f8fafc;font-family:\'Courier New\', monospace">' + rosterTotal + '</div>'
+        + '</div>'
+      + '</div>'
+
+      // Resumo dos Setores
+      + '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">'
+        + sectorSummaryHtml
+      + '</div>'
+
+      // Tabela de Presenças
+      + '<div style="border:1px solid #1e293b;border-radius:10px;overflow:hidden">'
+        + '<table style="width:100%;border-collapse:collapse;text-align:left">'
+          + '<thead>'
+            + '<tr style="background:#0f172a;border-bottom:1px solid #334155;color:#94a3b8;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.06em">'
+              + '<th style="padding:8px 10px;width:34px;text-align:center">#</th>'
+              + '<th style="padding:8px 12px">Colaborador</th>'
+              + '<th style="padding:8px 12px">Setor Oficial</th>'
+              + '<th style="padding:8px 12px;text-align:center">Status</th>'
+            + '</tr>'
+          + '</thead>'
+          + '<tbody>'
+            + rowsHtml
+          + '</tbody>'
+        + '</table>'
+      + '</div>'
+
+      // Rodapé
+      + '<div style="margin-top:14px;display:flex;align-items:center;justify-content:space-between;font-size:10px;color:#64748b">'
+        + '<span>LabTech Operations • Sistema de Gestão Laboratorial</span>'
+        + '<span>Emitido em: ' + new Date().toLocaleString('pt-BR') + '</span>'
+      + '</div>'
+    + '</div>';
+
+  document.body.appendChild(wrapper);
+
+  try {
+    const canvas = await html2canvas(wrapper, {
+      backgroundColor: '#090e17',
+      scale: 2,
+      useCORS: true,
+      logging: false
+    });
+
+    const dataUrl = canvas.toDataURL(mimeType, 0.95);
+    const link = document.createElement('a');
+    link.href = dataUrl;
+    link.download = 'Presenca_Saude_LabTech_' + dateVal + '.' + fileExt;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    if (typeof showToast === 'function') {
+      showToast('✅ Imagem ' + fileExt.toUpperCase() + ' exportada com sucesso!', false);
+    }
+  } catch (err) {
+    console.error('Erro ao exportar imagem:', err);
+    alert('Ocorreu um erro ao gerar a imagem: ' + (err.message || err));
+  } finally {
+    if (wrapper.parentNode) {
+      document.body.removeChild(wrapper);
+    }
+  }
+};
+
+window._filterTeamHealthList = function(sectorFilter) {
+  if (sectorFilter !== undefined) {
+    window._teamHealthSectorFilter = sectorFilter;
+  }
+  const curSector = window._teamHealthSectorFilter || 'ALL';
+  const searchInput = document.getElementById('th-search-roster');
+  const term = (searchInput ? searchInput.value : '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+
+  document.querySelectorAll('.th-filter-pill').forEach(btn => {
+    const pSec = btn.dataset.sector;
+    if (pSec === curSector) {
+      btn.style.background = 'var(--accent)';
+      btn.style.color = '#fff';
+      btn.style.borderColor = 'var(--accent)';
+    } else {
+      btn.style.background = 'rgba(255,255,255,0.05)';
+      btn.style.color = 'var(--text)';
+      btn.style.borderColor = 'var(--border2)';
+    }
+  });
+
+  const rows = document.querySelectorAll('.th-roster-row');
+  rows.forEach(tr => {
+    const rSec = tr.dataset.sector;
+    const rStatus = tr.dataset.status;
+    const rName = (tr.dataset.name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+    let matchesSector = true;
+    if (curSector === 'ALL') matchesSector = true;
+    else if (curSector === 'PRESENT') matchesSector = (rStatus === 'present');
+    else if (curSector === 'ABSENT') matchesSector = (rStatus === 'absent');
+    else if (curSector === 'COMPLEXA') matchesSector = (rSec === 'COMPLEXA' || rSec === 'COMPLEXAS');
+    else if (curSector === 'LIDER') matchesSector = (rSec === 'LIDER' || rSec === 'LÍDER');
+    else matchesSector = (rSec === curSector);
+
+    let matchesSearch = true;
+    if (term) {
+      matchesSearch = rName.includes(term);
+    }
+
+    tr.style.display = (matchesSector && matchesSearch) ? '' : 'none';
+  });
+};
+
+function renderTeamHealth(dateVal, checkinUids, prodCount, noDataAtAll, checkinNames, manualPresencas){
+  dateVal = dateVal || null; checkinUids = checkinUids || new Set(); checkinNames = checkinNames || new Set();
+  manualPresencas = (manualPresencas && typeof manualPresencas === 'object') ? manualPresencas : {};
+  prodCount = (prodCount !== undefined ? prodCount : null);
   noDataAtAll = !!noDataAtAll;
   const container = document.getElementById('admin-team-health-panel');
   if(!container) return;
   var wasCollapsed = container.dataset.collapsed === '1';
 
   const baseSectors = [
+    { key: 'LIDER',          name: 'Líder',          icon: '👑', color: '#fbbf24', bg: 'rgba(251,191,36,0.12)', border: 'rgba(251,191,36,0.35)' },
     { key: 'DESMEMBRAMENTO', name: 'Desmembramento', icon: '📦', color: '#38bdf8', bg: 'rgba(56,189,248,0.12)', border: 'rgba(56,189,248,0.35)' },
     { key: 'MONTAGEM',       name: 'Montagem',       icon: '🛠️', color: '#4ade80', bg: 'rgba(74,222,128,0.12)', border: 'rgba(74,222,128,0.35)' },
     { key: 'LIMPEZA',        name: 'Limpeza',        icon: '🧹', color: '#a78bfa', bg: 'rgba(167,139,250,0.12)', border: 'rgba(167,139,250,0.35)' },
     { key: 'COMPLEXA',       name: 'Complexas',      icon: '🧩', color: '#f5a623', bg: 'rgba(245,166,35,0.12)', border: 'rgba(245,166,35,0.35)' },
     { key: 'QUALIDADE',      name: 'Qualidade',      icon: '✅', color: '#22d3ee', bg: 'rgba(34,211,238,0.12)', border: 'rgba(34,211,238,0.35)' },
-    { key: 'ELETRÔNICA',     name: 'Eletrônica',     icon: '🔌', color: '#fb923c', bg: 'rgba(251,146,60,0.12)', border: 'rgba(251,146,60,0.35)' },
   ];
-
-  // FIX (bug "Gestão de Equipe não mostra todos os usuários" — causa raiz):
-  // esta lista de setores era FIXA (só os 6 acima). Mas o admin pode criar
-  // setores personalizados em "Gerenciar Setores" (ver addSetor()), e
-  // qualquer usuário cadastrado num setor fora dessa lista fixa ficava
-  // totalmente ausente do painel — nem contado, nem listado — mesmo
-  // aparecendo normalmente no resto do sistema (tabela de usuários, filtros
-  // de setor). Agora inclui também os setores personalizados do tipo
-  // "operador" (setores administrativos/de visualização como PCP,
-  // VISUALIZAÇÃO, VISU FLUXOLAB continuam de fora, pois não são setores de
-  // produção com presença a acompanhar).
-  const knownKeys = new Set(baseSectors.map(s => s.key).concat(['COMPLEXAS']));
-  const customSectors = (typeof _setores !== 'undefined' && Array.isArray(_setores) ? _setores : [])
-    .map(s => String(s || '').toUpperCase().trim())
-    .filter(s => s && !knownKeys.has(s))
-    .filter(s => (typeof getSectorTipo !== 'function') || getSectorTipo(s) !== 'admin')
-    .map(s => ({
-      key: s,
-      name: (typeof _capitalize === 'function') ? _capitalize(s) : s,
-      icon: '🏷️', color: '#94a3b8', bg: 'rgba(148,163,184,0.12)', border: 'rgba(148,163,184,0.35)'
-    }));
-  const targetSectors = baseSectors.concat(customSectors);
 
   const allUsers = Array.isArray(users) ? users : [];
 
-  let overallTotal = 0;
-  let overallActive = 0;
+  const activeRoster = (typeof seGetActiveRoster === 'function') ? seGetActiveRoster() : SE_ROSTER_32;
 
-  var cardsHtml = targetSectors.map(function(sec) {
-    // Histórico: esse painel já teve dois bugs de "gente sumindo da lista":
-    // 1) Total contava usuários Ocultos mas eles nunca apareciam nos chips.
-    // 2) Setores personalizados (criados em "Gerenciar Setores") nem
-    //    entravam na lista de setores acima (ver targetSectors/customSectors).
-    // Ocultos e Inativos seguem o MESMO critério de presença que todo mundo
-    // (fez check-in por PIN hoje = presente), só ganham uma etiqueta cinza
-    // extra no chip pra indicar o motivo — não viram uma categoria à parte.
-    var secUsers = allUsers.filter(function(u) {
-      var uSec = (u.sector || '').toUpperCase().trim();
-      if(sec.key === 'COMPLEXA') return uSec === 'COMPLEXA' || uSec === 'COMPLEXAS';
-      return uSec === sec.key;
+  // Mapeia os membros ativos do quadro oficial da equipe (base + novos - removidos)
+  const roster = activeRoster.map(item => ({
+    id: item.id,
+    name: item.name,
+    sector: item.defaultSector,
+    uids: new Set(['roster_' + item.id]),
+    dbUsers: [],
+    aliases: item.aliases || [],
+    isCustomAdded: !!item.isCustomAdded,
+    excludeFromHealth: !!item.excludeFromHealth
+  }));
+
+  allUsers.forEach(u => {
+    const raw = (u.raw && typeof u.raw === 'object') ? u.raw : {};
+    const uName = raw.name || raw.nome || u.name || '';
+    const match = (typeof seMatchRoster === 'function') ? seMatchRoster(uName) : null;
+    if (match) {
+      const slot = roster.find(r => r.id === match.id);
+      if (slot) {
+        slot.uids.add(String(u.id));
+        slot.dbUsers.push(u);
+      }
+    }
+  });
+
+  const isMemberPresent = function(m) {
+    if (manualPresencas && typeof manualPresencas === 'object') {
+      if (manualPresencas[m.id] === true) return true;
+      if (manualPresencas[m.id] === false) return false;
+    }
+    if (Array.from(m.uids).some(uid => checkinUids.has(String(uid)))) return true;
+    if (checkinNames && Array.from(checkinNames).some(cn => {
+      const match = (typeof seMatchRoster === 'function') ? seMatchRoster(cn) : null;
+      return match && match.id === m.id;
+    })) return true;
+    return false;
+  };
+
+  // ── Saúde da Equipe: calcula apenas para membros que não estão ocultos da saúde ──
+  const healthRoster = roster.filter(m => !m.excludeFromHealth);
+  const healthTotal = healthRoster.length;
+  let healthActive = 0;
+  healthRoster.forEach(m => {
+    if (isMemberPresent(m)) healthActive++;
+  });
+
+  const rosterTotal = roster.length;
+  let rosterActive = 0;
+  roster.forEach(m => {
+    if (isMemberPresent(m)) rosterActive++;
+  });
+
+  let overallTotal = healthTotal;
+  let overallActive = healthActive;
+
+  var offTag = function(m){
+    var u = m.dbUsers[0];
+    if(!u) return '';
+    if(u.active === false && u.hidden) return ' <span style="opacity:.75;font-size:10px;font-weight:600;color:var(--muted)">(Inat.·Ocult.)</span>';
+    if(u.hidden) return ' <span style="opacity:.75;font-size:10px;font-weight:600;color:var(--muted)">(Oculto)</span>';
+    if(u.active === false) return ' <span style="opacity:.75;font-size:10px;font-weight:600;color:var(--muted)">(Inativo)</span>';
+    return '';
+  };
+
+  // 1) CARDS HTML (Visualização por Setor)
+  var cardsHtml = baseSectors.map(function(sec) {
+    var secMembers = roster.filter(function(m) {
+      var mSec = m.sector;
+      if (sec.key === 'COMPLEXA') return mSec === 'COMPLEXA' || mSec === 'COMPLEXAS';
+      return mSec === sec.key;
     });
 
-    var activeUsers = secUsers.filter(function(u){ return checkinUids.has(String(u.id)); });
-    var inactiveUsers = secUsers.filter(function(u){ return !checkinUids.has(String(u.id)); });
+    var secHealthMembers = secMembers.filter(m => !m.excludeFromHealth);
+    var activeHealthMembers = secHealthMembers.filter(isMemberPresent);
+    var inactiveHealthMembers = secHealthMembers.filter(m => !isMemberPresent(m));
 
-    var activeCount = activeUsers.length;
-    var inactiveCount = inactiveUsers.length;
-    var total = secUsers.length; // presentes + ausentes — sempre bate
-
-    // Regra de negócio: o setor ELETRÔNICA aparece no painel (card próprio),
-    // mas NÃO entra no cálculo da "Saúde Geral da Equipe".
-    if(!_TH_SETORES_FORA_DA_SAUDE.has(sec.key)){
-      overallTotal += total;
-      overallActive += activeCount;
-    }
-
+    var total = secHealthMembers.length;
+    var activeCount = activeHealthMembers.length;
+    var inactiveCount = inactiveHealthMembers.length;
     var pct = total > 0 ? Math.round((activeCount / total) * 100) : 0;
 
     var healthColor = '#4ade80';
     if(pct < 50) healthColor = '#f25757';
     else if(pct < 80) healthColor = '#f5a623';
 
-    // Etiqueta "Oculto"/"Inativo"/"Inativo · Oculto" anexada ao chip, sem
-    // mudar a cor verde/vermelha (que continua indicando só presença).
-    var offTag = function(u){
-      if(u.active === false && u.hidden) return ' <span style="opacity:.75;font-weight:600">(Inativo · Oculto)</span>';
-      if(u.hidden) return ' <span style="opacity:.75;font-weight:600">(Oculto)</span>';
-      if(u.active === false) return ' <span style="opacity:.75;font-weight:600">(Inativo)</span>';
-      return '';
-    };
+    var allActiveMembers = secMembers.filter(isMemberPresent);
+    var allInactiveMembers = secMembers.filter(m => !isMemberPresent(m));
 
-    var activeListText = activeUsers.length > 0
-      ? activeUsers.map(function(u){ return '<span style="display:inline-flex;align-items:center;gap:3px;background:rgba(74,222,128,0.14);border:1px solid rgba(74,222,128,0.35);color:#4ade80;font-size:9px;font-weight:700;padding:2px 6px;border-radius:5px;margin:1px"><span style="width:5px;height:5px;border-radius:50%;background:#4ade80;display:inline-block"></span>'+u.name+offTag(u)+'</span>'; }).join('')
+    var activeListText = allActiveMembers.length > 0
+      ? allActiveMembers.map(function(m){ 
+          var exTag = m.excludeFromHealth ? ' <span style="opacity:.8;font-size:8px;color:#f5a623">(Fora da saúde)</span>' : '';
+          return '<span style="display:inline-flex;align-items:center;gap:3px;background:rgba(74,222,128,0.14);border:1px solid rgba(74,222,128,0.35);color:#4ade80;font-size:9px;font-weight:700;padding:2px 6px;border-radius:5px;margin:1px"><span style="width:5px;height:5px;border-radius:50%;background:#4ade80;display:inline-block"></span>'+m.name+exTag+offTag(m)+'</span>'; 
+        }).join('')
       : '<span style="font-size:9px;color:var(--muted);font-style:italic;padding:4px">Ninguém presente</span>';
 
-    var inactiveListText = inactiveUsers.length > 0
-      ? inactiveUsers.map(function(u){ return '<span style="display:inline-flex;align-items:center;gap:3px;background:rgba(242,87,87,0.14);border:1px solid rgba(242,87,87,0.35);color:#f25757;font-size:9px;font-weight:700;padding:2px 6px;border-radius:5px;margin:1px;opacity:0.85"><span style="width:5px;height:5px;border-radius:50%;background:#f25757;display:inline-block"></span>'+u.name+offTag(u)+'</span>'; }).join('')
+    var inactiveListText = allInactiveMembers.length > 0
+      ? allInactiveMembers.map(function(m){ 
+          var exTag = m.excludeFromHealth ? ' <span style="opacity:.8;font-size:8px;color:#f5a623">(Fora da saúde)</span>' : '';
+          return '<span style="display:inline-flex;align-items:center;gap:3px;background:rgba(242,87,87,0.14);border:1px solid rgba(242,87,87,0.35);color:#f25757;font-size:9px;font-weight:700;padding:2px 6px;border-radius:5px;margin:1px;opacity:0.85"><span style="width:5px;height:5px;border-radius:50%;background:#f25757;display:inline-block"></span>'+m.name+exTag+offTag(m)+'</span>'; 
+        }).join('')
       : '';
 
     var filterKey = sec.key;
@@ -9226,7 +10209,62 @@ function renderTeamHealth(dateVal, checkinUids, prodCount, noDataAtAll){
     +'</div>';
   }).join('');
 
-  var overallPct = overallTotal > 0 ? Math.round((overallActive / overallTotal) * 100) : 0;
+  // 2) TABELA HTML (Lista de Presença dos membros com Confirmação Manual, Edição e Remoção)
+  var tableRowsHtml = roster.map(function(m, idx) {
+    var isPresent = isMemberPresent(m);
+    var curSec = (m.sector === 'COMPLEXAS') ? 'COMPLEXA' : m.sector;
+    var secObj = baseSectors.find(function(s){ return s.key === curSec; }) || baseSectors[0];
+
+    var statusBadge = isPresent
+      ? '<span style="display:inline-flex;align-items:center;gap:5px;background:rgba(74,222,128,0.15);border:1px solid rgba(74,222,128,0.35);color:#4ade80;font-size:11px;font-weight:800;padding:4px 12px;border-radius:20px;cursor:pointer" title="Clique para alternar presença"><span style="width:7px;height:7px;border-radius:50%;background:#4ade80;box-shadow:0 0 6px #4ade80"></span>Presente</span>'
+      : '<span style="display:inline-flex;align-items:center;gap:5px;background:rgba(242,87,87,0.12);border:1px solid rgba(242,87,87,0.3);color:#f25757;font-size:11px;font-weight:800;padding:4px 12px;border-radius:20px;opacity:0.85;cursor:pointer" title="Clique para alternar presença"><span style="width:7px;height:7px;border-radius:50%;background:#f25757"></span>Ausente</span>';
+
+    var actionBtn = isPresent
+      ? '<button class="tbtn" onclick="togglePresencaManual(\''+m.id+'\', false)" style="background:rgba(242,87,87,0.12);border:1px solid rgba(242,87,87,0.35);color:#f25757;font-size:11px;font-weight:800;padding:5px 12px;border-radius:7px;cursor:pointer;transition:all .15s" title="Remover presença deste operador">✕ Remover Presença</button>'
+      : '<button class="tbtn" onclick="togglePresencaManual(\''+m.id+'\', true)" style="background:rgba(74,222,128,0.15);border:1px solid #4ade80;color:#4ade80;font-size:11px;font-weight:800;padding:5px 12px;border-radius:7px;cursor:pointer;box-shadow:0 0 8px rgba(74,222,128,0.2);transition:all .15s" title="Confirmar presença deste operador">✔ Dar Presença</button>';
+
+    var sectorSelect =
+      '<select onchange="updateRosterMemberSector(\''+m.id+'\', this.value)" title="Clique para alterar o setor oficial" style="background:'+secObj.bg+';border:1px solid '+secObj.border+';color:'+secObj.color+';font-size:11px;font-weight:700;padding:4px 8px;border-radius:6px;cursor:pointer;outline:none">'
+        +'<option value="LIDER" '+(curSec==='LIDER'?'selected':'')+'>👑 Líder</option>'
+        +'<option value="DESMEMBRAMENTO" '+(curSec==='DESMEMBRAMENTO'?'selected':'')+'>📦 Desmembramento</option>'
+        +'<option value="MONTAGEM" '+(curSec==='MONTAGEM'?'selected':'')+'>🛠️ Montagem</option>'
+        +'<option value="LIMPEZA" '+(curSec==='LIMPEZA'?'selected':'')+'>🧹 Limpeza</option>'
+        +'<option value="COMPLEXA" '+(curSec==='COMPLEXA'?'selected':'')+'>🧩 Complexas</option>'
+        +'<option value="QUALIDADE" '+(curSec==='QUALIDADE'?'selected':'')+'>✅ Qualidade</option>'
+      +'</select>';
+
+    var customBadge = m.isCustomAdded
+      ? ' <span style="font-size:9px;font-weight:800;background:rgba(56,189,248,0.15);border:1px solid rgba(56,189,248,0.35);color:#38bdf8;padding:1px 6px;border-radius:4px" title="Colaborador adicionado manualmente">Novo</span>'
+      : '';
+    var healthExcludedBadge = m.excludeFromHealth
+      ? ' <span style="font-size:9px;font-weight:800;background:rgba(245,166,35,0.15);border:1px solid rgba(245,166,35,0.35);color:#f5a623;padding:1px 6px;border-radius:4px" title="Oculto do cálculo da saúde geral da equipe">Fora da Saúde</span>'
+      : '';
+
+    var deleteBtn = '<button class="tbtn" onclick="removeRosterMember(\''+m.id+'\')" style="background:rgba(242,87,87,0.08);border:1px solid rgba(242,87,87,0.25);color:#f25757;font-size:11px;padding:5px 8px;border-radius:7px;cursor:pointer" title="Remover da equipe">🗑️</button>';
+
+    return '<tr class="th-roster-row" data-id="'+m.id+'" data-sector="'+curSec+'" data-status="'+(isPresent?'present':'absent')+'" data-name="'+m.name+'" data-exclude-health="'+(m.excludeFromHealth?'1':'0')+'" style="border-bottom:1px solid rgba(255,255,255,0.05);transition:background .15s">'
+      +'<td style="padding:10px 12px;font-family:var(--mono);font-size:11px;color:var(--muted);width:36px;text-align:center">'+(idx + 1)+'</td>'
+      +'<td style="padding:10px 12px">'
+        +'<div style="display:flex;align-items:center;gap:8px">'
+          +'<span style="font-size:13px;font-weight:700;color:var(--text);cursor:pointer" onclick="openEditRosterModal(\''+m.id+'\')" title="Clique para editar nome">'+m.name+customBadge+healthExcludedBadge+offTag(m)+'</span>'
+          +'<button onclick="openEditRosterModal(\''+m.id+'\')" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px;padding:2px 4px;border-radius:4px" onmouseover="this.style.color=\'var(--accent)\'" onmouseout="this.style.color=\'var(--muted)\'" title="Editar nome e setor">✏️</button>'
+        +'</div>'
+      +'</td>'
+      +'<td style="padding:10px 12px">'+sectorSelect+'</td>'
+      +'<td style="padding:10px 12px;text-align:center" onclick="togglePresencaManual(\''+m.id+'\', '+(!isPresent)+')" title="Clique para alternar presença">'+statusBadge+'</td>'
+      +'<td style="padding:10px 12px;text-align:right">'
+        +'<div style="display:inline-flex;align-items:center;gap:6px">'
+          +actionBtn
+          +'<button class="tbtn" onclick="openEditRosterModal(\''+m.id+'\')" style="background:rgba(255,255,255,0.06);border:1px solid var(--border2);color:var(--text);font-size:11px;font-weight:700;padding:5px 9px;border-radius:7px;cursor:pointer;display:inline-flex;align-items:center;gap:4px" title="Editar nome e setor oficial">'
+            +'✏️ Editar'
+          +'</button>'
+          +deleteBtn
+        +'</div>'
+      +'</td>'
+    +'</tr>';
+  }).join('');
+
+  var overallPct = healthTotal > 0 ? Math.round((healthActive / healthTotal) * 100) : 0;
   var overallColor = '#4ade80';
   if(overallPct < 50) overallColor = '#f25757';
   else if(overallPct < 80) overallColor = '#f5a623';
@@ -9242,27 +10280,95 @@ function renderTeamHealth(dateVal, checkinUids, prodCount, noDataAtAll){
   var collapsed = wasCollapsed;
   container.dataset.collapsed = collapsed ? '1' : '0';
 
-  container.innerHTML =
-    '<div style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;overflow:hidden;margin-bottom:16px;">'
-    // Cabeçalho seguro (SEM onclick global que quebra inputs)
-    +'<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;padding:12px 16px;border-bottom:'+(collapsed?'none':'1px solid var(--border2)')+'">' 
-      +'<div style="display:flex;align-items:center;gap:10px">'
-        +'<div style="width:34px;height:34px;border-radius:9px;background:rgba(167,139,250,0.15);border:1px solid rgba(167,139,250,0.35);display:flex;align-items:center;justify-content:center;font-size:18px">🩺</div>'
-        +'<div>'
-          +'<div style="font-size:13px;font-weight:800;color:var(--text)">Gestão de Equipe — Saúde da Equipe</div>'
+  var isListView = window._teamHealthViewMode === 'list';
+
+  var viewSwitcher =
+    '<div style="display:inline-flex;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:2px;gap:2px">'
+      +'<button onclick="setTeamHealthViewMode(\'list\')" style="background:'+(isListView?'var(--accent)':'transparent')+';color:'+(isListView?'#fff':'var(--muted)')+';border:none;border-radius:6px;padding:5px 12px;font-size:11px;font-weight:800;cursor:pointer;display:flex;align-items:center;gap:5px">📋 Lista de Presença</button>'
+      +'<button onclick="setTeamHealthViewMode(\'cards\')" style="background:'+(!isListView?'var(--accent)':'transparent')+';color:'+(!isListView?'#fff':'var(--muted)')+';border:none;border-radius:6px;padding:5px 12px;font-size:11px;font-weight:800;cursor:pointer;display:flex;align-items:center;gap:5px">🗂️ Cards por Setor</button>'
+    +'</div>';
+
+  var filterToolbar =
+    '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px;background:var(--bg3);border:1px solid var(--border2);border-radius:10px;padding:10px 14px">'
+      +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+        +'<input type="text" id="th-search-roster" placeholder="Buscar colaborador..." oninput="_filterTeamHealthList()"'
+          +' style="background:var(--bg2);border:1px solid var(--border2);border-radius:7px;color:var(--text);padding:6px 12px;font-size:12px;width:200px;outline:none"'
+          +' onfocus="this.style.borderColor=\'var(--accent)\'" onblur="this.style.borderColor=\'var(--border2)\'"'
+        +'>'
+        +'<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">'
+          +'<button class="th-filter-pill" data-sector="ALL" onclick="_filterTeamHealthList(\'ALL\')" style="background:var(--accent);color:#fff;border:1px solid var(--accent);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">Todos ('+rosterTotal+')</button>'
+          +'<button class="th-filter-pill" data-sector="LIDER" onclick="_filterTeamHealthList(\'LIDER\')" style="background:rgba(255,255,255,0.05);color:#fbbf24;border:1px solid rgba(251,191,36,0.3);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">👑 Líder</button>'
+          +'<button class="th-filter-pill" data-sector="DESMEMBRAMENTO" onclick="_filterTeamHealthList(\'DESMEMBRAMENTO\')" style="background:rgba(255,255,255,0.05);color:var(--text);border:1px solid var(--border2);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">Desmembramento</button>'
+          +'<button class="th-filter-pill" data-sector="MONTAGEM" onclick="_filterTeamHealthList(\'MONTAGEM\')" style="background:rgba(255,255,255,0.05);color:var(--text);border:1px solid var(--border2);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">Montagem</button>'
+          +'<button class="th-filter-pill" data-sector="LIMPEZA" onclick="_filterTeamHealthList(\'LIMPEZA\')" style="background:rgba(255,255,255,0.05);color:var(--text);border:1px solid var(--border2);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">Limpeza</button>'
+          +'<button class="th-filter-pill" data-sector="COMPLEXA" onclick="_filterTeamHealthList(\'COMPLEXA\')" style="background:rgba(255,255,255,0.05);color:var(--text);border:1px solid var(--border2);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">Complexas</button>'
+          +'<button class="th-filter-pill" data-sector="QUALIDADE" onclick="_filterTeamHealthList(\'QUALIDADE\')" style="background:rgba(255,255,255,0.05);color:var(--text);border:1px solid var(--border2);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">Qualidade</button>'
+          +'<button class="th-filter-pill" data-sector="PRESENT" onclick="_filterTeamHealthList(\'PRESENT\')" style="background:rgba(255,255,255,0.05);color:#4ade80;border:1px solid rgba(74,222,128,0.3);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">🟢 Presentes ('+rosterActive+')</button>'
+          +'<button class="th-filter-pill" data-sector="ABSENT" onclick="_filterTeamHealthList(\'ABSENT\')" style="background:rgba(255,255,255,0.05);color:#f25757;border:1px solid rgba(242,87,87,0.3);border-radius:6px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer">🔴 Ausentes ('+(rosterTotal - rosterActive)+')</button>'
         +'</div>'
       +'</div>'
-      // Controles à direita (Saúde Geral, Date picker e Toggle explicitamente separados)
+      +'<div style="display:flex;align-items:center;gap:8px">'
+        +'<div style="display:inline-flex;align-items:center;background:var(--bg2);border:1px solid var(--border2);border-radius:7px;padding:2px;gap:2px">'
+          +'<button onclick="exportarPresencaImagem(\'png\')" title="Exportar como imagem PNG" style="background:transparent;color:#38bdf8;border:none;border-radius:5px;padding:4px 8px;font-size:11px;font-weight:800;cursor:pointer;display:inline-flex;align-items:center;gap:4px">📸 PNG</button>'
+          +'<div style="width:1px;height:12px;background:var(--border2)"></div>'
+          +'<button onclick="exportarPresencaImagem(\'jpeg\')" title="Exportar como imagem JPEG" style="background:transparent;color:#38bdf8;border:none;border-radius:5px;padding:4px 8px;font-size:11px;font-weight:800;cursor:pointer;display:inline-flex;align-items:center;gap:4px">JPEG</button>'
+        +'</div>'
+        +'<button onclick="openAddPersonModal()" style="background:var(--accent);border:none;color:#fff;font-size:11px;font-weight:800;padding:6px 14px;border-radius:7px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;box-shadow:0 0 10px rgba(56,189,248,0.25)">'
+          +'➕ Adicionar Pessoa'
+        +'</button>'
+        +'<button onclick="marcarTodosPresentesManual()" style="background:rgba(74,222,128,0.14);border:1px solid #4ade80;color:#4ade80;font-size:11px;font-weight:800;padding:6px 14px;border-radius:7px;cursor:pointer;display:inline-flex;align-items:center;gap:6px">'
+          +'✔ Confirmar Todos'
+        +'</button>'
+      +'</div>'
+    +'</div>';
+
+  var tableContainerHtml =
+    '<div style="overflow-x:auto;border:1px solid var(--border2);border-radius:12px;background:var(--bg3)">'
+      +'<table style="width:100%;border-collapse:collapse;text-align:left">'
+        +'<thead>'
+          +'<tr style="border-bottom:1px solid var(--border2);background:rgba(255,255,255,0.03);color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.05em">'
+            +'<th style="padding:10px 12px;width:36px;text-align:center">#</th>'
+            +'<th style="padding:10px 12px">Colaborador</th>'
+            +'<th style="padding:10px 12px">Setor Oficial</th>'
+            +'<th style="padding:10px 12px;text-align:center">Presença</th>'
+            +'<th style="padding:10px 12px;text-align:right">Ação Manual</th>'
+          +'</tr>'
+        +'</thead>'
+        +'<tbody>'
+          +tableRowsHtml
+        +'</tbody>'
+      +'</table>'
+    +'</div>';
+
+  container.innerHTML =
+    '<div style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;overflow:hidden;margin-bottom:16px;">'
+    +'<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;padding:12px 16px;border-bottom:'+(collapsed?'none':'1px solid var(--border2)')+'">' 
+      +'<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">'
+        +'<div style="display:flex;align-items:center;gap:10px">'
+          +'<div style="width:34px;height:34px;border-radius:9px;background:rgba(167,139,250,0.15);border:1px solid rgba(167,139,250,0.35);display:flex;align-items:center;justify-content:center;font-size:18px">🩺</div>'
+          +'<div>'
+            +'<div style="font-size:13px;font-weight:800;color:var(--text)">Gestão de Equipe — Lista de Presença & Saúde</div>'
+          +'</div>'
+        +'</div>'
+        +viewSwitcher
+      +'</div>'
       +'<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">'
         +'<div style="display:flex;align-items:center;gap:10px;background:var(--bg3);border:1px solid var(--border2);border-radius:10px;padding:6px 12px">'
           +'<div style="text-align:right">'
-            +'<div style="font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Saúde Geral da Equipe <span style="font-weight:600;text-transform:none;letter-spacing:0">(sem Eletrônica)</span></div>'
-            +'<div style="font-size:10px;color:var(--text);margin-top:2px"><span style="color:#4ade80;font-weight:800">'+overallActive+' presentes</span> de <b>'+overallTotal+'</b></div>'
+            +'<div style="font-size:9px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em">Saúde da Equipe <span style="font-weight:600;text-transform:none;letter-spacing:0">('+healthTotal+' colaboradores)</span></div>'
+            +'<div style="font-size:10px;color:var(--text);margin-top:2px"><span style="color:#4ade80;font-weight:800">'+healthActive+' presentes</span> de <b>'+healthTotal+'</b>'
+              +(rosterTotal > healthTotal ? ' <span style="font-size:9px;color:var(--muted);opacity:.85">('+(rosterTotal - healthTotal)+' fora da saúde)</span>' : '')
+            +'</div>'
           +'</div>'
           +'<div style="font-size:18px;font-weight:900;color:'+overallColor+';font-family:var(--mono);line-height:1;background:rgba(0,0,0,0.25);border:1px solid '+overallColor+'44;padding:4px 10px;border-radius:8px;box-shadow:0 0 10px '+overallColor+'33">'+overallPct+'%</div>'
         +'</div>'
         +prodBlock
         +'<div style="display:flex;align-items:center;gap:6px">'
+          +'<div style="display:inline-flex;align-items:center;background:var(--bg3);border:1px solid var(--border2);border-radius:7px;padding:2px;gap:2px">'
+            +'<button onclick="exportarPresencaImagem(\'png\')" title="Exportar Lista de Presença como PNG" style="background:transparent;color:var(--text);border:none;border-radius:5px;padding:4px 8px;font-size:11px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:3px"><span>📸 PNG</span></button>'
+            +'<div style="width:1px;height:12px;background:var(--border2)"></div>'
+            +'<button onclick="exportarPresencaImagem(\'jpeg\')" title="Exportar Lista de Presença como JPEG" style="background:transparent;color:var(--text);border:none;border-radius:5px;padding:4px 8px;font-size:11px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:3px"><span>JPEG</span></button>'
+          +'</div>'
           +'<input type="date" id="team-health-date" value="'+(dateVal || new Date().toISOString().slice(0,10))+'"'
             +' onchange="loadTeamHealthHistory()"'
             +' style="background:var(--bg3);border:1px solid var(--border2);border-radius:7px;color:var(--text);padding:4px 8px;font-size:12px;font-family:var(--font);outline:none;cursor:pointer;position:relative;z-index:10;"'
@@ -9275,19 +10381,38 @@ function renderTeamHealth(dateVal, checkinUids, prodCount, noDataAtAll){
         +'</div>'
       +'</div>'
     +'</div>'
-    // Corpo colapsável
     +'<div class="th-body" style="display:'+(collapsed?'none':'block')+';padding:16px">'
       +(noDataAtAll
         ? '<div style="display:flex;align-items:center;gap:10px;background:rgba(245,166,35,0.1);border:1px solid rgba(245,166,35,0.35);border-radius:10px;padding:10px 14px;margin-bottom:12px">'
           + '<span style="font-size:16px">ℹ️</span>'
-          + '<div style="font-size:11px;color:var(--text)">Ainda não há registros de check-in (login por PIN) para esta data — os números abaixo podem não refletir a presença real desse dia.</div>'
+          + '<div style="font-size:11px;color:var(--text)">Ainda não há registros de presença para esta data. Use os botões abaixo para confirmar a chamada do dia.</div>'
           + '</div>'
         : '')
-      +'<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));gap:12px">'
-        +cardsHtml
-      +'</div>'
+      +(isListView
+        ? (filterToolbar + tableContainerHtml)
+        : ('<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));gap:12px">'+cardsHtml+'</div>')
+      )
     +'</div>'
   +'</div>';
+
+  window._lastTeamHealthData = {
+    dateVal: dateVal,
+    prodCount: prodCount,
+    roster: roster,
+    healthRoster: healthRoster,
+    healthTotal: healthTotal,
+    healthActive: healthActive,
+    rosterTotal: rosterTotal,
+    rosterActive: rosterActive,
+    overallPct: overallPct,
+    overallColor: overallColor,
+    baseSectors: baseSectors,
+    isMemberPresent: isMemberPresent
+  };
+
+  if (isListView && typeof _filterTeamHealthList === 'function') {
+    _filterTeamHealthList();
+  }
 }
 
 function setAdmFilter(f,btn){
@@ -23745,10 +24870,28 @@ function _qualDiaKey(d){ return new Date(d).toDateString().replace(/ /g,'_'); }
 // (aba Admin): mesmos setores de produção, incluindo ocultos/inativos, com o
 // setor Eletrônica isolado (fora do percentual).
 function _qualEquipeElegivel(){
+  if (typeof seGetActiveRoster === 'function') {
+    const active = seGetActiveRoster().filter(m => !m.excludeFromHealth);
+    const all = Array.isArray(typeof users !== 'undefined' ? users : []) ? users : [];
+    const res = [];
+    active.forEach(m => {
+      let matched = null;
+      for (const u of all) {
+        const raw = (u.raw && typeof u.raw === 'object') ? u.raw : {};
+        const uName = raw.name || raw.nome || u.name || '';
+        const match = (typeof seMatchRoster === 'function') ? seMatchRoster(uName) : null;
+        if (match && match.id === m.id) {
+          matched = u;
+          break;
+        }
+      }
+      res.push(matched || { id: 'roster_' + m.id, name: m.name, sector: m.defaultSector });
+    });
+    return res;
+  }
   const all = Array.isArray(typeof users !== 'undefined' ? users : []) ? users : [];
-  const base = ['DESMEMBRAMENTO','MONTAGEM','LIMPEZA','COMPLEXA','COMPLEXAS','QUALIDADE'];
+  const base = ['LIDER','DESMEMBRAMENTO','MONTAGEM','LIMPEZA','COMPLEXA','COMPLEXAS','QUALIDADE'];
   const keys = new Set(base);
-  // setores personalizados do tipo operador também contam (igual ao painel)
   (typeof _setores !== 'undefined' && Array.isArray(_setores) ? _setores : [])
     .map(s => String(s || '').toUpperCase().trim())
     .filter(s => s && s !== 'ELETRÔNICA' && s !== 'ELETRONICA')
@@ -32939,15 +34082,66 @@ let _seDadosRelatorio = null;
 let _seCache = null;
 
 const SE_SETORES = [
+  { key: 'LIDER',          name: 'Líder',          icon: '👑', color: '#fbbf24', alias: ['LÍDER'] },
   { key: 'DESMEMBRAMENTO', name: 'Desmembramento', icon: '📦', color: '#38bdf8' },
   { key: 'MONTAGEM',       name: 'Montagem',       icon: '🛠️', color: '#4ade80' },
   { key: 'LIMPEZA',        name: 'Limpeza',        icon: '🧹', color: '#a78bfa' },
   { key: 'COMPLEXA',       name: 'Complexas',      icon: '🧩', color: '#f5a623', alias: ['COMPLEXAS'] },
   { key: 'QUALIDADE',      name: 'Qualidade',      icon: '✅', color: '#22d3ee' },
-  { key: 'ELETRÔNICA',     name: 'Eletrônica',     icon: '🔌', color: '#fb923c', foraDaSaude: true },
 ];
-const SE_SETORES_FORA_SAUDE = new Set(['ELETRÔNICA','ELETRONICA']);
+const SE_SETORES_FORA_SAUDE = new Set();
 const SE_AJUSTES_EQUIPE = {};
+
+// Quadro Fixo Oficial de 32 Membros
+const SE_ROSTER_32 = [
+  { id: 'leandro_schmidt', name: 'Leandro Schmidt', defaultSector: 'DESMEMBRAMENTO', aliases: ['leandro schmidt', 'leandro'] },
+  { id: 'geraldo_polanski', name: 'Geraldo Jose Polanski Junior', defaultSector: 'DESMEMBRAMENTO', aliases: ['geraldo jose polanski junior', 'geraldo polanski', 'geraldo', 'junior polanski'] },
+  { id: 'adilson_hammes', name: 'Adilson Luiz Hammes', defaultSector: 'COMPLEXA', aliases: ['adilson luiz hammes', 'adilson hammes', 'adilson'] },
+  { id: 'ana_claudia', name: 'Ana Claudia Risso Harkbart Telles', defaultSector: 'DESMEMBRAMENTO', aliases: ['ana claudia risso harkbart telles', 'ana claudia telles', 'ana claudia harkbart', 'ana claudia'] },
+  { id: 'angel_romero', name: 'Angel Xavier Quevedo Romero', defaultSector: 'MONTAGEM', aliases: ['angel xavier quevedo romero', 'angel romero', 'angel'] },
+  { id: 'angelo_prebianca', name: 'Angelo Gabriel Prebianca', defaultSector: 'MONTAGEM', aliases: ['angelo gabriel prebianca', 'angelo gabriel', 'angelo prebianca', 'angelo'] },
+  { id: 'cleiton_tummler', name: 'Cleiton Tummler', defaultSector: 'MONTAGEM', aliases: ['cleiton tummler', 'cleiton'] },
+  { id: 'douglas_maia', name: 'Douglas Ricardo da Maia', defaultSector: 'DESMEMBRAMENTO', aliases: ['douglas ricardo da maia', 'douglas maia', 'douglas'] },
+  { id: 'eduardo_saldanha', name: 'Eduardo Saldanha', defaultSector: 'MONTAGEM', aliases: ['eduardo saldanha', 'eduardo'] },
+  { id: 'frederico_azambuja', name: 'Frederico dos Santos Azambuja', defaultSector: 'LIMPEZA', aliases: ['frederico dos santos azambuja', 'frederico azambuja', 'frederico'] },
+  { id: 'gabriel_mikuska', name: 'Gabriel de Brito Mikuska', defaultSector: 'LIMPEZA', aliases: ['gabriel de brito mikuska', 'gabriel mikuska', 'mikuska'] },
+  { id: 'gabriel_feitosa', name: 'Gabriel Feitosa Borges', defaultSector: 'LIMPEZA', aliases: ['gabriel status borges', 'gabriel feitosa borges', 'gabriel status', 'gabriel feitosa', 'feitosa'] },
+  { id: 'gabriel_martins', name: 'Gabriel Henrique Martins', defaultSector: 'LIMPEZA', aliases: ['gabriel henrique martins', 'gabriel martins'] },
+  { id: 'gabriel_poletini', name: 'Gabriel Matheus Poletini', defaultSector: 'QUALIDADE', aliases: ['gabriel matheus poletini', 'gabriel poletini', 'poletini', 'gabriel'] },
+  { id: 'guilherme_harger', name: 'Guilherme Henrique da Silva Harger', defaultSector: 'LIMPEZA', aliases: ['guilherme henrique da silva harger', 'guilherme harger', 'harger'] },
+  { id: 'henrique_soares', name: 'Henrique Soares', defaultSector: 'LIMPEZA', aliases: ['henrique soares', 'henrique marques soares', 'henrique marques'] },
+  { id: 'idenilson_voigt', name: 'Idenilson Voigt', defaultSector: 'COMPLEXA', aliases: ['idenilson voigt', 'idenilson'] },
+  { id: 'jackson_deretti', name: 'Jackson Natalino Deretti', defaultSector: 'COMPLEXA', aliases: ['jackson natalino deretti', 'jackson deretti', 'deretti'] },
+  { id: 'jean_blachechen', name: 'Jean Richards Blachechen', defaultSector: 'COMPLEXA', aliases: ['jean richards blachechen', 'jean blachechen', 'blachechen'] },
+  { id: 'jhoan_medina', name: 'Jhoan Alberto Linares Medina', defaultSector: 'COMPLEXA', aliases: ['jhoan alberto linares medina', 'jhoan medina', 'jhoan'] },
+  { id: 'joelma_miguel', name: 'Joelma Albuquerque Miguel', defaultSector: 'LIMPEZA', aliases: ['joelma albuquerque miguel', 'joelma miguel', 'joelma'] },
+  { id: 'joao_gama', name: 'Joao Gabriel Gripp Gama', defaultSector: 'MONTAGEM', aliases: ['joao gabriel gripp gama', 'joao gama', 'joao gabriel gama', 'joão gama'] },
+  { id: 'luis_oliveira', name: 'Luis Guilherme Gomes de Oliveira', defaultSector: 'COMPLEXA', aliases: ['luis guilherme gomes de oliveira', 'luis oliveira', 'luis guilherme'] },
+  { id: 'malcolm_pandini', name: 'Malcolm Ryan Pandini', defaultSector: 'QUALIDADE', aliases: ['malcolm ryan pandini', 'malcolm pandini', 'malcolm'] },
+  { id: 'matheus_daumann', name: 'Matheus Jeferson Daumann', defaultSector: 'LIMPEZA', aliases: ['matheus jeferson daumann', 'matheus daumann', 'matheus'] },
+  { id: 'neilor_cabral', name: 'Neilor Cabral', defaultSector: 'DESMEMBRAMENTO', aliases: ['neilor cabral', 'neilor'] },
+  { id: 'ricardo_zezinho', name: 'Ricardo Zezinho da Silva', defaultSector: 'MONTAGEM', aliases: ['ricardo zezinho da silva', 'ricardo zezinho', 'zezinho'] },
+  { id: 'rubens_miyamoto', name: 'Rubens Kiyoshi Miyamoto', defaultSector: 'COMPLEXA', aliases: ['rubens kiyoshi miyamoto', 'rubens miyamoto', 'miyamoto'] },
+  { id: 'victor_cunha', name: 'Victor Franca da Cunha', defaultSector: 'LIMPEZA', aliases: ['victor franca da cunha', 'victor cunha'] },
+  { id: 'victor_carradore', name: 'Victor Gabriel Carradore de Andrade', defaultSector: 'LIMPEZA', aliases: ['victor gabriel carradore de andrade', 'victor gabriel', 'carradore'] },
+  { id: 'willian_cavalcante', name: 'Willian Cavalcante', defaultSector: 'MONTAGEM', aliases: ['willian cavalcante', 'willian'] },
+  { id: 'livre', name: 'LIVRE', defaultSector: 'DESMEMBRAMENTO', aliases: ['livre', 'vaga livre', 'reserva', 'scrap'] },
+];
+
+function seMatchRoster(dbName) {
+  const n = String(dbName || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  if (!n) return null;
+  for (const item of SE_ROSTER_32) {
+    if (String(item.name).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() === n) return item;
+    if (item.aliases && item.aliases.some(a => String(a).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() === n)) return item;
+  }
+  for (const item of SE_ROSTER_32) {
+    const iname = String(item.name).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+    if (iname.includes(n) || n.includes(iname)) return item;
+  }
+  return null;
+}
+
 const SE_DIAS_SEMANA = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
 const SE_MESES_PT = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
@@ -33125,12 +34319,12 @@ window.seGerarRelatorio = async function() {
     if (uErr) throw uErr;
     const users = (usersRaw || []).map(r => {
       const raw = (r.raw && typeof r.raw === 'object') ? r.raw : {};
-      const name   = r.name   || raw.name   || raw.nome   || String(r.id);
-      const sector = r.sector || raw.sector  || raw.setor  || '';
-      const active = r.active !== undefined ? r.active : (raw.active !== false);
-      const hidden = r.hidden !== undefined ? !!r.hidden  : !!raw.hidden;
+      const name   = raw.name   || raw.nome   || r.name   || String(r.id);
+      const sector = raw.sector || raw.setor  || r.sector || '';
+      const active = raw.active !== undefined ? (raw.active !== false) : (r.active !== undefined ? r.active : true);
+      const hidden = raw.hidden !== undefined ? !!raw.hidden : !!r.hidden;
       return { id: String(r.id), name, sector: String(sector).toUpperCase().trim(), active, hidden };
-    }).filter(u => u.sector);
+    });
 
     seSetStatus(`Buscando check-ins de ${mesLabel}...`, true);
     const BATCH = 40;
@@ -33181,13 +34375,31 @@ window.seGerarRelatorio = async function() {
       if (prodMap[r.date_key] !== undefined) prodMap[r.date_key]++;
     });
 
-    _seCache = { users, hist, checkinMap, prodMap, diasDoMes, dateKeys, mesLabel, ano, mes };
+    seSetStatus('Buscando presenças manuais...', true);
+    let manualPresencasAll = {};
+    try {
+      const { data: mpData } = await _supa.from('app_config').select('value').eq('key', 'manual_presencas').maybeSingle();
+      if (mpData && mpData.value && typeof mpData.value === 'object') {
+        manualPresencasAll = mpData.value;
+        localStorage.setItem('se_manual_presencas', JSON.stringify(mpData.value));
+      } else {
+        manualPresencasAll = JSON.parse(localStorage.getItem('se_manual_presencas') || '{}');
+      }
+    } catch(e) {
+      manualPresencasAll = JSON.parse(localStorage.getItem('se_manual_presencas') || '{}');
+    }
+
+    _seCache = { users, hist, checkinMap, prodMap, diasDoMes, dateKeys, mesLabel, ano, mes, manualPresencasAll };
     seSetStatus('Montando relatório...', true);
     seRecalcularRelatorio();
     seShowContent(true);
 
   } catch(e) {
-    seSetStatus('❌ Erro: ' + e.message, false);
+    let msg = e.message || String(e);
+    if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('CERT')) {
+      msg += ' — Falha de conexão com o banco. Verifique sua conexão de rede ou certificado corporativo/VPN e tente novamente.';
+    }
+    seSetStatus('❌ Erro: ' + msg, false);
     console.error(e);
   }
 };
@@ -33197,65 +34409,158 @@ function seGetSetorPorKey(key) {
 }
 
 function seRecalcularRelatorio() {
-  const { users, hist, checkinMap, prodMap, diasDoMes, dateKeys, mesLabel, ano, mes } = _seCache;
+  const { users, hist, checkinMap, prodMap, diasDoMes, dateKeys, mesLabel, ano, mes, manualPresencasAll } = _seCache;
+  const mpAll = (manualPresencasAll && typeof manualPresencasAll === 'object') ? manualPresencasAll : {};
 
-  const elegiveis = users.filter(u => !SE_SETORES_FORA_SAUDE.has(u.sector) && seGetSetorPorKey(u.sector));
-  const naEquipe = (u, d) => {
-    if (seExcluidoNoDia(u.id, d)) return false; 
-    const aj = SE_AJUSTES_EQUIPE[u.id] || SE_AJUSTES_EQUIPE[u.name] || {};
-    const h = hist[u.id];
-    if (!h && !aj.entrada && !(u.hidden && u.active !== false)) return false;
-    const entrada = aj.entrada ? new Date(aj.entrada.split('-')[0], aj.entrada.split('-')[1]-1, aj.entrada.split('-')[2]) : (h ? h.first : null);
-    let saida = null;
-    if (aj.saida) saida = new Date(aj.saida.split('-')[0], aj.saida.split('-')[1]-1, aj.saida.split('-')[2]);
-    else if (u.active === false) { if (!h) return false; saida = h.last; }
-    if (entrada && d < entrada) return false;
-    if (saida && d > saida) return false;
-    return true;
+  const activeRoster = (typeof seGetActiveRoster === 'function') ? seGetActiveRoster() : SE_ROSTER_32;
+
+  // Monta os membros do quadro oficial da equipe (base + adicionados - removidos)
+  const roster = activeRoster.map(item => ({
+    id: item.id,
+    name: item.name,
+    sector: item.defaultSector,
+    uids: new Set(),
+    dbUsers: [],
+    aliases: item.aliases || [],
+    excludeFromHealth: !!item.excludeFromHealth
+  }));
+
+  // Associa operadores do banco aos membros do quadro
+  (users || []).forEach(u => {
+    const match = seMatchRoster(u.name);
+    if (match) {
+      const slot = roster.find(r => r.id === match.id);
+      if (slot) {
+        slot.uids.add(String(u.id));
+        slot.dbUsers.push(u);
+        const secKey = String(u.sector || '').toUpperCase().trim();
+        if (secKey && seGetSetorPorKey(secKey)) {
+          slot.sector = secKey;
+        }
+      }
+    }
+  });
+
+  const healthRoster = roster.filter(m => !m.excludeFromHealth);
+
+  const isMemberPresentOnDay = (m, dayKey, ciSet) => {
+    const dayMp = mpAll[dayKey] || {};
+    if (dayMp[m.id] === true) return true;
+    if (dayMp[m.id] === false) return false;
+    for (const uid of m.uids) {
+      if (ciSet.has(uid)) return true;
+    }
+    return false;
   };
-  const semHistorico = elegiveis.filter(u => !hist[u.id] && u.hidden && u.active !== false && !(SE_AJUSTES_EQUIPE[u.id] || SE_AJUSTES_EQUIPE[u.name]));
 
   const diasStats = diasDoMes.map(d => {
     const k = seDateKey(d);
-    const ci = checkinMap[k];
-    const semDados = ci.size === 0;
-    const equipeDia = elegiveis.filter(u => naEquipe(u, d));
-    const total = equipeDia.length;
-    const listaAus = semDados ? [] : equipeDia
-      .filter(u => !ci.has(u.id))
-      .map(u => ({ id: u.id, name: u.name, sector: u.sector }))
-      .sort((x, y) => x.name.localeCompare(y.name, 'pt-BR'));
-    const presentes = semDados ? 0 : total - listaAus.length;
+    const ci = checkinMap[k] || new Set();
+    const dayMp = mpAll[k] || {};
+    const hasManual = Object.keys(dayMp).length > 0;
+    const semDados = ci.size === 0 && !hasManual;
+
+    if (semDados) {
+      return {
+        iso: seIsoDate(d),
+        date: d,
+        dayOfWeek: SE_DIAS_SEMANA[d.getDay()],
+        k,
+        presentes: 0,
+        ausentes: 0,
+        total: healthRoster.length,
+        listaAus: [],
+        pct: null,
+        prod: prodMap[k] || 0,
+        semDados: true
+      };
+    }
+
+    const listaPresentes = [];
+    const listaAus = [];
+
+    roster.forEach(m => {
+      const isExcl = m.excludeFromHealth || seExcluidoNoDia(m.id, d) || Array.from(m.uids).some(uid => seExcluidoNoDia(uid, d));
+      if (isExcl) return;
+
+      const isPresent = isMemberPresentOnDay(m, k, ci);
+      if (isPresent) {
+        listaPresentes.push(m);
+      } else {
+        const repUser = m.dbUsers[0];
+        listaAus.push({
+          id: repUser ? repUser.id : m.id,
+          rosterId: m.id,
+          name: m.name,
+          sector: m.sector
+        });
+      }
+    });
+
+    const total = listaPresentes.length + listaAus.length;
+    const presentes = listaPresentes.length;
     const ausentes = listaAus.length;
-    const pct = semDados ? null : (total > 0 ? Math.round((presentes/total)*100) : 0);
-    return { iso: seIsoDate(d), date: d, dayOfWeek: SE_DIAS_SEMANA[d.getDay()], k, presentes, ausentes, total, listaAus, pct, prod: prodMap[k] || 0, semDados };
+    const pct = total > 0 ? Math.round((presentes / total) * 100) : 0;
+    return {
+      iso: seIsoDate(d),
+      date: d,
+      dayOfWeek: SE_DIAS_SEMANA[d.getDay()],
+      k,
+      presentes,
+      ausentes,
+      total,
+      listaAus,
+      pct,
+      prod: prodMap[k] || 0,
+      semDados: false
+    };
   });
-  const ultimoComDados = [...diasStats].reverse().find(d => !d.semDados);
-  const totalEq = ultimoComDados
-    ? ultimoComDados.total
-    : elegiveis.filter(u => naEquipe(u, diasDoMes[diasDoMes.length - 1])).length;
+
+  const totalEq = healthRoster.length;
 
   const setoresComStats = SE_SETORES.map(sec => {
-    const doSetor = users.filter(u => sec.alias ? sec.alias.concat([sec.key]).includes(u.sector) : u.sector === sec.key);
+    const secKey = sec.key;
+    const aliasList = sec.alias ? sec.alias.concat([secKey]) : [secKey];
+    const doSetor = roster.filter(m => aliasList.includes(m.sector) && !m.excludeFromHealth);
+
     let somaPresentes = 0, somaMembros = 0, diasComDados = 0;
     const membrosPresencaTotal = {}, membrosDiasNaEquipe = {};
-    doSetor.forEach(u => { membrosPresencaTotal[u.id] = 0; membrosDiasNaEquipe[u.id] = 0; });
+    doSetor.forEach(m => { membrosPresencaTotal[m.id] = 0; membrosDiasNaEquipe[m.id] = 0; });
 
     diasStats.forEach(dia => {
       if (dia.semDados) return;
-      const ci = checkinMap[dia.k];
-      const equipe = doSetor.filter(u => naEquipe(u, dia.date));
       diasComDados++;
-      somaMembros += equipe.length;
-      equipe.forEach(u => {
-        membrosDiasNaEquipe[u.id]++;
-        if (ci.has(u.id)) { somaPresentes++; membrosPresencaTotal[u.id]++; }
+      const ci = checkinMap[dia.k] || new Set();
+
+      doSetor.forEach(m => {
+        const isExcl = seExcluidoNoDia(m.id, dia.date) || Array.from(m.uids).some(uid => seExcluidoNoDia(uid, dia.date));
+        if (isExcl) return;
+
+        membrosDiasNaEquipe[m.id]++;
+        somaMembros++;
+
+        const isPresent = isMemberPresentOnDay(m, dia.k, ci);
+        if (isPresent) {
+          somaPresentes++;
+          membrosPresencaTotal[m.id]++;
+        }
       });
     });
 
-    const membros = doSetor.filter(u => membrosDiasNaEquipe[u.id] > 0);
+    const membros = doSetor.map(m => {
+      const repUser = m.dbUsers[0];
+      return {
+        id: repUser ? repUser.id : m.id,
+        rosterId: m.id,
+        name: m.name,
+        sector: m.sector,
+        active: repUser ? repUser.active : true,
+        hidden: repUser ? repUser.hidden : false,
+      };
+    });
+
     const pctMedio = somaMembros > 0 ? Math.round((somaPresentes / somaMembros) * 100) : null;
-    const mediaTotal = diasComDados > 0 ? somaMembros / diasComDados : 0;
+    const mediaTotal = diasComDados > 0 ? (somaMembros / diasComDados) : doSetor.length;
     return { ...sec, membros, pctMedio, somaPresentes, diasComDados, mediaTotal, membrosPresencaTotal, membrosDiasNaEquipe };
   });
 
@@ -33266,28 +34571,51 @@ function seRecalcularRelatorio() {
   const mediaSaude = diasComCheckin.length ? Math.round(diasComCheckin.reduce((a,d) => a + (d.pct||0), 0) / diasComCheckin.length) : null;
 
   const refFim = new Date(Math.min(Date.now(), diasDoMes[diasDoMes.length - 1].getTime()));
-  const auditoria = users.filter(u => seGetSetorPorKey(u.sector)).map(u => {
-      let diasEq = 0, diasPres = 0;
-      diasStats.forEach(dia => {
-        if (dia.semDados) return;
-        if (naEquipe(u, dia.date)) { diasEq++; if (checkinMap[dia.k].has(u.id)) diasPres++; }
-      });
-      const h = hist[u.id];
-      const diasParado = (h && u.active !== false) ? Math.floor((refFim - h.last) / 86400000) : 0;
-      return {
-        id: u.id, name: u.name, sector: u.sector, active: u.active !== false, hidden: !!u.hidden,
-        first: h ? h.first : null, last: h ? h.last : null, diasEq, diasPres,
-        semHist: !h, parado: diasParado > 30, diasParado,
-        foraSaude: SE_SETORES_FORA_SAUDE.has(u.sector)
-      };
-    })
-    .filter(a => a.diasEq > 0)
-    .sort((x, y) => x.sector.localeCompare(y.sector, 'pt-BR') || x.name.localeCompare(y.name, 'pt-BR'));
+  const auditoria = roster.map(m => {
+    let diasEq = 0, diasPres = 0;
+    diasStats.forEach(dia => {
+      if (dia.semDados) return;
+      const isExcl = seExcluidoNoDia(m.id, dia.date) || Array.from(m.uids).some(uid => seExcluidoNoDia(uid, dia.date));
+      if (!isExcl) {
+        diasEq++;
+        const ci = checkinMap[dia.k] || new Set();
+        if (isMemberPresentOnDay(m, dia.k, ci)) diasPres++;
+      }
+    });
+
+    let first = null, last = null;
+    m.uids.forEach(uid => {
+      const h = hist[uid];
+      if (h) {
+        if (!first || h.first < first) first = h.first;
+        if (!last || h.last > last) last = h.last;
+      }
+    });
+
+    const repUser = m.dbUsers[0];
+    const diasParado = (last && repUser && repUser.active !== false) ? Math.floor((refFim - last) / 86400000) : 0;
+    return {
+      id: repUser ? repUser.id : m.id,
+      rosterId: m.id,
+      name: m.name,
+      sector: m.sector,
+      active: repUser ? repUser.active !== false : true,
+      hidden: repUser ? !!repUser.hidden : false,
+      first,
+      last,
+      diasEq,
+      diasPres,
+      semHist: !first,
+      parado: diasParado > 30,
+      diasParado,
+      foraSaude: false
+    };
+  }).sort((x, y) => x.sector.localeCompare(y.sector, 'pt-BR') || x.name.localeCompare(y.name, 'pt-BR'));
 
   _seDadosRelatorio = { mesLabel, ano, mes, diasStats, setoresComStats, totalEq, mediaSaude, totalProd, prodForaDaTabela, diasComCheckin, auditoria };
 
   seRenderRelatorio(_seDadosRelatorio);
-  seSetStatus(`✅ Relatório gerado — ${diasComCheckin.length} dias úteis com dados.` +
+  seSetStatus(`✅ Relatório gerado (Quadro fixo de 32 membros) — ${diasComCheckin.length} dias úteis com dados.` +
     (Object.keys(SE_EXCL).length ? ` · ${Object.keys(SE_EXCL).length} exclusão(ões) manual(is).` : ''), false);
 }
 
@@ -33302,7 +34630,7 @@ function seRenderKPIs({ mediaSaude, totalEq, totalProd, prodForaDaTabela, diasCo
   const cor = seHealthColor(mediaSaude);
   const kpis = [
     { label: 'Saúde Média do Mês', value: mediaSaude !== null ? mediaSaude + '%' : '—', color: cor, sub: 'Presença média diária' },
-    { label: 'Total da Equipe', value: totalEq, color: '#38bdf8', sub: 'Quadro no último dia com dados' },
+    { label: 'Total da Equipe', value: totalEq || 32, color: '#38bdf8', sub: '32 membros cadastrados' },
     { label: 'Liberações no Mês', value: totalProd, color: '#4ade80', sub: 'Registros de qualidade' },
     { label: 'Dias com Dados', value: diasComCheckin.length, color: '#a78bfa', sub: `de ${diasStats.length} dias úteis` },
     { label: 'Melhor Dia', value: diasComCheckin.length ? (diasComCheckin.reduce((b,d)=>d.pct>b.pct?d:b).pct + '%') : '—', color: '#4ade80', sub: diasComCheckin.length ? seFmtDate(diasComCheckin.reduce((b,d)=>d.pct>b.pct?d:b).iso) : '' },
@@ -33326,8 +34654,9 @@ function seRenderSetores(setoresComStats) {
     const ausMediaMes = sec.mediaTotal > 0 ? Math.max(0, sec.mediaTotal - parseFloat(mediaPresentes)).toFixed(1) : '0';
 
     const chips = sec.membros.map(u => {
-      const diasPresente = sec.membrosPresencaTotal[u.id] || 0;
-      const diasEq = sec.membrosDiasNaEquipe[u.id] || 0;
+      const mKey = u.rosterId || u.id;
+      const diasPresente = sec.membrosPresencaTotal[mKey] || 0;
+      const diasEq = sec.membrosDiasNaEquipe[mKey] || 0;
       const pctPessoa = diasEq > 0 ? Math.round((diasPresente/diasEq)*100) : 0;
       const chipCor = seHealthColor(pctPessoa);
       const tag = (!u.active ? ' <span style="opacity:.7;font-size:8px">(Inat.)</span>' : '') + (u.hidden ? ' <span style="opacity:.7;font-size:8px">(Ocult.)</span>' : '');
@@ -33496,27 +34825,406 @@ function seRenderAuditoria(lista) {
 window.seExportarExcel = function() {
   if (!_seDadosRelatorio) return alert('Gere o relatório primeiro.');
   if (typeof XLSX === 'undefined') return alert('Biblioteca XLSX não carregada.');
-  const { mesLabel, diasStats, setoresComStats, auditoria } = _seDadosRelatorio;
+  const { mesLabel, diasStats, setoresComStats, auditoria, mediaSaude, totalEq, totalProd, diasComCheckin } = _seDadosRelatorio;
 
-  const diasDados = [['Data', 'Dia', 'Presentes', 'Ausentes', 'Total Equipe', 'Saúde (%)', 'Liberações', 'Quem faltou'],
-    ...diasStats.map(d => [seFmtDate(d.iso), d.dayOfWeek, d.semDados ? null : d.presentes, d.semDados ? null : d.ausentes, d.semDados ? null : d.total, d.semDados ? null : (d.pct / 100), d.prod || null, d.semDados ? null : d.listaAus.map(a => a.name).join(', ')])];
-  const setoresDados = [['Setor', 'Média de Membros/dia', 'Méd. Presentes/dia', 'Saúde Média (%)'],
-    ...setoresComStats.map(s => [s.name, Number(s.mediaTotal.toFixed(1)), s.diasComDados > 0 ? Number((s.somaPresentes/s.diasComDados).toFixed(1)) : 0, s.pctMedio !== null ? (s.pctMedio / 100) : null])];
+  const melhorDia = diasComCheckin && diasComCheckin.length ? diasComCheckin.reduce((b,d)=>d.pct>b.pct?d:b) : null;
+  const piorDia = diasComCheckin && diasComCheckin.length ? diasComCheckin.reduce((b,d)=>d.pct<b.pct?d:b) : null;
+
+  // 1) Aba Resumo Geral
+  const resumoDados = [
+    ['INDICADOR EXECUTIVO', 'VALOR'],
+    ['Mês de Referência', mesLabel],
+    ['Saúde Média do Mês', mediaSaude !== null ? (mediaSaude / 100) : '—'],
+    ['Total de Membros no Quadro', totalEq || 32],
+    ['Total de Liberações de Qualidade (Produtividade)', totalProd || 0],
+    ['Dias Úteis com Dados', diasComCheckin ? diasComCheckin.length : 0],
+    ['Melhor Dia de Saúde', melhorDia ? `${seFmtDate(melhorDia.iso)} (${melhorDia.pct}%)` : '—'],
+    ['Pior Dia de Saúde', piorDia ? `${seFmtDate(piorDia.iso)} (${piorDia.pct}%)` : '—'],
+    ['Data de Emissão', new Date().toLocaleString('pt-BR')]
+  ];
+
+  // 2) Aba Evolução Diária (com linha de totais/médias no final)
+  let somaPresentes = 0, somaProd = 0, diasContados = 0, somaTotal = 0, somaPct = 0;
+  diasStats.forEach(d => {
+    if (!d.semDados) {
+      diasContados++;
+      somaPresentes += (d.presentes || 0);
+      somaProd += (d.prod || 0);
+      somaTotal += (d.total || 0);
+      somaPct += (d.pct || 0);
+    }
+  });
+
+  const diasDados = [
+    ['Data', 'Dia', 'Presentes', 'Ausentes', 'Total Equipe', 'Saúde (%)', 'Liberações (Produtividade)', 'Quem faltou'],
+    ...diasStats.map(d => [
+      seFmtDate(d.iso),
+      d.dayOfWeek,
+      d.semDados ? null : d.presentes,
+      d.semDados ? null : d.ausentes,
+      d.semDados ? null : d.total,
+      d.semDados ? null : (d.pct / 100),
+      d.prod || 0,
+      d.semDados ? 'Sem dados' : (d.listaAus && d.listaAus.length ? d.listaAus.map(a => a.name).join(', ') : 'Nenhuma falta')
+    ]),
+    [
+      'MÉDIA GERAL / TOTAL',
+      diasContados + ' dias',
+      diasContados ? Number((somaPresentes / diasContados).toFixed(1)) : 0,
+      diasContados ? Number(((somaTotal - somaPresentes) / diasContados).toFixed(1)) : 0,
+      diasContados ? Number((somaTotal / diasContados).toFixed(1)) : (totalEq || 32),
+      diasContados ? Number(((somaPct / diasContados) / 100).toFixed(4)) : 0,
+      somaProd,
+      'Total de ' + somaProd + ' liberações no período'
+    ]
+  ];
+
+  // 3) Aba Por Setor
+  const setoresDados = [
+    ['Setor', 'Média de Membros/dia', 'Méd. Presentes/dia', 'Méd. Ausentes/dia', 'Saúde Média (%)'],
+    ...setoresComStats.map(s => {
+      const medPres = s.diasComDados > 0 ? Number((s.somaPresentes/s.diasComDados).toFixed(1)) : 0;
+      const medTotal = Number(s.mediaTotal.toFixed(1));
+      const medAus = Number(Math.max(0, medTotal - medPres).toFixed(1));
+      return [
+        s.name,
+        medTotal,
+        medPres,
+        medAus,
+        s.pctMedio !== null ? (s.pctMedio / 100) : null
+      ];
+    })
+  ];
+
+  // 4) Aba Auditoria
+  const audDados = [
+    ['Nome', 'Setor', 'Ativo', 'Oculto', '1º check-in', 'Último check-in', 'Dias na equipe', 'Dias presente', 'Observação'],
+    ...(auditoria || []).map(a => [
+      a.name,
+      a.sector,
+      a.active ? 'Sim' : 'Não',
+      a.hidden ? 'Sim' : 'Não',
+      a.first ? a.first.toLocaleDateString('pt-BR') : '',
+      a.last ? a.last.toLocaleDateString('pt-BR') : '',
+      a.diasEq,
+      a.diasPres,
+      [a.semHist ? 'Sem check-in no histórico' : '', a.parado ? `Sem check-in há ${a.diasParado} dias` : '', !a.active ? 'Inativo' : ''].filter(Boolean).join(' · ')
+    ])
+  ];
 
   const wb = XLSX.utils.book_new();
+
+  // Anexa Resumo
+  const wsResumo = XLSX.utils.aoa_to_sheet(resumoDados);
+  const cellMed = wsResumo['B3'];
+  if (cellMed && typeof cellMed.v === 'number') cellMed.z = '0%';
+  XLSX.utils.book_append_sheet(wb, wsResumo, 'Resumo Geral');
+
+  // Anexa Evolução Diária
   const wsDias = XLSX.utils.aoa_to_sheet(diasDados);
-  for (let R = 1; R <= diasStats.length; R++) { const cell = wsDias[XLSX.utils.encode_cell({r:R, c:5})]; if (cell && typeof cell.v === 'number') cell.z = '0%'; }
+  for (let R = 1; R <= diasStats.length + 1; R++) {
+    const cell = wsDias[XLSX.utils.encode_cell({r:R, c:5})];
+    if (cell && typeof cell.v === 'number') cell.z = '0%';
+  }
   XLSX.utils.book_append_sheet(wb, wsDias, 'Evolução Diária');
 
+  // Anexa Por Setor
   const wsSetores = XLSX.utils.aoa_to_sheet(setoresDados);
-  for (let R = 1; R <= setoresComStats.length; R++) { const cell = wsSetores[XLSX.utils.encode_cell({r:R, c:3})]; if (cell && typeof cell.v === 'number') cell.z = '0%'; }
+  for (let R = 1; R <= setoresComStats.length; R++) {
+    const cell = wsSetores[XLSX.utils.encode_cell({r:R, c:4})];
+    if (cell && typeof cell.v === 'number') cell.z = '0%';
+  }
   XLSX.utils.book_append_sheet(wb, wsSetores, 'Por Setor');
 
-  const audDados = [['Nome', 'Setor', 'Ativo', 'Oculto', '1º check-in', 'Último check-in', 'Dias na equipe', 'Dias presente', 'Observação'],
-    ...(auditoria || []).map(a => [a.name, a.sector, a.active ? 'Sim' : 'Não', a.hidden ? 'Sim' : 'Não', a.first ? a.first.toLocaleDateString('pt-BR') : '', a.last ? a.last.toLocaleDateString('pt-BR') : '', a.diasEq, a.diasPres, [a.semHist ? 'Sem check-in no histórico' : '', a.parado ? `Sem check-in há ${a.diasParado} dias` : '', !a.active ? 'Inativo' : ''].filter(Boolean).join(' · ')])];
+  // Anexa Auditoria
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(audDados), 'Auditoria');
   
-  XLSX.writeFile(wb, `relatorio-equipe-${mesLabel.replace(' ','-')}.xlsx`);
+  XLSX.writeFile(wb, `relatorio-saude-equipe-${mesLabel.replace(/\s+/g,'-')}.xlsx`);
+};
+
+window.seExportarImagem = async function(format) {
+  const fmt = (format || 'png').toLowerCase();
+  const isJpeg = (fmt === 'jpeg' || fmt === 'jpg');
+  const mimeType = isJpeg ? 'image/jpeg' : 'image/png';
+  const fileExt = isJpeg ? 'jpg' : 'png';
+
+  if (!_seDadosRelatorio) {
+    alert('Gere o relatório primeiro antes de exportar.');
+    return;
+  }
+
+  if (typeof html2canvas === 'undefined') {
+    try {
+      if (typeof showToast === 'function') showToast('Carregando biblioteca de captura...', false);
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+    } catch (e) {
+      alert('Não foi possível carregar a ferramenta de exportação de imagem. Verifique a conexão com a internet.');
+      return;
+    }
+  }
+
+  if (typeof showToast === 'function') {
+    showToast('📸 Gerando imagem ' + fileExt.toUpperCase() + ' do Relatório Mensal... aguarde!', false);
+  }
+
+  const { mesLabel, ano, mes, diasStats, setoresComStats, totalEq, mediaSaude, totalProd, diasComCheckin } = _seDadosRelatorio;
+
+  const wrapper = document.createElement('div');
+  wrapper.style.position = 'fixed';
+  wrapper.style.left = '-9999px';
+  wrapper.style.top = '0';
+  wrapper.style.width = '1080px';
+  wrapper.style.background = '#090e17';
+  wrapper.style.color = '#f1f5f9';
+  wrapper.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+  wrapper.style.padding = '28px 32px';
+  wrapper.style.boxSizing = 'border-box';
+  wrapper.style.zIndex = '-9999';
+
+  const corMedia = seHealthColor(mediaSaude);
+  const melhorDia = diasComCheckin && diasComCheckin.length ? diasComCheckin.reduce((b,d)=>d.pct>b.pct?d:b) : null;
+  const piorDia = diasComCheckin && diasComCheckin.length ? diasComCheckin.reduce((b,d)=>d.pct<b.pct?d:b) : null;
+
+  const kpisHtml = `
+    <div style="display:grid;grid-template-columns:repeat(6, 1fr);gap:10px;margin-bottom:20px">
+      <div style="background:#0d1424;border:1px solid #1e293b;border-top:3px solid ${corMedia};border-radius:10px;padding:12px">
+        <div style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase">Saúde Média Mês</div>
+        <div style="font-size:22px;font-weight:900;color:${corMedia};font-family:'Courier New', monospace;margin-top:4px">${mediaSaude !== null ? mediaSaude + '%' : '—'}</div>
+        <div style="font-size:9px;color:#64748b;margin-top:2px">Presença média diária</div>
+      </div>
+      <div style="background:#0d1424;border:1px solid #1e293b;border-top:3px solid #38bdf8;border-radius:10px;padding:12px">
+        <div style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase">Total da Equipe</div>
+        <div style="font-size:22px;font-weight:900;color:#38bdf8;font-family:'Courier New', monospace;margin-top:4px">${totalEq || 32}</div>
+        <div style="font-size:9px;color:#64748b;margin-top:2px">Quadro oficial</div>
+      </div>
+      <div style="background:#0d1424;border:1px solid #1e293b;border-top:3px solid #4ade80;border-radius:10px;padding:12px">
+        <div style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase">Liberações no Mês</div>
+        <div style="font-size:22px;font-weight:900;color:#4ade80;font-family:'Courier New', monospace;margin-top:4px">📦 ${totalProd}</div>
+        <div style="font-size:9px;color:#64748b;margin-top:2px">Registros de qualidade</div>
+      </div>
+      <div style="background:#0d1424;border:1px solid #1e293b;border-top:3px solid #a78bfa;border-radius:10px;padding:12px">
+        <div style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase">Dias com Dados</div>
+        <div style="font-size:22px;font-weight:900;color:#a78bfa;font-family:'Courier New', monospace;margin-top:4px">${diasComCheckin ? diasComCheckin.length : 0}</div>
+        <div style="font-size:9px;color:#64748b;margin-top:2px">de ${diasStats.length} dias úteis</div>
+      </div>
+      <div style="background:#0d1424;border:1px solid #1e293b;border-top:3px solid #4ade80;border-radius:10px;padding:12px">
+        <div style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase">Melhor Dia</div>
+        <div style="font-size:22px;font-weight:900;color:#4ade80;font-family:'Courier New', monospace;margin-top:4px">${melhorDia ? melhorDia.pct + '%' : '—'}</div>
+        <div style="font-size:9px;color:#64748b;margin-top:2px">${melhorDia ? seFmtDate(melhorDia.iso) : ''}</div>
+      </div>
+      <div style="background:#0d1424;border:1px solid #1e293b;border-top:3px solid #f25757;border-radius:10px;padding:12px">
+        <div style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase">Pior Dia</div>
+        <div style="font-size:22px;font-weight:900;color:#f25757;font-family:'Courier New', monospace;margin-top:4px">${piorDia ? piorDia.pct + '%' : '—'}</div>
+        <div style="font-size:9px;color:#64748b;margin-top:2px">${piorDia ? seFmtDate(piorDia.iso) : ''}</div>
+      </div>
+    </div>
+  `;
+
+  const setoresHtml = `
+    <div style="margin-bottom:20px">
+      <div style="font-size:12px;font-weight:800;color:#a78bfa;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px;display:flex;align-items:center;gap:6px">
+        <span>🏭 Saúde por Setor</span>
+        <div style="flex:1;height:1px;background:#1e293b"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3, 1fr);gap:10px">
+        ${setoresComStats.map(sec => {
+          const pct = sec.pctMedio;
+          const cor = seHealthColor(pct);
+          const total = Number.isInteger(sec.mediaTotal) ? sec.mediaTotal : sec.mediaTotal.toFixed(1);
+          const mediaPresentes = sec.diasComDados > 0 ? (sec.somaPresentes / sec.diasComDados).toFixed(1) : '0';
+          const ausMediaMes = sec.mediaTotal > 0 ? Math.max(0, sec.mediaTotal - parseFloat(mediaPresentes)).toFixed(1) : '0';
+
+          const chips = sec.membros.map(u => {
+            const mKey = u.rosterId || u.id;
+            const diasPresente = sec.membrosPresencaTotal[mKey] || 0;
+            const diasEq = sec.membrosDiasNaEquipe[mKey] || 0;
+            const pctPessoa = diasEq > 0 ? Math.round((diasPresente/diasEq)*100) : 0;
+            const chipCor = seHealthColor(pctPessoa);
+            return `<span style="display:inline-flex;align-items:center;gap:3px;font-size:8px;font-weight:700;padding:1px 5px;border-radius:4px;border:1px solid ${chipCor}55;background:${chipCor}18;color:${chipCor}">
+              <span style="width:4px;height:4px;border-radius:50%;background:${chipCor}"></span>${seEsc(u.name)} <span style="opacity:.75">${pctPessoa}%</span>
+            </span>`;
+          }).join('');
+
+          return `
+            <div style="background:#0d1424;border:1px solid ${sec.color}44;border-radius:10px;padding:10px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+                <div style="font-size:12px;font-weight:800;color:${sec.color}">${sec.icon} ${sec.name}</div>
+                <span style="font-size:11px;font-weight:900;color:${cor};font-family:'Courier New', monospace;background:rgba(0,0,0,0.3);border:1px solid ${cor}55;padding:1px 6px;border-radius:12px">${pct !== null ? pct + '%' : '—'}</span>
+              </div>
+              <div style="width:100%;height:4px;background:rgba(255,255,255,0.07);border-radius:6px;overflow:hidden;margin-bottom:8px">
+                <div style="height:100%;width:${pct||0}%;background:${cor};border-radius:6px"></div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;margin-bottom:8px;text-align:center">
+                <div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.2);border-radius:6px;padding:3px">
+                  <div style="font-size:7px;font-weight:700;color:#4ade80;text-transform:uppercase">Méd. Pres.</div>
+                  <div style="font-size:11px;font-weight:800;color:#4ade80;font-family:'Courier New', monospace">${mediaPresentes}</div>
+                </div>
+                <div style="background:rgba(242,87,87,0.08);border:1px solid rgba(242,87,87,0.2);border-radius:6px;padding:3px">
+                  <div style="font-size:7px;font-weight:700;color:#f25757;text-transform:uppercase">Méd. Aus.</div>
+                  <div style="font-size:11px;font-weight:800;color:#f25757;font-family:'Courier New', monospace">${ausMediaMes}</div>
+                </div>
+                <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:3px">
+                  <div style="font-size:7px;font-weight:700;color:#94a3b8;text-transform:uppercase">Total</div>
+                  <div style="font-size:11px;font-weight:800;color:#f1f5f9;font-family:'Courier New', monospace">${total}</div>
+                </div>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:2px">${chips || '<span style="font-size:8px;color:#64748b;font-style:italic">Nenhum membro</span>'}</div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+
+  // Tabela de Evolução Diária (mostra todos os dias que possuem dados)
+  const diasParaExibir = diasStats.filter(d => !d.semDados && (d.pct >= 50 || _seMostrarDiasBaixos));
+  let somaPresentesTab = 0, somaProdTab = 0, diasContadosTab = 0, somaTotalTab = 0, somaPctTab = 0;
+
+  const diasRows = diasParaExibir.map((d, idx) => {
+    diasContadosTab++;
+    somaPresentesTab += d.presentes;
+    somaProdTab += d.prod;
+    somaTotalTab += d.total;
+    somaPctTab += d.pct;
+
+    const corPct = seHealthColor(d.pct);
+    const rowBg = idx % 2 === 0 ? 'rgba(15,23,42,0.45)' : 'rgba(30,41,59,0.3)';
+
+    const ausBadges = d.listaAus && d.listaAus.length > 0
+      ? d.listaAus.map(a => `<span style="display:inline-flex;align-items:center;gap:3px;background:rgba(242,87,87,0.12);border:1px solid rgba(242,87,87,0.35);color:#f25757;font-size:9px;font-weight:700;padding:1px 5px;border-radius:4px;margin:1px">${seEsc(a.name)} ✕</span>`).join(' ')
+      : '<span style="color:#4ade80;font-size:10px;font-weight:700">✓ Nenhuma falta</span>';
+
+    return `
+      <tr style="background:${rowBg};border-bottom:1px solid rgba(51,65,85,0.4)">
+        <td style="padding:6px 10px;font-family:'Courier New', monospace;font-size:11px;color:#cbd5e1">${seFmtDate(d.iso)}</td>
+        <td style="padding:6px 10px;font-size:11px;font-weight:700;color:#f1f5f9">${d.dayOfWeek}</td>
+        <td style="padding:6px 10px;text-align:center"><span style="color:#4ade80;font-weight:800;font-family:'Courier New', monospace;font-size:12px">${d.presentes}</span> <span style="font-size:9px;color:#64748b">de ${d.total}</span></td>
+        <td style="padding:6px 10px;text-align:center"><span style="color:#f25757;font-weight:800;font-family:'Courier New', monospace;font-size:12px">${d.ausentes}</span></td>
+        <td style="padding:6px 10px;text-align:center;color:#94a3b8;font-family:'Courier New', monospace;font-size:11px">${d.total}</td>
+        <td style="padding:6px 10px;text-align:center"><span style="background:${corPct}18;border:1px solid ${corPct}55;color:${corPct};padding:2px 8px;border-radius:12px;font-weight:800;font-family:'Courier New', monospace;font-size:11px">${d.pct}%</span></td>
+        <td style="padding:6px 10px;text-align:center"><span style="background:rgba(167,139,250,0.15);border:1px solid rgba(167,139,250,0.35);color:#c4b5fd;padding:2px 8px;border-radius:12px;font-weight:800;font-family:'Courier New', monospace;font-size:11px">📦 ${d.prod}</span></td>
+        <td style="padding:6px 10px;max-width:320px">${ausBadges}</td>
+      </tr>
+    `;
+  }).join('');
+
+  const medSaudeCalculada = diasContadosTab ? Math.round(somaPctTab / diasContadosTab) : 0;
+  const corRod = seHealthColor(medSaudeCalculada);
+
+  const footHtml = `
+    <tr style="background:#0f172a;border-top:2px solid #334155;color:#f1f5f9;font-weight:800">
+      <td colspan="2" style="padding:8px 10px;color:#a78bfa;font-size:11px;font-weight:900">MÉDIA GERAL (${diasContadosTab} dias com dados)</td>
+      <td style="padding:8px 10px;text-align:center;color:#4ade80;font-family:'Courier New', monospace;font-size:12px">${diasContadosTab ? (somaPresentesTab/diasContadosTab).toFixed(1) : '—'}</td>
+      <td style="padding:8px 10px;text-align:center;color:#f25757;font-family:'Courier New', monospace;font-size:12px">${diasContadosTab ? ((somaTotalTab - somaPresentesTab)/diasContadosTab).toFixed(1) : '—'}</td>
+      <td style="padding:8px 10px;text-align:center;color:#94a3b8;font-family:'Courier New', monospace;font-size:11px">${diasContadosTab ? (somaTotalTab/diasContadosTab).toFixed(1) : totalEq}</td>
+      <td style="padding:8px 10px;text-align:center"><span style="background:${corRod}22;border:1px solid ${corRod}66;color:${corRod};padding:2px 10px;border-radius:12px;font-weight:900;font-family:'Courier New', monospace;font-size:12px">${medSaudeCalculada}%</span></td>
+      <td style="padding:8px 10px;text-align:center;color:#a78bfa;font-family:'Courier New', monospace;font-size:12px">📦 ${somaProdTab}</td>
+      <td style="padding:8px 10px;font-size:10px;color:#94a3b8">Total de ${somaProdTab} liberações no mês</td>
+    </tr>
+  `;
+
+  const tabelaDiasHtml = `
+    <div>
+      <div style="font-size:12px;font-weight:800;color:#a78bfa;text-transform:uppercase;letter-spacing:0.07em;margin-bottom:10px;display:flex;align-items:center;gap:6px">
+        <span>📅 Evolução Diária — Presenças, Produtividade &amp; Faltas</span>
+        <div style="flex:1;height:1px;background:#1e293b"></div>
+      </div>
+      <div style="border:1px solid #1e293b;border-radius:10px;overflow:hidden">
+        <table style="width:100%;border-collapse:collapse;text-align:left">
+          <thead>
+            <tr style="background:#0f172a;border-bottom:1px solid #334155;color:#94a3b8;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em">
+              <th style="padding:8px 10px">Data</th>
+              <th style="padding:8px 10px">Dia</th>
+              <th style="padding:8px 10px;text-align:center">Presentes</th>
+              <th style="padding:8px 10px;text-align:center">Ausentes</th>
+              <th style="padding:8px 10px;text-align:center">Total</th>
+              <th style="padding:8px 10px;text-align:center">Saúde %</th>
+              <th style="padding:8px 10px;text-align:center">Liberações (Prod.)</th>
+              <th style="padding:8px 10px">Quem Faltou</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${diasRows}
+          </tbody>
+          <tfoot>
+            ${footHtml}
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  `;
+
+  wrapper.innerHTML = `
+    <div style="background:#0d1424;border:1px solid #1e293b;border-radius:14px;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,0.6)">
+      <!-- Topo -->
+      <div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #1e293b;padding-bottom:16px;margin-bottom:20px">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div style="width:38px;height:38px;border-radius:10px;background:rgba(124,58,237,0.18);border:1px solid rgba(124,58,237,0.4);display:flex;align-items:center;justify-content:center;font-size:20px">🩺</div>
+          <div>
+            <div style="font-size:20px;font-weight:900;color:#f8fafc;letter-spacing:-0.02em">LabTech<span style="color:#38bdf8">.</span> <span style="font-size:15px;font-weight:700;color:#94a3b8;margin-left:6px">— Relatório de Saúde &amp; Produtividade da Equipe</span></div>
+            <div style="font-size:11px;font-weight:600;color:#64748b;margin-top:2px">Saúde da equipe por setor • Presença via check-in PIN / manual • Produção diária do período</div>
+          </div>
+        </div>
+        <div style="text-align:right">
+          <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:6px 14px;display:inline-flex;align-items:center;gap:8px">
+            <span style="font-size:13px">📅</span>
+            <span style="font-size:13px;font-weight:800;color:#f1f5f9">${mesLabel}</span>
+          </div>
+        </div>
+      </div>
+
+      ${kpisHtml}
+      ${setoresHtml}
+      ${tabelaDiasHtml}
+
+      <!-- Rodapé -->
+      <div style="margin-top:18px;display:flex;align-items:center;justify-content:space-between;font-size:10px;color:#64748b;border-top:1px solid #1e293b;padding-top:12px">
+        <span>LabTech Operations • Relatório Mensal Consolidado</span>
+        <span>Emitido em: ${new Date().toLocaleString('pt-BR')}</span>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(wrapper);
+
+  try {
+    const canvas = await html2canvas(wrapper, {
+      backgroundColor: '#090e17',
+      scale: 2,
+      useCORS: true,
+      logging: false
+    });
+
+    const dataUrl = canvas.toDataURL(mimeType, 0.95);
+    const link = document.createElement('a');
+    link.href = dataUrl;
+    link.download = `Relatorio_Saude_Equipe_${mesLabel.replace(/\s+/g, '_')}.${fileExt}`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    if (typeof showToast === 'function') {
+      showToast(`✅ Imagem ${fileExt.toUpperCase()} exportada com sucesso!`, false);
+    }
+  } catch (err) {
+    console.error('Erro ao exportar imagem do relatório:', err);
+    alert('Ocorreu um erro ao gerar a imagem: ' + (err.message || err));
+  } finally {
+    if (wrapper.parentNode) {
+      document.body.removeChild(wrapper);
+    }
+  }
+};
+
+window.seImprimirRelatorio = function() {
+  if (!_seDadosRelatorio) return alert('Gere o relatório primeiro antes de imprimir.');
+  window.print();
 };
 // ──────────────────────────────────────────────────────────────────────────
 

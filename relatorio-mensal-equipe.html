@@ -292,23 +292,114 @@ const supa = window.supabase.createClient(SB_URL, SB_KEY);
 
 // ── Setores ───────────────────────────────────────────────────────────────
 const SETORES = [
+  { key: 'LIDER',          name: 'Líder',          icon: '👑', color: '#fbbf24' },
   { key: 'DESMEMBRAMENTO', name: 'Desmembramento', icon: '📦', color: '#38bdf8' },
   { key: 'MONTAGEM',       name: 'Montagem',       icon: '🛠️', color: '#4ade80' },
   { key: 'LIMPEZA',        name: 'Limpeza',        icon: '🧹', color: '#a78bfa' },
   { key: 'COMPLEXA',       name: 'Complexas',      icon: '🧩', color: '#f5a623', alias: ['COMPLEXAS'] },
   { key: 'QUALIDADE',      name: 'Qualidade',      icon: '✅', color: '#22d3ee' },
-  { key: 'ELETRÔNICA',     name: 'Eletrônica',     icon: '🔌', color: '#fb923c', foraDaSaude: true },
 ];
-const SETORES_FORA_SAUDE = new Set(['ELETRÔNICA','ELETRONICA']);
+const SETORES_FORA_SAUDE = new Set();
 
-// ── Ajustes manuais de entrada/saída (opcional) ───────────────────────────
-// Use quando o histórico de check-ins não reflete a data real de entrada/saída
-// (ex.: pessoa oculta que nunca bate PIN). Chave = nome exato ou id do operador.
-// Exemplo:
-//   'Hélio Venturi': { entrada: '2026-08-15' },
-//   'Fulano':        { entrada: '2026-03-01', saida: '2026-07-31' },
-const AJUSTES_EQUIPE = {
-};
+// Quadro Fixo Oficial de 32 Membros
+const SE_ROSTER_32 = [
+  { id: 'leandro_schmidt', name: 'Leandro Schmidt', defaultSector: 'LIDER', aliases: ['leandro schmidt', 'leandro'] },
+  { id: 'geraldo_polanski', name: 'Geraldo Jose Polanski Junior', defaultSector: 'LIDER', aliases: ['geraldo jose polanski junior', 'geraldo polanski', 'geraldo', 'junior polanski'] },
+  { id: 'adilson_hammes', name: 'Adilson Luiz Hammes', defaultSector: 'COMPLEXA', aliases: ['adilson luiz hammes', 'adilson hammes', 'adilson'] },
+  { id: 'ana_claudia', name: 'Ana Claudia Risso Harkbart Telles', defaultSector: 'DESMEMBRAMENTO', aliases: ['ana claudia risso harkbart telles', 'ana claudia telles', 'ana claudia harkbart', 'ana claudia'] },
+  { id: 'angel_romero', name: 'Angel Xavier Quevedo Romero', defaultSector: 'MONTAGEM', aliases: ['angel xavier quevedo romero', 'angel romero', 'angel'] },
+  { id: 'angelo_prebianca', name: 'Angelo Gabriel Prebianca', defaultSector: 'MONTAGEM', aliases: ['angelo gabriel prebianca', 'angelo gabriel', 'angelo prebianca', 'angelo'] },
+  { id: 'cleiton_tummler', name: 'Cleiton Tummler', defaultSector: 'MONTAGEM', aliases: ['cleiton tummler', 'cleiton'] },
+  { id: 'douglas_maia', name: 'Douglas Ricardo da Maia', defaultSector: 'DESMEMBRAMENTO', aliases: ['douglas ricardo da maia', 'douglas maia', 'douglas'] },
+  { id: 'eduardo_saldanha', name: 'Eduardo Saldanha', defaultSector: 'MONTAGEM', aliases: ['eduardo saldanha', 'eduardo'] },
+  { id: 'frederico_azambuja', name: 'Frederico dos Santos Azambuja', defaultSector: 'LIMPEZA', aliases: ['frederico dos santos azambuja', 'frederico azambuja', 'frederico'] },
+  { id: 'gabriel_mikuska', name: 'Gabriel de Brito Mikuska', defaultSector: 'LIMPEZA', aliases: ['gabriel de brito mikuska', 'gabriel mikuska', 'mikuska'] },
+  { id: 'gabriel_feitosa', name: 'Gabriel Feitosa Borges', defaultSector: 'LIMPEZA', aliases: ['gabriel status borges', 'gabriel status', 'gabriel feitosa borges', 'gabriel feitosa', 'feitosa'] },
+  { id: 'gabriel_martins', name: 'Gabriel Henrique Martins', defaultSector: 'LIMPEZA', aliases: ['gabriel henrique martins', 'gabriel martins'] },
+  { id: 'gabriel_poletini', name: 'Gabriel Matheus Poletini', defaultSector: 'QUALIDADE', aliases: ['gabriel matheus poletini', 'gabriel poletini', 'poletini', 'gabriel'] },
+  { id: 'guilherme_harger', name: 'Guilherme Henrique da Silva Harger', defaultSector: 'LIMPEZA', aliases: ['guilherme henrique da silva harger', 'guilherme harger', 'harger'] },
+  { id: 'henrique_soares', name: 'Henrique Soares', defaultSector: 'LIMPEZA', aliases: ['henrique soares', 'henrique marques soares', 'henrique marques'] },
+  { id: 'idenilson_voigt', name: 'Idenilson Voigt', defaultSector: 'COMPLEXA', aliases: ['idenilson voigt', 'idenilson'] },
+  { id: 'jackson_deretti', name: 'Jackson Natalino Deretti', defaultSector: 'COMPLEXA', aliases: ['jackson natalino deretti', 'jackson deretti', 'deretti'] },
+  { id: 'jean_blachechen', name: 'Jean Richards Blachechen', defaultSector: 'COMPLEXA', aliases: ['jean richards blachechen', 'jean blachechen', 'blachechen'] },
+  { id: 'jhoan_medina', name: 'Jhoan Alberto Linares Medina', defaultSector: 'COMPLEXA', aliases: ['jhoan alberto linares medina', 'jhoan medina', 'jhoan'] },
+  { id: 'joelma_miguel', name: 'Joelma Albuquerque Miguel', defaultSector: 'LIMPEZA', aliases: ['joelma albuquerque miguel', 'joelma miguel', 'joelma'] },
+  { id: 'joao_gama', name: 'Joao Gabriel Gripp Gama', defaultSector: 'MONTAGEM', aliases: ['joao gabriel gripp gama', 'joao gama', 'joao gabriel gama', 'joão gama'] },
+  { id: 'luis_oliveira', name: 'Luis Guilherme Gomes de Oliveira', defaultSector: 'COMPLEXA', aliases: ['luis guilherme gomes de oliveira', 'luis oliveira', 'luis guilherme'] },
+  { id: 'malcolm_pandini', name: 'Malcolm Ryan Pandini', defaultSector: 'QUALIDADE', aliases: ['malcolm ryan pandini', 'malcolm pandini', 'malcolm'] },
+  { id: 'matheus_daumann', name: 'Matheus Jeferson Daumann', defaultSector: 'LIMPEZA', aliases: ['matheus jeferson daumann', 'matheus daumann', 'matheus'] },
+  { id: 'neilor_cabral', name: 'Neilor Cabral', defaultSector: 'DESMEMBRAMENTO', aliases: ['neilor cabral', 'neilor'] },
+  { id: 'ricardo_zezinho', name: 'Ricardo Zezinho da Silva', defaultSector: 'MONTAGEM', aliases: ['ricardo zezinho da silva', 'ricardo zezinho', 'zezinho'] },
+  { id: 'rubens_miyamoto', name: 'Rubens Kiyoshi Miyamoto', defaultSector: 'COMPLEXA', aliases: ['rubens kiyoshi miyamoto', 'rubens miyamoto', 'miyamoto'] },
+  { id: 'victor_cunha', name: 'Victor Franca da Cunha', defaultSector: 'LIMPEZA', aliases: ['victor franca da cunha', 'victor cunha'] },
+  { id: 'victor_carradore', name: 'Victor Gabriel Carradore de Andrade', defaultSector: 'LIMPEZA', aliases: ['victor gabriel carradore de andrade', 'victor gabriel', 'carradore'] },
+  { id: 'willian_cavalcante', name: 'Willian Cavalcante', defaultSector: 'MONTAGEM', aliases: ['willian cavalcante', 'willian'] },
+  { id: 'livre', name: 'LIVRE', defaultSector: 'DESMEMBRAMENTO', aliases: ['livre', 'vaga livre', 'reserva', 'scrap'] },
+];
+
+function seGetCustomRosterData() {
+  let data = null;
+  try {
+    data = JSON.parse(localStorage.getItem('se_roster_32_custom') || 'null');
+  } catch(e) {}
+  if (!data || typeof data !== 'object') {
+    data = { overrides: {}, added: [], removedIds: [] };
+  }
+  data.overrides = data.overrides || {};
+  data.added = Array.isArray(data.added) ? data.added : [];
+  data.removedIds = Array.isArray(data.removedIds) ? data.removedIds : [];
+  return data;
+}
+
+function seGetActiveRoster() {
+  const custom = seGetCustomRosterData();
+  const list = [];
+  const removed = new Set(custom.removedIds || []);
+
+  SE_ROSTER_32.forEach(base => {
+    if (removed.has(base.id)) return;
+    const ov = custom.overrides[base.id];
+    list.push({
+      id: base.id,
+      name: (ov && ov.name) ? ov.name : base.name,
+      defaultSector: (ov && ov.defaultSector) ? ov.defaultSector : base.defaultSector,
+      aliases: base.aliases || [],
+      isCustomAdded: false,
+      excludeFromHealth: (ov && ov.excludeFromHealth !== undefined) ? !!ov.excludeFromHealth : false
+    });
+  });
+
+  (custom.added || []).forEach(add => {
+    if (removed.has(add.id)) return;
+    list.push({
+      id: add.id,
+      name: add.name,
+      defaultSector: add.defaultSector || 'MONTAGEM',
+      aliases: [add.name.toLowerCase()],
+      isCustomAdded: true,
+      excludeFromHealth: !!add.excludeFromHealth
+    });
+  });
+
+  return list;
+}
+
+function matchRoster(dbName) {
+  const n = String(dbName || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  if (!n) return null;
+  const list = seGetActiveRoster();
+  for (const item of list) {
+    if (String(item.name).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() === n) return item;
+    if (item.aliases && item.aliases.some(a => String(a).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() === n)) return item;
+  }
+  for (const item of list) {
+    const iname = String(item.name).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+    if (iname.includes(n) || n.includes(iname)) return item;
+  }
+  return null;
+}
+
+const AJUSTES_EQUIPE = {};
 function isoParaData(iso) { const [y,m,d] = iso.split('-').map(Number); return new Date(y, m-1, d); }
 
 // ── Dias da semana PT-BR ───────────────────────────────────────────────────
@@ -499,12 +590,12 @@ async function gerarRelatorio() {
     if (uErr) throw uErr;
     const users = (usersRaw || []).map(r => {
       const raw = (r.raw && typeof r.raw === 'object') ? r.raw : {};
-      const name   = r.name   || raw.name   || raw.nome   || String(r.id);
-      const sector = r.sector || raw.sector  || raw.setor  || '';
-      const active = r.active !== undefined ? r.active : (raw.active !== false);
-      const hidden = r.hidden !== undefined ? !!r.hidden  : !!raw.hidden;
+      const name   = raw.name   || raw.nome   || r.name   || String(r.id);
+      const sector = raw.sector || raw.setor  || r.sector || '';
+      const active = raw.active !== undefined ? (raw.active !== false) : (r.active !== undefined ? r.active : true);
+      const hidden = raw.hidden !== undefined ? !!raw.hidden : !!r.hidden;
       return { id: String(r.id), name, sector: String(sector).toUpperCase().trim(), active, hidden };
-    }).filter(u => u.sector);
+    });
 
     // 2. Check-ins do mês
     setStatus(`Buscando check-ins de ${mesLabel}…`, true);
@@ -574,119 +665,212 @@ async function gerarRelatorio() {
 function recalcularRelatorio() {
   const { users, hist, checkinMap, prodMap, diasDoMes, dateKeys, mesLabel, ano, mes } = _cache;
 
-    // ── Equipe DIA A DIA ──
-    // 'operadores' só guarda o quadro ATUAL, então o quadro de cada dia é
-    // reconstruído pelo histórico de check-ins: a pessoa passa a contar a partir
-    // do 1º check-in e, se estiver inativa hoje, deixa de contar após o último.
-    const elegiveis = users.filter(u => !SETORES_FORA_SAUDE.has(u.sector) && getSetorPorKey(u.sector));
-    // Regras (nesta ordem):
-    //  1) ajuste manual (entrada/saída) em AJUSTES_EQUIPE, se existir;
-    //  2) entrada = 1º check-in do histórico; sem histórico (ex.: oculto que nunca
-    //     bate PIN) só conta se for oculto e ativo (aparece como ausente, como no painel);
-    //  3) inativo hoje: sai após o último check-in; inativo sem histórico não conta.
-    const naEquipe = (u, d) => {
-      if (excluidoNoDia(u.id, d)) return false; // exclusão manual
-      const aj = AJUSTES_EQUIPE[u.id] || AJUSTES_EQUIPE[u.name] || {};
-      const h = hist[u.id];
-      // sem histórico e sem ajuste: só conta se for pessoa OCULTA e ativa (como no painel)
-      if (!h && !aj.entrada && !(u.hidden && u.active !== false)) return false;
-      const entrada = aj.entrada ? isoParaData(aj.entrada) : (h ? h.first : null);
-      let saida = null;
-      if (aj.saida) saida = isoParaData(aj.saida);
-      else if (u.active === false) { if (!h) return false; saida = h.last; }
-      if (entrada && d < entrada) return false;
-      if (saida && d > saida) return false;
-      return true;
+  const activeRoster = seGetActiveRoster();
+
+  // Monta os membros do quadro oficial da equipe
+  const roster = activeRoster.map(item => ({
+    id: item.id,
+    name: item.name,
+    sector: item.defaultSector,
+    uids: new Set(),
+    dbUsers: [],
+    aliases: item.aliases || [],
+    excludeFromHealth: !!item.excludeFromHealth
+  }));
+
+  // Associa operadores do banco aos membros do quadro
+  (users || []).forEach(u => {
+    const match = matchRoster(u.name);
+    if (match) {
+      const slot = roster.find(r => r.id === match.id);
+      if (slot) {
+        slot.uids.add(String(u.id));
+        slot.dbUsers.push(u);
+        const secKey = String(u.sector || '').toUpperCase().trim();
+        if (secKey && getSetorPorKey(secKey)) {
+          slot.sector = secKey;
+        }
+      }
+    }
+  });
+
+  const healthRoster = roster.filter(m => !m.excludeFromHealth);
+
+  const diasStats = diasDoMes.map(d => {
+    const k = dateKey(d);
+    const ci = checkinMap[k] || new Set();
+    const semDados = ci.size === 0;
+
+    if (semDados) {
+      return {
+        iso: isoDate(d),
+        date: d,
+        dayOfWeek: DIAS_SEMANA[d.getDay()],
+        k,
+        presentes: 0,
+        ausentes: 0,
+        total: healthRoster.length,
+        listaAus: [],
+        pct: null,
+        prod: prodMap[k] || 0,
+        semDados: true
+      };
+    }
+
+    const listaPresentes = [];
+    const listaAus = [];
+
+    roster.forEach(m => {
+      const isExcl = m.excludeFromHealth || excluidoNoDia(m.id, d) || Array.from(m.uids).some(uid => excluidoNoDia(uid, d));
+      if (isExcl) return;
+
+      let isPresent = false;
+      for (const uid of m.uids) {
+        if (ci.has(uid)) {
+          isPresent = true;
+          break;
+        }
+      }
+
+      if (isPresent) {
+        listaPresentes.push(m);
+      } else {
+        const repUser = m.dbUsers[0];
+        listaAus.push({
+          id: repUser ? repUser.id : m.id,
+          rosterId: m.id,
+          name: m.name,
+          sector: m.sector
+        });
+      }
+    });
+
+    const total = listaPresentes.length + listaAus.length;
+    const presentes = listaPresentes.length;
+    const ausentes = listaAus.length;
+    const pct = total > 0 ? Math.round((presentes / total) * 100) : 0;
+    return {
+      iso: isoDate(d),
+      date: d,
+      dayOfWeek: DIAS_SEMANA[d.getDay()],
+      k,
+      presentes,
+      ausentes,
+      total,
+      listaAus,
+      pct,
+      prod: prodMap[k] || 0,
+      semDados: false
     };
-    const semHistorico = elegiveis.filter(u => !hist[u.id] && u.hidden && u.active !== false && !(AJUSTES_EQUIPE[u.id] || AJUSTES_EQUIPE[u.name]));
+  });
 
-    // ── Por dia: presença geral + lista de ausentes ──
-    const diasStats = diasDoMes.map(d => {
-      const k = dateKey(d);
-      const ci = checkinMap[k];
-      const semDados = ci.size === 0;
-      const equipeDia = elegiveis.filter(u => naEquipe(u, d));
-      const total = equipeDia.length;
-      const listaAus = semDados ? [] : equipeDia
-        .filter(u => !ci.has(u.id))
-        .map(u => ({ id: u.id, name: u.name, sector: u.sector }))
-        .sort((x, y) => x.name.localeCompare(y.name, 'pt-BR'));
-      const presentes = semDados ? 0 : total - listaAus.length;
-      const ausentes = listaAus.length;
-      const pct = semDados ? null : (total > 0 ? Math.round((presentes/total)*100) : 0);
-      return { iso: isoDate(d), date: d, dayOfWeek: DIAS_SEMANA[d.getDay()], k, presentes, ausentes, total, listaAus, pct, prod: prodMap[k] || 0, semDados };
-    });
-    const ultimoComDados = [...diasStats].reverse().find(d => !d.semDados);
-    const totalEq = ultimoComDados
-      ? ultimoComDados.total
-      : elegiveis.filter(u => naEquipe(u, diasDoMes[diasDoMes.length - 1])).length;
+  const totalEq = healthRoster.length;
 
-    // ── Por setor: só quem estava na equipe em cada dia ──
-    const setoresComStats = SETORES.map(sec => {
-      const doSetor = users.filter(u => sec.alias
-        ? sec.alias.concat([sec.key]).includes(u.sector)
-        : u.sector === sec.key);
-      let somaPresentes = 0, somaMembros = 0, diasComDados = 0;
-      const membrosPresencaTotal = {}, membrosDiasNaEquipe = {};
-      doSetor.forEach(u => { membrosPresencaTotal[u.id] = 0; membrosDiasNaEquipe[u.id] = 0; });
+  const setoresComStats = SETORES.map(sec => {
+    const secKey = sec.key;
+    const aliasList = sec.alias ? sec.alias.concat([secKey]) : [secKey];
+    const doSetor = roster.filter(m => aliasList.includes(m.sector) && !m.excludeFromHealth);
 
-      diasStats.forEach(dia => {
-        if (dia.semDados) return;
-        const ci = checkinMap[dia.k];
-        const equipe = doSetor.filter(u => naEquipe(u, dia.date));
-        diasComDados++;
-        somaMembros += equipe.length;
-        equipe.forEach(u => {
-          membrosDiasNaEquipe[u.id]++;
-          if (ci.has(u.id)) { somaPresentes++; membrosPresencaTotal[u.id]++; }
-        });
+    let somaPresentes = 0, somaMembros = 0, diasComDados = 0;
+    const membrosPresencaTotal = {}, membrosDiasNaEquipe = {};
+    doSetor.forEach(m => { membrosPresencaTotal[m.id] = 0; membrosDiasNaEquipe[m.id] = 0; });
+
+    diasStats.forEach(dia => {
+      if (dia.semDados) return;
+      diasComDados++;
+      const ci = checkinMap[dia.k] || new Set();
+
+      doSetor.forEach(m => {
+        const isExcl = excluidoNoDia(m.id, dia.date) || Array.from(m.uids).some(uid => excluidoNoDia(uid, dia.date));
+        if (isExcl) return;
+
+        membrosDiasNaEquipe[m.id]++;
+        somaMembros++;
+
+        let isPresent = false;
+        for (const uid of m.uids) {
+          if (ci.has(uid)) {
+            isPresent = true;
+            break;
+          }
+        }
+        if (isPresent) {
+          somaPresentes++;
+          membrosPresencaTotal[m.id]++;
+        }
       });
-
-      const membros = doSetor.filter(u => membrosDiasNaEquipe[u.id] > 0);
-      const pctMedio = somaMembros > 0 ? Math.round((somaPresentes / somaMembros) * 100) : null;
-      const mediaTotal = diasComDados > 0 ? somaMembros / diasComDados : 0;
-      return { ...sec, membros, pctMedio, somaPresentes, diasComDados, mediaTotal, membrosPresencaTotal, membrosDiasNaEquipe };
     });
 
-    // ── KPIs gerais ──
-    const diasComCheckin = diasStats.filter(d => !d.semDados);
-    const totalProd = Object.values(prodMap).reduce((a,b) => a+b, 0);
-    const chavesTabela = new Set(diasStats.map(d => d.k));
-    const prodForaDaTabela = Object.entries(prodMap).filter(([k]) => !chavesTabela.has(k)).reduce((a,[,v]) => a+v, 0);
-    const mediaSaude = diasComCheckin.length
-      ? Math.round(diasComCheckin.reduce((a,d) => a + (d.pct||0), 0) / diasComCheckin.length)
-      : null;
-    const melhorDia = diasComCheckin.reduce((best, d) => (!best || d.pct > best.pct) ? d : best, null);
-    const piorDia = diasComCheckin.reduce((worst, d) => (!worst || d.pct < worst.pct) ? d : worst, null);
+    const membros = doSetor.map(m => {
+      const repUser = m.dbUsers[0];
+      return {
+        id: repUser ? repUser.id : m.id,
+        rosterId: m.id,
+        name: m.name,
+        sector: m.sector,
+        active: repUser ? repUser.active : true,
+        hidden: repUser ? repUser.hidden : false,
+      };
+    });
 
-    // ── Auditoria: todos que entraram na conta no mês, com o motivo ──
-    const refFim = new Date(Math.min(Date.now(), diasDoMes[diasDoMes.length - 1].getTime()));
-    const auditoria = users
-      .filter(u => getSetorPorKey(u.sector))
-      .map(u => {
-        let diasEq = 0, diasPres = 0;
-        diasStats.forEach(dia => {
-          if (dia.semDados) return;
-          if (naEquipe(u, dia.date)) { diasEq++; if (checkinMap[dia.k].has(u.id)) diasPres++; }
-        });
-        const h = hist[u.id];
-        const diasParado = (h && u.active !== false) ? Math.floor((refFim - h.last) / 86400000) : 0;
-        return {
-          id: u.id, name: u.name, sector: u.sector, active: u.active !== false, hidden: !!u.hidden,
-          first: h ? h.first : null, last: h ? h.last : null, diasEq, diasPres,
-          semHist: !h, parado: diasParado > 30, diasParado,
-          foraSaude: SETORES_FORA_SAUDE.has(u.sector)
-        };
-      })
-      .filter(a => a.diasEq > 0)
-      .sort((x, y) => x.sector.localeCompare(y.sector, 'pt-BR') || x.name.localeCompare(y.name, 'pt-BR'));
+    const pctMedio = somaMembros > 0 ? Math.round((somaPresentes / somaMembros) * 100) : null;
+    const mediaTotal = diasComDados > 0 ? (somaMembros / diasComDados) : doSetor.length;
+    return { ...sec, membros, pctMedio, somaPresentes, diasComDados, mediaTotal, membrosPresencaTotal, membrosDiasNaEquipe };
+  });
 
-    _dadosRelatorio = { mesLabel, ano, mes, diasStats, setoresComStats, totalEq, mediaSaude, totalProd, prodForaDaTabela, diasComCheckin, auditoria };
+  const diasComCheckin = diasStats.filter(d => !d.semDados);
+  const totalProd = Object.values(prodMap).reduce((a,b) => a+b, 0);
+  const chavesTabela = new Set(diasStats.map(d => d.k));
+  const prodForaDaTabela = Object.entries(prodMap).filter(([k]) => !chavesTabela.has(k)).reduce((a,[,v]) => a+v, 0);
+  const mediaSaude = diasComCheckin.length ? Math.round(diasComCheckin.reduce((a,d) => a + (d.pct||0), 0) / diasComCheckin.length) : null;
 
-    renderRelatorio(_dadosRelatorio);
-    setStatus(`✅ Relatório de ${mesLabel} gerado com sucesso — ${diasComCheckin.length} dias úteis com dados, ${totalProd} liberações.` +
-      (semHistorico.length ? ` · ${semHistorico.length} sem nenhum check-in no histórico (contados em todos os dias): ${semHistorico.map(u => u.name).join(', ')}.` : '') +
-      (Object.keys(EXCL).length ? ` · ${Object.keys(EXCL).length} pessoa(s) com exclusão manual.` : ''), false);
+  const refFim = new Date(Math.min(Date.now(), diasDoMes[diasDoMes.length - 1].getTime()));
+  const auditoria = roster.map(m => {
+    let diasEq = 0, diasPres = 0;
+    diasStats.forEach(dia => {
+      if (dia.semDados) return;
+      const isExcl = excluidoNoDia(m.id, dia.date) || Array.from(m.uids).some(uid => excluidoNoDia(uid, dia.date));
+      if (!isExcl) {
+        diasEq++;
+        const ci = checkinMap[dia.k] || new Set();
+        if (Array.from(m.uids).some(uid => ci.has(uid))) diasPres++;
+      }
+    });
+
+    let first = null, last = null;
+    m.uids.forEach(uid => {
+      const h = hist[uid];
+      if (h) {
+        if (!first || h.first < first) first = h.first;
+        if (!last || h.last > last) last = h.last;
+      }
+    });
+
+    const repUser = m.dbUsers[0];
+    const diasParado = (last && repUser && repUser.active !== false) ? Math.floor((refFim - last) / 86400000) : 0;
+    return {
+      id: repUser ? repUser.id : m.id,
+      rosterId: m.id,
+      name: m.name,
+      sector: m.sector,
+      active: repUser ? repUser.active !== false : true,
+      hidden: repUser ? !!repUser.hidden : false,
+      first,
+      last,
+      diasEq,
+      diasPres,
+      semHist: !first,
+      parado: diasParado > 30,
+      diasParado,
+      foraSaude: false
+    };
+  }).sort((x, y) => x.sector.localeCompare(y.sector, 'pt-BR') || x.name.localeCompare(y.name, 'pt-BR'));
+
+  _dadosRelatorio = { mesLabel, ano, mes, diasStats, setoresComStats, totalEq, mediaSaude, totalProd, prodForaDaTabela, diasComCheckin, auditoria };
+
+  renderRelatorio(_dadosRelatorio);
+  setStatus(`✅ Relatório de ${mesLabel} gerado (Quadro fixo de 32 membros) — ${diasComCheckin.length} dias úteis com dados, ${totalProd} liberações.` +
+    (Object.keys(EXCL).length ? ` · ${Object.keys(EXCL).length} pessoa(s) com exclusão manual.` : ''), false);
 }
 
 function getSetorPorKey(key) {
@@ -768,8 +952,8 @@ function renderAuditoria(lista) {
 function renderKPIs({ mesLabel, diasStats, totalEq, mediaSaude, totalProd, prodForaDaTabela, diasComCheckin }) {
   const cor = healthColor(mediaSaude);
   const kpis = [
-    { label: 'Saúde Média do Mês', value: mediaSaude !== null ? mediaSaude + '%' : '—', color: cor, sub: 'Presença média diária (sem Eletrônica)' },
-    { label: 'Total da Equipe', value: totalEq, color: '#38bdf8', sub: 'Quadro no último dia com dados (sem Eletrônica)' },
+    { label: 'Saúde Média do Mês', value: mediaSaude !== null ? mediaSaude + '%' : '—', color: cor, sub: 'Presença média diária' },
+    { label: 'Total da Equipe', value: totalEq || 32, color: '#38bdf8', sub: '32 membros cadastrados' },
     { label: 'Liberações no Mês', value: totalProd, color: '#4ade80', sub: prodForaDaTabela ? `Registros de qualidade (${prodForaDaTabela} em domingos, fora da tabela)` : 'Registros de qualidade' },
     { label: 'Dias com Dados', value: diasComCheckin.length, color: '#a78bfa', sub: `de ${diasStats.length} dias úteis` },
     { label: 'Melhor Dia', value: diasComCheckin.length ? (diasComCheckin.reduce((b,d)=>d.pct>b.pct?d:b).pct + '%') : '—', color: '#4ade80', sub: diasComCheckin.length ? fmtDate(diasComCheckin.reduce((b,d)=>d.pct>b.pct?d:b).iso) : '' },
@@ -794,8 +978,9 @@ function renderSetores(setoresComStats, diasStats, diasComCheckin) {
 
     // Chips dos membros com % de presença no mês
     const chips = sec.membros.map(u => {
-      const diasPresente = sec.membrosPresencaTotal[u.id] || 0;
-      const diasEq = sec.membrosDiasNaEquipe[u.id] || 0;
+      const mKey = u.rosterId || u.id;
+      const diasPresente = sec.membrosPresencaTotal[mKey] || 0;
+      const diasEq = sec.membrosDiasNaEquipe[mKey] || 0;
       const pctPessoa = diasEq > 0 ? Math.round((diasPresente/diasEq)*100) : 0;
       const chipCor = healthColor(pctPessoa);
       const tag = (!u.active ? ' <span style="opacity:.7;font-size:8px">(Inativo)</span>' : '') + (u.hidden ? ' <span style="opacity:.7;font-size:8px">(Oculto)</span>' : '');
