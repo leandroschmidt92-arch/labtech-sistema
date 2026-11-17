@@ -25365,6 +25365,7 @@ function fluxolabSwitchTab(tab) {
   const liberadosPanel  = document.getElementById('fluxolab-tab-liberados-panel');
   const planejamentoPanel = document.getElementById('fluxolab-tab-planejamento-panel');
   const pendenciasPanel = document.getElementById('fluxolab-tab-pendencias-panel');
+  const complexasPanel  = document.getElementById('fluxolab-tab-complexas-panel');
   const btnBolsoes      = document.getElementById('fluxolab-tab-bolsoes');
   const btnModelos      = document.getElementById('fluxolab-tab-modelos');
   const btnChecklists   = document.getElementById('fluxolab-tab-checklists');
@@ -25372,6 +25373,7 @@ function fluxolabSwitchTab(tab) {
   const btnLiberados    = document.getElementById('fluxolab-tab-liberados');
   const btnPlanejamento = document.getElementById('fluxolab-tab-planejamento');
   const btnPendencias   = document.getElementById('fluxolab-tab-pendencias');
+  const btnComplexas    = document.getElementById('fluxolab-tab-complexas');
 
   const setBtn = (btn, active) => {
     if (!btn) return;
@@ -25386,6 +25388,7 @@ function fluxolabSwitchTab(tab) {
   if (liberadosPanel)  liberadosPanel.style.display  = tab === 'liberados'  ? '' : 'none';
   if (planejamentoPanel) planejamentoPanel.style.display = tab === 'planejamento' ? '' : 'none';
   if (pendenciasPanel) pendenciasPanel.style.display = tab === 'pendencias' ? '' : 'none';
+  if (complexasPanel)  complexasPanel.style.display  = tab === 'complexas'  ? '' : 'none';
 
   setBtn(btnBolsoes,    tab === 'bolsoes');
   setBtn(btnModelos,    tab === 'modelos');
@@ -25394,6 +25397,7 @@ function fluxolabSwitchTab(tab) {
   setBtn(btnLiberados,  tab === 'liberados');
   setBtn(btnPlanejamento, tab === 'planejamento');
   setBtn(btnPendencias, tab === 'pendencias');
+  setBtn(btnComplexas,  tab === 'complexas');
 
   // Ao trocar de subaba, força o próximo poll a recalcular sem repintar tudo agora
   if (tab === 'modelos')    fluxolabRenderModelos();
@@ -25405,7 +25409,7 @@ function fluxolabSwitchTab(tab) {
         fluxolabLoadPlanejamento().catch(e => console.warn('[Planejamento] carga:', e));
       } else if (typeof fluxolabRenderPlanejamento === 'function') fluxolabRenderPlanejamento();
     }
-    if (tab === 'pendencias') {
+    if (tab === 'pendencias' || tab === 'complexas') {
       if (typeof fluxolabLoadPendencias === 'function' && (typeof _fluxolabPendLoaded === 'undefined' || !_fluxolabPendLoaded)) {
         fluxolabLoadPendencias().catch(e => console.warn('[Pendências] carga:', e));
       } else if (typeof fluxolabRenderPendencias === 'function') fluxolabRenderPendencias();
@@ -26122,11 +26126,14 @@ function _fluxolabApplyChecklistsLoaded() {
   }
   if (_fluxolabActiveTab === 'caindo') fluxolabRenderCaindoHoje();
   if (typeof _fluxolabPendLoaded !== 'undefined' && _fluxolabPendLoaded
-      && typeof pendGroupStateByPedido === 'function'
       && typeof _fluxolabPendenciasState !== 'undefined') {
     try {
-      Object.keys(_fluxolabPendenciasState || {}).forEach(function(t) { pendGroupStateByPedido(t); });
-      if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'pendencias'
+      if (typeof pendResortAllTables === 'function') {
+        pendResortAllTables();
+      } else if (typeof pendGroupStateByPedido === 'function') {
+        Object.keys(_fluxolabPendenciasState || {}).forEach(function(t) { pendGroupStateByPedido(t); });
+      }
+      if (typeof _fluxolabActiveTab !== 'undefined' && (_fluxolabActiveTab === 'pendencias' || _fluxolabActiveTab === 'complexas')
           && typeof fluxolabRenderPendencias === 'function') {
         fluxolabRenderPendencias();
       }
@@ -27500,7 +27507,7 @@ function fluxolabModeloCtxMenu(e, modeloEnc){
   return false;
 }
 
-function fluxolabIncluirModeloNoPlano(destino, modelo){
+async function fluxolabIncluirModeloNoPlano(destino, modelo){
   _fluxolabHideModeloCtxMenu();
   modelo = String(modelo || '').trim();
   if (!modelo) return;
@@ -27521,6 +27528,9 @@ function fluxolabIncluirModeloNoPlano(destino, modelo){
   };
 
   if (destino === 'lote') {
+    if (typeof fluxolabLoadPlanejamento === 'function' && (typeof _fluxolabPlanLoaded === 'undefined' || !_fluxolabPlanLoaded)) {
+      await fluxolabLoadPlanejamento();
+    }
     if (typeof _fluxolabPlanejamentoState === 'undefined') {
       alert('Planejamento ainda não carregou. Abra a aba Planejamento do Dia e tente de novo.');
       return;
@@ -27540,8 +27550,11 @@ function fluxolabIncluirModeloNoPlano(destino, modelo){
   }
 
   if (destino === 'mistas' || destino === 'complexas') {
+    if (typeof fluxolabLoadPendencias === 'function' && (typeof _fluxolabPendLoaded === 'undefined' || !_fluxolabPendLoaded)) {
+      await fluxolabLoadPendencias();
+    }
     if (typeof _fluxolabPendenciasState === 'undefined') {
-      alert('Pendências ainda não carregaram. Abra a aba Pendências Mistas & Complexas e tente de novo.');
+      alert('Pendências ainda não carregaram. Abra a aba Pendências Mistas ou Complexas e tente de novo.');
       return;
     }
     if (typeof pendValidateModeloQuota === 'function') {
@@ -33053,7 +33066,7 @@ function exportLinhaProdCSV(){
   // Navegação permitida: abas principais, sub-abas, sub-sub-abas (FluxoLAB usa
   // botões com id="fluxolab-tab-*" e onclick="fluxolabSwitchTab(...)"), além
   // de logout e elementos marcados com data-ro-allow.
-  const NAV_SELECTOR = '.tab, .stab, .subtab, .logout-btn, button[id^="fluxolab-tab-"], [data-ro-allow], [data-ro-allow] *, input:not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]):not(#fluxolab-tab-planejamento-panel *):not(#fluxolab-tab-pendencias-panel *), select:not(#fluxolab-tab-planejamento-panel *):not(#fluxolab-tab-pendencias-panel *), textarea:not(#fluxolab-tab-planejamento-panel *):not(#fluxolab-tab-pendencias-panel *)';
+  const NAV_SELECTOR = '.tab, .stab, .subtab, .logout-btn, button[id^="fluxolab-tab-"], [data-ro-allow], [data-ro-allow] *, input:not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]):not(#fluxolab-tab-planejamento-panel *):not(#fluxolab-tab-pendencias-panel *):not(#fluxolab-tab-complexas-panel *), select:not(#fluxolab-tab-planejamento-panel *):not(#fluxolab-tab-pendencias-panel *):not(#fluxolab-tab-complexas-panel *), textarea:not(#fluxolab-tab-planejamento-panel *):not(#fluxolab-tab-pendencias-panel *):not(#fluxolab-tab-complexas-panel *)';
   // Padrões de onclick que representam apenas troca de aba/filtro (leitura)
   const NAV_ONCLICK_RE = /^\s*(setView|setSector|setCFilter|setQualFilter|setAdmFilter|setRelFilter|setScrapFilter|fluxolabSwitchTab|switchTab|showTab|openTab)\s*\(/;
   function isAllowed(target){

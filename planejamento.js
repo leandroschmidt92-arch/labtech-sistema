@@ -174,17 +174,62 @@ function fluxolabScheduleRerender(tableName, retriesLeft) {
   }
 }
 
+const PLAN_DIRTY_BACKUP_LS_KEY = 'fluxolabPlanDirtyBackup_v1';
+let _fluxolabPlanDirty = false;
+let _fluxolabPlanInFlightJSON = null;
+let _fluxolabPlanSaveQueued = false;
+
+function _planClient() {
+  return (typeof _supaAuthed === 'function') ? _supaAuthed() : (typeof _supa !== 'undefined' ? _supa : null);
+}
+function _planCanWrite() {
+  if (typeof currentUser === 'undefined' || !currentUser) return false;
+  if (currentUser.sector === 'VISUALIZAÇÃO') return false;
+  const opView = document.getElementById('view-operador');
+  if (opView && opView.classList.contains('active') && !currentUser.isAdmin) return false;
+  return true;
+}
+function _planMarkLocalDirty() {
+  if (!_planCanWrite()) return;
+  _fluxolabPlanDirty = true;
+  try {
+    localStorage.setItem(PLAN_DIRTY_BACKUP_LS_KEY, JSON.stringify({
+      ts: Date.now(),
+      state: _fluxolabPlanejamentoState
+    }));
+  } catch (e) {}
+}
+function _planClearLocalDirty() {
+  _fluxolabPlanDirty = false;
+  try { localStorage.removeItem(PLAN_DIRTY_BACKUP_LS_KEY); } catch (e) {}
+}
+
 // Carrega o estado do Supabase
 async function fluxolabLoadPlanejamento() {
   if (typeof currentUser === 'undefined' || !currentUser) return;
-  if (typeof _supa !== 'undefined') {
+  const client = _planClient();
+  let restoredFromDirtyBackup = false;
+  if (client) {
     try {
-      const {data, error} = await _supa.from('fluxolab_state').select('data').eq('key', 'planejamento_lote_dia').maybeSingle();
+      const {data, error} = await client.from('fluxolab_state').select('data').eq('key', 'planejamento_lote_dia').maybeSingle();
       if (!error && data && data.data) {
         _fluxolabPlanejamentoState = Object.assign({ tabela1: [], tabela2: [], tabela3: [] }, data.data);
       }
       if (error) console.warn('[plan] load erro:', error);
     } catch(e) { console.error('Erro ao carregar planejamento:', e); }
+
+    try {
+      const dirtyRaw = localStorage.getItem(PLAN_DIRTY_BACKUP_LS_KEY);
+      if (dirtyRaw && _planCanWrite()) {
+        const parsed = JSON.parse(dirtyRaw);
+        if (parsed && parsed.state && parsed.ts && (Date.now() - parsed.ts < 120000)) {
+          _fluxolabPlanejamentoState = Object.assign({ tabela1: [], tabela2: [], tabela3: [] }, parsed.state);
+          restoredFromDirtyBackup = true;
+        } else {
+          localStorage.removeItem(PLAN_DIRTY_BACKUP_LS_KEY);
+        }
+      }
+    } catch (e) {}
     
     // Configura o sincronismo em tempo real (Multiplayer) — nunca bloqueia o loaded
     if (!_planSyncChannel) {
@@ -212,13 +257,16 @@ async function fluxolabLoadPlanejamento() {
     while (_fluxolabPlanejamentoState[t].length < minRows) {
       _fluxolabPlanejamentoState[t].push({ modelo: '', chk_manual: '', chk_auto_rem: false, qtd_wms: '', sugestao: '', obs: '', pecas: '' });
     }
-    // Se o estado salvo veio com linhas extras vazias (ex.: mínimo antigo era
-    // maior), retrai já no carregamento até o mínimo atual.
     fluxolabCompactPlanTable(t);
   });
   
   _fluxolabPlanLoaded = true;
-  try { _fluxolabPlanLastSavedJSON = JSON.stringify(_fluxolabPlanejamentoState); } catch (e) { _fluxolabPlanLastSavedJSON = null; }
+  if (!restoredFromDirtyBackup) {
+    try { _fluxolabPlanLastSavedJSON = JSON.stringify(_fluxolabPlanejamentoState); } catch (e) { _fluxolabPlanLastSavedJSON = null; }
+  } else {
+    _fluxolabPlanLastSavedJSON = null;
+    fluxolabSavePlanejamentoNow(true);
+  }
   
   if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'planejamento') {
     fluxolabRenderPlanejamento();
@@ -226,59 +274,69 @@ async function fluxolabLoadPlanejamento() {
 }
 
 // Salva o estado no Supabase
-// Debounce curto + dedupe + flush em beforeunload / troca de aba.
-// OTIMIZAcAO EGRESS: cada gravacao deste blob e re-transmitida pelo
-// Realtime para TODAS as abas abertas. Debounce curto (400/900ms)
-// significava ~2 retransmissoes por segundo enquanto o usuario digita.
-// Cada alteração transmite o estado compartilhado para os demais clientes.
-// Cinco segundos agrupam uma sequência normal de edição sem risco de perder
-// dados (o flush ao sair da página continua ativo).
-const FLUXOLAB_SAVE_DEBOUNCE_MS = 5000;
+const FLUXOLAB_SAVE_DEBOUNCE_MS = 800;
 let _fluxolabPlanSaveTimer;
 let _fluxolabPlanLastSavedJSON = null;
 let _fluxolabPlanSaving = false;
 
-async function fluxolabSavePlanejamentoNow() {
+async function fluxolabSavePlanejamentoNow(force) {
   if (!_fluxolabPlanLoaded) return false;
-  if (typeof _supa === 'undefined') return false;
+  if (!_planCanWrite()) return false;
+  const client = _planClient();
+  if (!client) return false;
+  clearTimeout(_fluxolabPlanSaveTimer);
   if (_fluxolabPlanSaving) {
-    clearTimeout(_fluxolabPlanSaveTimer);
-    _fluxolabPlanSaveTimer = setTimeout(() => { fluxolabSavePlanejamentoDebounced(); }, FLUXOLAB_SAVE_DEBOUNCE_MS);
+    _fluxolabPlanSaveQueued = true;
     return false;
   }
   let snap;
   try { snap = JSON.stringify(_fluxolabPlanejamentoState); } catch (e) { snap = null; }
-  if (snap && snap === _fluxolabPlanLastSavedJSON) return true;
+  if (!force && snap && snap === _fluxolabPlanLastSavedJSON) {
+    _planClearLocalDirty();
+    return true;
+  }
   _fluxolabPlanSaving = true;
+  _fluxolabPlanInFlightJSON = snap;
   try {
-    const { error } = await _supa.from('fluxolab_state').upsert(
+    let { error } = await client.from('fluxolab_state').upsert(
       { key: 'planejamento_lote_dia', data: _fluxolabPlanejamentoState, updated_at: new Date().toISOString() },
       { onConflict: 'key' }
     );
     if (error) {
-      console.warn('[plan] save erro:', error);
-      // tenta sem updated_at (coluna pode não existir)
-      const { error: err2 } = await _supa.from('fluxolab_state').upsert(
+      const retry = await client.from('fluxolab_state').upsert(
         { key: 'planejamento_lote_dia', data: _fluxolabPlanejamentoState },
         { onConflict: 'key' }
       );
-      if (err2) {
-        console.warn('[plan] save erro (retry):', err2);
-        return false;
-      }
+      error = retry.error;
+    }
+    if (error) {
+      console.warn('[plan] save erro:', error);
+      return false;
     }
     _fluxolabPlanLastSavedJSON = snap;
+    const currentSnap = JSON.stringify(_fluxolabPlanejamentoState);
+    if (currentSnap === snap) {
+      _planClearLocalDirty();
+    } else {
+      _fluxolabPlanSaveQueued = true;
+    }
     return true;
   } catch (e) {
     console.warn('[plan] save falhou:', e);
     return false;
   } finally {
     _fluxolabPlanSaving = false;
+    _fluxolabPlanInFlightJSON = null;
+    if (_fluxolabPlanSaveQueued) {
+      _fluxolabPlanSaveQueued = false;
+      setTimeout(() => { fluxolabSavePlanejamentoNow(true); }, 50);
+    }
   }
 }
 
 function fluxolabSavePlanejamentoDebounced() {
-  if (!_fluxolabPlanLoaded) return;
+  if (!_fluxolabPlanLoaded || !_planCanWrite()) return;
+  _planMarkLocalDirty();
   clearTimeout(_fluxolabPlanSaveTimer);
   _fluxolabPlanSaveTimer = setTimeout(() => { fluxolabSavePlanejamentoNow(); }, FLUXOLAB_SAVE_DEBOUNCE_MS);
 }
@@ -288,17 +346,14 @@ if (typeof window !== 'undefined' && !window._planFlushBound) {
   window._planFlushBound = true;
   window.addEventListener('beforeunload', () => {
     try {
-      if (!_fluxolabPlanLoaded) return;
-      const snap = JSON.stringify(_fluxolabPlanejamentoState);
-      if (snap && snap !== _fluxolabPlanLastSavedJSON && typeof _supa !== 'undefined') {
-        // best-effort sync via keepalive fetch is hard with supabase-js; dispara save
-        fluxolabSavePlanejamentoNow();
+      if (_fluxolabPlanLoaded && _fluxolabPlanDirty) {
+        fluxolabSavePlanejamentoNow(true);
       }
     } catch (e) {}
   });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
-      try { fluxolabSavePlanejamentoNow(); } catch (e) {}
+      try { if (_fluxolabPlanDirty) fluxolabSavePlanejamentoNow(true); } catch (e) {}
     }
   });
 }
@@ -307,16 +362,10 @@ if (typeof window !== 'undefined' && !window._planFlushBound) {
 function fluxolabApplyRemoteSync(remoteData) {
   if (!_fluxolabPlanLoaded || !remoteData) return;
 
-  // Não sobrescrever edições locais ainda não salvas
   try {
-    const localSnap = JSON.stringify(_fluxolabPlanejamentoState);
-    if (_fluxolabPlanLastSavedJSON != null && localSnap !== _fluxolabPlanLastSavedJSON) {
-      fluxolabSavePlanejamentoDebounced();
-      return;
-    }
-    // Eco do nosso próprio save — ignora
     const remoteSnap = JSON.stringify(Object.assign({ tabela1: [], tabela2: [], tabela3: [] }, remoteData));
-    if (_fluxolabPlanLastSavedJSON && remoteSnap === _fluxolabPlanLastSavedJSON) return;
+    if (remoteSnap === _fluxolabPlanLastSavedJSON || remoteSnap === _fluxolabPlanInFlightJSON) return;
+    if (_fluxolabPlanDirty || _fluxolabPlanSaving) return;
   } catch (e) {}
   
   ['tabela1', 'tabela2', 'tabela3'].forEach(t => {
@@ -721,7 +770,8 @@ function fluxolabClearPlanTable(tableName) {
     for (let i = 0; i < minRows; i++) {
       _fluxolabPlanejamentoState[tableName].push({ modelo: '', chk_manual: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
     }
-    fluxolabSavePlanejamentoDebounced();
+    _planMarkLocalDirty();
+    fluxolabSavePlanejamentoNow(true);
     fluxolabRenderPlanejamento();
   }
 }
@@ -743,7 +793,8 @@ function fluxolabRemovePlanRow(tableName, idx) {
     list.push({ modelo: '', chk_manual: '', qtd_wms: '', sugestao: '', obs: '', pecas: '' });
   }
   fluxolabCompactPlanTable(tableName);
-  fluxolabSavePlanejamentoNow();
+  _planMarkLocalDirty();
+  fluxolabSavePlanejamentoNow(true);
   fluxolabRenderPlanejamento();
 }
 

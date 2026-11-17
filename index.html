@@ -102,7 +102,11 @@ body.ro-visu-fluxolab #fluxolab-tab-planejamento-panel button,
 body.ro-visu-fluxolab #fluxolab-tab-pendencias-panel input,
 body.ro-visu-fluxolab #fluxolab-tab-pendencias-panel textarea,
 body.ro-visu-fluxolab #fluxolab-tab-pendencias-panel select,
-body.ro-visu-fluxolab #fluxolab-tab-pendencias-panel button {
+body.ro-visu-fluxolab #fluxolab-tab-pendencias-panel button,
+body.ro-visu-fluxolab #fluxolab-tab-complexas-panel input,
+body.ro-visu-fluxolab #fluxolab-tab-complexas-panel textarea,
+body.ro-visu-fluxolab #fluxolab-tab-complexas-panel select,
+body.ro-visu-fluxolab #fluxolab-tab-complexas-panel button {
   pointer-events: none !important;
   opacity: 0.55 !important;
 }
@@ -4007,7 +4011,12 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
           font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
           letter-spacing:.02em;transition:all .15s;margin-bottom:-1px;
-        ">🧩 Pendências Mistas & Complexas</button>
+        ">🧩 Pendências Mistas</button>
+        <button id="fluxolab-tab-complexas" onclick="fluxolabSwitchTab('complexas')" style="
+          background:none;border:none;border-bottom:2px solid transparent;color:var(--muted);
+          font-family:var(--font);font-size:13px;font-weight:700;padding:8px 18px 10px;cursor:pointer;
+          letter-spacing:.02em;transition:all .15s;margin-bottom:-1px;
+        ">⚙️ Complexas</button>
       </div>
       <!-- Separador vertical + Checklists Importados isolado à direita -->
       <div style="display:flex;align-items:flex-end;margin-bottom:-1px">
@@ -4218,8 +4227,11 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     <!-- ═══ ABA: PLANEJAMENTO DO DIA ═══ -->
     <div id="fluxolab-tab-planejamento-panel" style="display:none;padding:12px"></div>
 
-    <!-- ═══ ABA: PENDÊNCIAS MISTAS & COMPLEXAS ═══ -->
+    <!-- ═══ ABA: PENDÊNCIAS MISTAS ═══ -->
     <div id="fluxolab-tab-pendencias-panel" style="display:none;padding:12px"></div>
+
+    <!-- ═══ ABA: COMPLEXAS ═══ -->
+    <div id="fluxolab-tab-complexas-panel" style="display:none;padding:12px"></div>
 
     <!-- ═══ ABA: CHECKLISTS LIBERADOS HOJE ═══ -->
     <div id="fluxolab-tab-liberados-panel" style="display:none">
@@ -5076,9 +5088,9 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="supabase-compat-shim.js?v=4"></script>
-<script src="app.js?v=93"></script>
-<script src="planejamento.js?v=14"></script>
-<script src="pendencias.js?v=13"></script>
+<script src="app.js?v=95"></script>
+<script src="planejamento.js?v=15"></script>
+<script src="pendencias.js?v=15"></script>
 
 
 <!-- ═══ ALERTA FIXO: SELB EM ANDAMENTO (Complexa / Montagem / Limpeza) ═══ -->
