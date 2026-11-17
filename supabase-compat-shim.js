@@ -214,8 +214,39 @@ function createSupabaseCompatShim(supa) {
     return { dateKey: null, id, isCollection: id === undefined };
   }
 
+  const _CL_RAW_LS_KEY = 'sb_cl_raw_map_v1';
+  const _CL_RAW_TS_KEY = 'sb_cl_raw_ts_v1';
+
   async function rowsGet(cfg, p, filters) {
     const { dateKey, id, isCollection } = resolveRows(cfg, p);
+    // OTIMIZAÇÃO EGRESS: para fluxolab_checklists (planilha de ~560 linhas),
+    // valida pelo timestamp leve em app_config ('checklists_import_at') antes de baixar a tabela inteira.
+    if (cfg.table === 'fluxolab_checklists' && isCollection && (!filters || !filters.length)) {
+      try {
+        const localRaw = localStorage.getItem(_CL_RAW_LS_KEY);
+        const localTs  = localStorage.getItem(_CL_RAW_TS_KEY);
+        const { data: cfgRow, error: cfgErr } = await supa.from('app_config').select('value').eq('key', 'checklists_import_at').maybeSingle();
+        const serverTs = (!cfgErr && cfgRow && cfgRow.value && cfgRow.value.ts) ? String(cfgRow.value.ts) : null;
+        if (localRaw && localTs && serverTs && localTs === serverTs) {
+          const parsed = JSON.parse(localRaw);
+          if (parsed && typeof parsed === 'object') return Object.keys(parsed).length ? parsed : null;
+        }
+        const { data } = await supa.from(cfg.table).select('id,raw');
+        if (!data || !data.length) {
+          try { localStorage.removeItem(_CL_RAW_LS_KEY); localStorage.removeItem(_CL_RAW_TS_KEY); } catch(e) {}
+          return null;
+        }
+        const out = {};
+        for (const row of data) out[row.id] = row.raw;
+        try {
+          localStorage.setItem(_CL_RAW_LS_KEY, JSON.stringify(out));
+          localStorage.setItem(_CL_RAW_TS_KEY, serverTs || String(Date.now()));
+        } catch(e) {}
+        return out;
+      } catch(e) {
+        // Fallback para busca direta se localStorage falhar
+      }
+    }
     // OTIMIZAÇÃO: projeta apenas id+raw (evita trazer todas as colunas espelho).
     let q = supa.from(cfg.table).select('id,raw' + (dateKey ? ',date_key' : ''));
     if (dateKey) q = q.eq('date_key', dateKey);
@@ -367,8 +398,10 @@ function createSupabaseCompatShim(supa) {
   // centenas de requisições por dia em cada aba aberta. 300s + pausa quando a
   // aba está em segundo plano cortam esse tráfego drasticamente, sem
   // perder consistência (o Realtime continua entregando as mudanças na hora).
-  const RECONCILE_MS = 900000; // 15 min (era 5): realtime e o resync ao voltar de background ja cobrem; menos requisicoes = menos log
-  const BLOB_BROADCAST_MAX = 12000; // acima disso manda "reload" em vez do JSON
+  const RECONCILE_MS = 1800000; // 30 min (era 15): realtime e o resync ao voltar de background longo ja cobrem; menos requisicoes = menos log
+  const BLOB_BROADCAST_MAX = 64000; // 64 KB: evita cair em 'blob-reload' (que forçava N clientes a darem SELECT simultâneo)
+  const VIS_RESYNC_MIN_HIDDEN_MS = 300000; // 5 min: Alt+Tab rápido não dispara releitura de todas as tabelas
+  let _tabHiddenAt = 0;
 
   let _bus = null;
   const _busHandlers = new Set();
@@ -406,6 +439,34 @@ function createSupabaseCompatShim(supa) {
     try { payload = JSON.stringify(data || {}); } catch (e) { payload = null; }
     if (payload && payload.length <= BLOB_BROADCAST_MAX) busPublish({ k: 'blob', key: blobKey, data: data || {} });
     else busPublish({ k: 'blob-reload', key: blobKey });
+  }
+  function _applyBlobPatchInPlace(blobKey, pathArr, patchObj) {
+    const cached = _blobCache.get(blobKey);
+    if (!cached || !cached.loaded || !cached.data || typeof cached.data !== 'object') return null;
+    const clone = JSON.parse(JSON.stringify(cached.data));
+    const p = Array.isArray(pathArr) ? pathArr : [];
+    if (!p.length) {
+      if (patchObj && typeof patchObj === 'object') Object.assign(clone, patchObj);
+    } else {
+      let cur = clone;
+      for (let i = 0; i < p.length; i++) {
+        const k = p[i];
+        if (!cur[k] || typeof cur[k] !== 'object') cur[k] = {};
+        cur = cur[k];
+      }
+      if (patchObj && typeof patchObj === 'object') {
+        for (const [pk, pv] of Object.entries(patchObj)) {
+          if (pv === null) delete cur[pk];
+          else cur[pk] = pv;
+        }
+      }
+    }
+    _blobCacheSet(blobKey, clone, { hasSub: true });
+    return _blobCache.get(blobKey).data;
+  }
+  function pubBlobPatch(blobKey, pathArr, patchObj) {
+    _applyBlobPatchInPlace(blobKey, pathArr, patchObj);
+    busPublish({ k: 'blob-patch', key: blobKey, path: pathArr || [], patch: patchObj || {} });
   }
 
   // OTIMIZAÇÃO: derrubar o shim_bus assim que o último handler solta (release)
@@ -456,8 +517,16 @@ function createSupabaseCompatShim(supa) {
       // OTIMIZAÇÃO G: escalonar resyncs ao voltar de background em vez de
       // disparar todos simultaneamente (era: _resyncs.forEach(fn => fn())).
       document.addEventListener('visibilitychange', () => {
-        if (document.hidden || _paused) return;
-        _staggeredResyncs(_resyncs);
+        if (document.hidden) {
+          _tabHiddenAt = Date.now();
+          return;
+        }
+        if (_paused) return;
+        // Só ressincroniza via GET se a aba ficou oculta por pelo menos 5 min
+        if (_tabHiddenAt && (Date.now() - _tabHiddenAt >= VIS_RESYNC_MIN_HIDDEN_MS)) {
+          _tabHiddenAt = 0;
+          _staggeredResyncs(_resyncs);
+        }
       });
     }
     return {
@@ -527,9 +596,8 @@ function createSupabaseCompatShim(supa) {
   }
 
   // ── Pausa quando a aba fica oculta (economiza mensagens por cliente) ──
-  // OTIMIZAÇÃO H: reduzido de 60s → 30s para pausar mais rápido e economizar
-  // mensagens Realtime de abas que ficaram em background por muito tempo.
-  const PAUSE_AFTER_MS = 30000;
+  // 5 minutos evita derrubar/reconectar canais e refazer SELECTs em Alt+Tab rápido.
+  const PAUSE_AFTER_MS = 300000;
   let _pauseTimer = null;
 
   function _pauseAll() {
@@ -659,7 +727,13 @@ function createSupabaseCompatShim(supa) {
         if (isCollection) {
           if (cache == null) cache = {};
           if (ev.op === 'del') {
-            if (cache[ev.id] !== undefined) { delete cache[ev.id]; cb(makeSnapshot(cache)); }
+            if (cache[ev.id] !== undefined) {
+              delete cache[ev.id];
+              if (cfg.table === 'fluxolab_checklists') {
+                try { localStorage.setItem(_CL_RAW_LS_KEY, JSON.stringify(cache)); } catch(e) {}
+              }
+              cb(makeSnapshot(cache));
+            }
             return;
           }
           const raw = ev.op === 'patch'
@@ -670,6 +744,9 @@ function createSupabaseCompatShim(supa) {
             return;
           }
           cache[ev.id] = raw;
+          if (cfg.table === 'fluxolab_checklists') {
+            try { localStorage.setItem(_CL_RAW_LS_KEY, JSON.stringify(cache)); } catch(e) {}
+          }
           cb(makeSnapshot(cache));
         } else {
           if (ev.op === 'del') { cache = null; cb(makeSnapshot(null)); return; }
@@ -715,6 +792,10 @@ function createSupabaseCompatShim(supa) {
       if (ev.k === 'blob') {
         _blobCacheSet(cfg.blobKey, ev.data || {}, { hasSub: true });
         emit(ev.data || {});
+      } else if (ev.k === 'blob-patch') {
+        const updated = _applyBlobPatchInPlace(cfg.blobKey, ev.path, ev.patch);
+        if (updated) emit(updated);
+        else resync();
       } else if (ev.k === 'blob-reload') {
         resync();
       }
@@ -785,9 +866,7 @@ function createSupabaseCompatShim(supa) {
                 p_patch: { [leafKey]: value },
               });
               if (!error) {
-                const fresh = await blobLoad(cfg.blobKey, true);
-                _blobCacheSet(cfg.blobKey, fresh, { hasSub: true });
-                pubBlob(cfg.blobKey, fresh);
+                pubBlobPatch(cfg.blobKey, parentPath, { [leafKey]: value });
                 return;
               }
             } catch (e) { /* fallback abaixo */ }
@@ -811,14 +890,7 @@ function createSupabaseCompatShim(supa) {
             p_patch: patch,
           });
           if (error) throw error;
-          // O RPC muda o JSON dentro do Postgres: recarrega uma vez (só no
-          // autor da escrita) e publica o blob já consolidado no bus.
-          _blobCache.delete(cfg.blobKey);
-          try {
-            const fresh = await blobLoad(cfg.blobKey, true);
-            _blobCacheSet(cfg.blobKey, fresh, { hasSub: true });
-            pubBlob(cfg.blobKey, fresh);
-          } catch (e) { busPublish({ k: 'blob-reload', key: cfg.blobKey }); }
+          pubBlobPatch(cfg.blobKey, bp, patch);
           return;
         }
         return rowsUpdate(cfg, p, patch);
@@ -848,9 +920,7 @@ function createSupabaseCompatShim(supa) {
                   p_patch: { [key]: value },
                 });
                 if (!error) {
-                  const fresh = await blobLoad(cfg.blobKey, true);
-                  _blobCacheSet(cfg.blobKey, fresh, { hasSub: true });
-                  pubBlob(cfg.blobKey, fresh);
+                  pubBlobPatch(cfg.blobKey, bp, { [key]: value });
                   return { key };
                 }
               } catch (e) { /* fallback abaixo */ }

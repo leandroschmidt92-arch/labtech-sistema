@@ -154,6 +154,7 @@ function pendNormPedido(p) {
 function pendGetRowPedido(row) {
   if (!row || !row.modelo) return '';
   const stats = fluxolabPlanGetChecklistStats(row.modelo);
+  if (stats && typeof stats.bestPedido === 'string') return stats.bestPedido;
   if (!stats.rows || !stats.rows.length) return '';
   if (stats.count === 1) return pendGetChecklistPedido(stats, 0);
   let bestIdx = 0;
@@ -470,7 +471,7 @@ function pendGetViewState() {
 }
 
 /** Aplica um estado de view recebido do Supabase (outro usuário) */
-function pendApplyViewState(state) {
+function pendApplyViewState(state, opts) {
   if (!state) return;
   let changed = false;
 
@@ -537,7 +538,7 @@ function pendApplyViewState(state) {
     } catch(e) {}
   }
 
-  if (changed) {
+  if (changed && !(opts && opts.silent)) {
     if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'pendencias') {
       fluxolabRenderPendencias();
     }
@@ -585,9 +586,9 @@ async function fluxolabLoadPendencias() {
         const viewState = raw._viewState || null;
         delete raw._viewState;
         _fluxolabPendenciasState = raw;
-        // Aplica o viewState remoto (colunas, lista detalhada, tamanhos)
+        // Aplica o viewState remoto (colunas, lista detalhada, tamanhos) sem re-renderizar antes do sort final
         if (viewState) {
-          try { pendApplyViewState(viewState); } catch(e) {}
+          try { pendApplyViewState(viewState, { silent: true }); } catch(e) {}
         }
       }
       if (error) console.warn('[pend] load erro:', error);
@@ -596,7 +597,7 @@ async function fluxolabLoadPendencias() {
     // view state local como fallback se não veio do Supabase
     try {
       const _vsRaw = localStorage.getItem(PEND_VIEW_STATE_LS_KEY);
-      if (_vsRaw) pendApplyViewState(JSON.parse(_vsRaw));
+      if (_vsRaw) pendApplyViewState(JSON.parse(_vsRaw), { silent: true });
     } catch(e) { console.warn('[pend-view] load local falhou:', e); }
 
     // Realtime — nunca bloqueia o loaded se o helper falhar
@@ -1047,6 +1048,14 @@ function pendToggleExpand(tableName, idx) {
   const arr = document.getElementById(`pnd-${tableName}-r${idx}-expand-arr`);
   if (!det) return;
   const open = det.style.display !== 'none';
+  if (!open) {
+    const td = det.querySelector('td');
+    if (td && !td.children.length) {
+      const row = (_fluxolabPendenciasState[tableName] || [])[idx];
+      const statsChk = row && row.modelo ? fluxolabPlanGetChecklistStats(row.modelo) : { rows: [] };
+      td.innerHTML = pendRenderChecklistDetalhes(statsChk);
+    }
+  }
   det.style.display = open ? 'none' : '';
   if (arr) {
     arr.style.display = 'inline-block';
@@ -1297,29 +1306,27 @@ if (typeof window !== 'undefined' && !window._pendColDragBound) {
   window.addEventListener('blur', pendColDragEnd);
 }
 
-/** Só textareas (altura). Colunas usam alça dedicada. */
+/** Só textareas (altura) — persistido via mouseup sem ResizeObserver pesado em centenas de linhas. */
 function pendInitResizeObserver() {
-  if (_pendResizeObserver) _pendResizeObserver.disconnect();
-  _pendResizeObserver = new ResizeObserver(entries => {
-    let savedSizes = null;
-    let changed = false;
-    for (const entry of entries) {
-      if (!entry.target.id) continue;
-      if (!entry.target.classList.contains('pend-textarea')) continue;
-      if (!savedSizes) {
-        try { savedSizes = JSON.parse(localStorage.getItem('fluxolabPendSizes') || '{}'); } catch (e) { savedSizes = {}; }
-      }
-      const h = Math.round(entry.contentRect.height || entry.target.offsetHeight || 0);
-      if (h > 0) {
-        savedSizes[entry.target.id] = h + 'px';
-        changed = true;
-      }
-    }
-    if (changed && savedSizes) {
-      try { localStorage.setItem('fluxolabPendSizes', JSON.stringify(savedSizes)); } catch (e) {}
+  if (_pendResizeObserver) {
+    _pendResizeObserver.disconnect();
+    _pendResizeObserver = null;
+  }
+}
+if (typeof window !== 'undefined' && !window._pendTextareaMouseupBound) {
+  window._pendTextareaMouseupBound = true;
+  window.addEventListener('mouseup', e => {
+    const t = e.target;
+    if (t && t.id && t.classList && t.classList.contains('pend-textarea') && t.style.height) {
+      try {
+        const savedSizes = JSON.parse(localStorage.getItem('fluxolabPendSizes') || '{}');
+        if (savedSizes[t.id] !== t.style.height) {
+          savedSizes[t.id] = t.style.height;
+          localStorage.setItem('fluxolabPendSizes', JSON.stringify(savedSizes));
+        }
+      } catch (_e) {}
     }
   });
-  document.querySelectorAll('.pend-textarea').forEach(el => _pendResizeObserver.observe(el));
 }
 
 function pendResetColWidths() {
@@ -1515,6 +1522,9 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
   `;
 
 
+  let lastFilledPedido = '';
+  const visibleColCount = PEND_COL_DEFS.filter(c => !pendIsColHidden(tableName, c.k)).length;
+
   displayList.forEach((disp, dispIdx) => {
     const row = disp.row;
     const idx = disp.stateIdx;
@@ -1530,23 +1540,16 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
     const isDetailed = listaDetalhada && disp.chkIdx != null;
     const isFilled = !!row.modelo;
     const pedAtual = isFilled ? (pendGetDispPedido(disp) || pendGetRowPedido(row)) : '';
-    const pedAnterior = (() => {
-      for (let j = dispIdx - 1; j >= 0; j--) {
-        const prev = displayList[j];
-        if (!prev || !prev.row.modelo) continue;
-        return pendGetDispPedido(prev) || pendGetRowPedido(prev.row);
-      }
-      return '';
-    })();
+    const pedAnterior = lastFilledPedido;
+    if (isFilled) lastFilledPedido = pedAtual;
     const pedGroupBorder = (pedAtual && pedAnterior && pendNormPedido(pedAtual) !== pendNormPedido(pedAnterior))
       ? 'border-top:2px solid rgba(79,142,247,.45);' : '';
     const _urgTrocaPend = urgCor === 'laranja';
     const rowBg = dispIdx % 2 === 0 ? 'rgba(255,255,255,0.015)' : 'transparent';
     const canExpand = !listaDetalhada && isFilled && statsChk.count > 1;
     const isExpanded = canExpand && (_pendExpandedRows[tableName] || new Set()).has(idx);
-    const visibleColCount = PEND_COL_DEFS.filter(c => !pendIsColHidden(tableName, c.k)).length;
 
-    const inpBase = 'width:100%;height:100%;min-height:36px;border:none;background:transparent;text-align:center;font-weight:800;outline:none;font-family:var(--font);font-size:18px;color:var(--text);transition:all .2s;display:block';
+    const inpBase = 'width:100%;height:100%;min-height:36px;border:none;background:transparent;text-align:center;font-weight:800;outline:none;font-family:var(--font);font-size:18px;color:var(--text);display:block';
     const inpFocus = 'this.style.background="rgba(255,255,255,0.05)"';
     const inpBlur = 'this.style.background="transparent"';
     const dragHandle = isVirtual ? '' : 'cursor:grab;';
@@ -1576,10 +1579,10 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
            ${pendIsAcessorio(row.modelo) ? pendAcessorioBadgeHtml() : ''}
          </div>`
       : `<div style="display:flex;align-items:center;gap:6px;height:100%;padding:0 8px 0 12px">
-           <input id="pnd-${tableName}-r${idx}-modelo" type="text" list="modelos-lista" placeholder="Digite..." value="${row.modelo || ''}"
-                  onfocus="${inpFocus}" onblur="${inpBlur}"
+           <input id="pnd-${tableName}-r${idx}-modelo" type="text" placeholder="Digite..." value="${row.modelo || ''}"
+                  onfocus="if(!this.getAttribute('list'))this.setAttribute('list','modelos-lista');${inpFocus}" onblur="${inpBlur}"
                   onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'modelo')"
-                  style="flex:1;min-width:0;height:100%;min-height:36px;border:none;background:transparent;text-align:left;font-weight:800;outline:none;font-family:var(--font);font-size:15px;color:#ffffff;transition:all .2s;padding:0" />
+                  style="flex:1;min-width:0;height:100%;min-height:36px;border:none;background:transparent;text-align:left;font-weight:800;outline:none;font-family:var(--font);font-size:15px;color:#ffffff;padding:0" />
            <span id="pnd-${tableName}-r${idx}-badge" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">${pendBadgeHtml(statsChk.count, isFilled, row.modelo)}${urgBadgeHtml}</span>
            <span class="active-users-badge" id="pnd-${tableName}-r${idx}-active-users" data-modelo="${row.modelo || ''}" style="display:flex;align-items:center"></span>
          </div>`;
@@ -1682,9 +1685,7 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
     if (canExpand) {
       html += `
       <tr id="pnd-${tableName}-det-${idx}" style="display:${isExpanded ? '' : 'none'}">
-        <td colspan="${visibleColCount}" style="padding:0;border-bottom:1px solid var(--border2)">
-          ${pendRenderChecklistDetalhes(statsChk)}
-        </td>
+        <td colspan="${visibleColCount}" style="padding:0;border-bottom:1px solid var(--border2)">${isExpanded ? pendRenderChecklistDetalhes(statsChk) : ''}</td>
       </tr>`;
     }
   });
@@ -1736,17 +1737,11 @@ function fluxolabRenderPendencias() {
   if (!panel) return;
   _pendInjectLightCss();
   panel.classList.toggle('pend-light', pendIsLightBg());
+  if (typeof window._fluxolabEnsureModelosDatalist === 'function') {
+    window._fluxolabEnsureModelosDatalist();
+  }
 
-  // Reaproveita a mesma datalist de modelos usada no Planejamento do Dia,
-  // recriando aqui para o caso desta aba ser renderizada primeiro.
-  let modelosUnicos = Array.from(new Set(Object.values(typeof equipamentos !== 'undefined' ? equipamentos : {}).filter(Boolean)));
-  modelosUnicos.sort((a,b) => a.localeCompare(b));
-
-  let dataListHtml = '<datalist id="modelos-lista">';
-  modelosUnicos.forEach(m => dataListHtml += `<option value="${m}">`);
-  dataListHtml += '</datalist>';
-
-  let html = dataListHtml;
+  let html = '';
 
   html += `
     <div style="margin-bottom:24px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;justify-content:space-between">
@@ -1773,5 +1768,5 @@ function fluxolabRenderPendencias() {
   pendInitResizeObserver();
   if (typeof updateActiveUsersInTables === 'function') updateActiveUsersInTables();
 }
+// OTIMIZAÇÃO EGRESS/REALTIME: Pendências carrega sob demanda ao abrir a aba ou o modal flutuante.
 
-setTimeout(fluxolabLoadPendencias, 1500);

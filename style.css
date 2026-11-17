@@ -2809,6 +2809,9 @@ a, input, select, textarea, label,
 /* Dashboard: SELB ao lado do nome e barra de produtividade din�mica */
 .card-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
 .card-selb-tag { font-family: var(--mono); font-size: 12px; font-weight: 800; color: #3dd68c; background: rgba(61,214,140,0.12); border: 1px solid rgba(61,214,140,0.35); border-radius: 6px; padding: 2px 8px; letter-spacing: 0.04em; }
+.card-exp-tag { font-family: var(--mono); font-size: 11.5px; font-weight: 800; color: #3dd68c; background: rgba(255,255,255,0.04); border: 1px solid rgba(61,214,140,0.35); border-radius: 6px; padding: 2px 8px; letter-spacing: 0.02em; white-space: nowrap; }
+.card-exp-tag.warn { color: #f5a623; background: rgba(245,166,35,0.10); border-color: rgba(245,166,35,0.40); }
+.card-exp-tag.red { color: #f25757; background: rgba(242,87,87,0.10); border-color: rgba(242,87,87,0.40); }
 .prog-segments { min-height: 18px; }
 
 /* ════ Dashboard: alternador de layout + cards compactos ════ */
@@ -2827,6 +2830,9 @@ a, input, select, textarea, label,
 .cc-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .cc-name { font-size: 13px; font-weight: 800; letter-spacing: .02em; text-transform: uppercase; color: #f8fafc; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .cc-selb { font-family: var(--mono); font-size: 11px; font-weight: 800; color: #3dd68c; background: rgba(61,214,140,.12); border: 1px solid rgba(61,214,140,.45); border-radius: 5px; padding: 0 6px; line-height: 17px; letter-spacing: .03em; flex: 0 0 auto; }
+.cc-exp { font-family: var(--mono); font-size: 11px; font-weight: 800; color: #3dd68c; background: rgba(255,255,255,.04); border: 1px solid rgba(61,214,140,.35); border-radius: 5px; padding: 0 6px; line-height: 17px; letter-spacing: .02em; flex: 0 0 auto; white-space: nowrap; }
+.cc-exp.warn { color: #f5a623; background: rgba(245,166,35,.10); border-color: rgba(245,166,35,.40); }
+.cc-exp.red { color: #f25757; background: rgba(242,87,87,.10); border-color: rgba(242,87,87,.40); }
 .cc-spacer { flex: 1; }
 .cc-badge { font-size: 9.5px; font-weight: 800; letter-spacing: .04em; white-space: nowrap; flex: 0 0 auto; color: #f5b83d; background: rgba(245,184,61,.10); border: 1px solid rgba(245,184,61,.6); border-radius: 999px; padding: 1px 8px; line-height: 16px; }
 .card.card-compact .sdot { flex: 0 0 8px; width: 8px; height: 8px; }

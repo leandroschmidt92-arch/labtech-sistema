@@ -1746,13 +1746,9 @@ function startRealtimeSync(){
       }
       _historyReady = true;
       // ── Pré-carrega o cache de 90 dias usado pelo "T. Médio Modelo" ──
-      // Antes, esse cache (_modeloAllRecs) só era carregado quando alguém
-      // abria a aba Relatórios → Tempo por Modelo. Até lá, os cards do
-      // Dashboard calculavam a média usando só os registros de HOJE, dando
-      // um número bem diferente do relatório (que usa até 90 dias). Carrega
-      // uma única vez por sessão, em segundo plano, assim que o histórico de
-      // hoje estiver pronto, e re-renderiza os cards com a média correta.
-      if(!_modeloAllRecsPreloadTriggered && typeof loadModeloAllPeriods === 'function'){
+      // OTIMIZAÇÃO EGRESS: carrega apenas para quem visualiza o Dashboard (isDashViewer).
+      // Operadores comuns (view-operador) não veem os cards do Dashboard.
+      if(isDashViewer && !_modeloAllRecsPreloadTriggered && typeof loadModeloAllPeriods === 'function'){
         _modeloAllRecsPreloadTriggered = true;
         loadModeloAllPeriods().then(() => {
           if(typeof buildCards === 'function' && currentUser && document.getElementById('cards-grid')) buildCards();
@@ -2855,17 +2851,15 @@ function loginAs(u){
     });
   }
 
-  // FluxoLAB e Qualidade inicializam seus dados sob demanda ao abrir a área,
-  // mas certas dependências (Mistas/Complexas do operador e Liberadas no Dia do Dash) 
-  // exigem carga inicial.
-  if (typeof fluxolabLoadPendencias === 'function' && (typeof _fluxolabPendLoaded === 'undefined' || !_fluxolabPendLoaded)) {
-    fluxolabLoadPendencias().then(() => { if(typeof fluxolabRenderPendencias === 'function') fluxolabRenderPendencias(); }).catch(e => console.warn(e));
+  // OTIMIZAÇÃO EGRESS/REALTIME:
+  // - Pendências (fluxolabLoadPendencias) carrega apenas sob demanda ao abrir a aba ou o modal flutuante.
+  // - Badges do topo do Dashboard só iniciam para perfis que visualizam o Dashboard (nunca em terminais exclusivos de Operador).
+  const isDashProfile = isAdmin || viewAsAdmin || isDisplay || isQual || isVisuFluxo;
+  if (isDashProfile) {
+    _dashLibRecount().then(() => _dashLibStart());
+    if (typeof _dashChecklistsRecount === 'function') _dashChecklistsRecount();
+    if (typeof fetchDashboardSaudeEquipe === 'function') fetchDashboardSaudeEquipe();
   }
-  // Badge "Liberadas no Dia": COUNT leve (HEAD, zero linhas) + canal realtime leve
-  // que so escuta INSERT/DELETE e ajusta o contador (ver _dashLibStart).
-  _dashLibRecount().then(() => _dashLibStart());
-  // Badge "Checklists": contagem leve (HEAD ou app_config) para o Dashboard
-  if(typeof _dashChecklistsRecount === 'function') _dashChecklistsRecount();
 
   scheduleCheck();
   const admCred = document.getElementById('admin-cred');
@@ -3577,20 +3571,22 @@ function renderCard(uid){
   const u=users.find(x=>x.id===uid); if(!u) return;
   const s=getS(uid);
   const totalDia=getTotalDia(uid);
-  const metaDia = (u.sector === 'COMPLEXA') ? 1 : 8;
+  const metaDia = (u.sector === 'COMPLEXA') ? 1 : 10;
   
-  // Lógica de Agendamento
+  // Lógica de Agendamento (10 máquinas distribuídas entre 07:30–13:00 e 14:12–17:30)
   const MACHINE_SCHEDULE = (u.sector === 'COMPLEXA') ? [
     { start: "07:30", end: "17:30", label: "Máquina 1" }
   ] : [
-    { start: "07:30", end: "08:35", label: "Máquina 1" },
-    { start: "08:35", end: "09:40", label: "Máquina 2" },
-    { start: "09:40", end: "10:45", label: "Máquina 3" },
-    { start: "10:45", end: "11:50", label: "Máquina 4" },
-    { start: "11:50", end: "13:00", label: "Máquina 5" },
-    { start: "14:12", end: "15:17", label: "Máquina 6" },
-    { start: "15:17", end: "16:22", label: "Máquina 7" },
-    { start: "16:22", end: "17:30", label: "Máquina 8" }
+    { start: "07:30", end: "08:25", label: "Máquina 1" },
+    { start: "08:25", end: "09:20", label: "Máquina 2" },
+    { start: "09:20", end: "10:15", label: "Máquina 3" },
+    { start: "10:15", end: "11:10", label: "Máquina 4" },
+    { start: "11:10", end: "12:05", label: "Máquina 5" },
+    { start: "12:05", end: "13:00", label: "Máquina 6" },
+    { start: "14:12", end: "15:01", label: "Máquina 7" },
+    { start: "15:01", end: "15:50", label: "Máquina 8" },
+    { start: "15:50", end: "16:40", label: "Máquina 9" },
+    { start: "16:40", end: "17:30", label: "Máquina 10" }
   ];
 
   const now = new Date();
@@ -3671,6 +3667,7 @@ function renderCard(uid){
       <div class="cc-head">
         <div class="cc-name" title="${u.name}">${u.name}</div>
         ${selbTag ? `<div class="cc-selb" title="SELB em andamento">${selbTag}</div>` : ''}
+        <div class="cc-exp ${statusClass}" title="Expectativa agora (${expectedMachines} de ${metaDia} no dia)">Exp. ${expectedMachines}/${metaDia}</div>
         <div class="cc-spacer"></div>
         ${ccBadge}
         <div class="sdot ${isRun?'running':(isPaus||isAg)?'paused':''}"></div>
@@ -3712,12 +3709,13 @@ function renderCard(uid){
       <div class="card-title-row">
         <div class="card-name">${u.name}</div>
         ${(s.selb || hRun?.selb) ? `<div class="card-selb-tag" title="SELB em andamento">${s.selb || hRun.selb}</div>` : ''}
+        <div class="card-exp-tag ${statusClass}" title="Expectativa agora (${expectedMachines} de ${metaDia} no dia)">Exp. ${expectedMachines}/${metaDia}</div>
       </div>
       <div class="sdot ${isRun?'running':(isPaus||isAg)?'paused':''}"></div>
     </div>
     
     <div class="prog-area">
-      <div class="prog-segments${totalDia > metaDia ? ' compact' : ''}" style="grid-template-columns:repeat(${metaDia},1fr)">
+      <div class="prog-segments${totalDia > metaDia ? ' compact' : ''}" style="grid-template-columns:repeat(${Math.min(8, metaDia)},1fr)">
         ${(function(){
           const completedList = getTodayCompletedList(uid);
           const totalSegments = totalDia; // começa em 0 e gera um quadradinho por SELB finalizado
@@ -5267,7 +5265,7 @@ async function confirmarFin(){
   // ── Verifica se atingiu a meta agora ──
   const newTotal = getTotalDia(actionUid);
   const prevTotal = newTotal - 1; // valor antes desta finalização
-  const meta = (u.sector === 'COMPLEXA') ? 1 : 8;
+  const meta = (u.sector === 'COMPLEXA') ? 1 : 10;
   // Só dispara no EXATO momento em que a meta é cruzada (evita bip duplo)
   const todayKey = new Date().toDateString();
   const bipKey = '_metaBip_' + actionUid + '_' + todayKey;
@@ -5575,8 +5573,8 @@ function updateSummary(){
       elAtual.style.color = cor;
     });
   }
-  _renderExpectativaSetor('MONTAGEM', 8, [['exp-mont-atual','exp-mont-total'], ['texp-mont-atual','texp-mont-total']]);
-  _renderExpectativaSetor('LIMPEZA',  8, [['exp-limp-atual','exp-limp-total'], ['texp-limp-atual','texp-limp-total']]);
+  _renderExpectativaSetor('MONTAGEM', 10, [['exp-mont-atual','exp-mont-total'], ['texp-mont-atual','texp-mont-total']]);
+  _renderExpectativaSetor('LIMPEZA',  10, [['exp-limp-atual','exp-limp-total'], ['texp-limp-atual','texp-limp-total']]);
   _renderExpectativaSetor('COMPLEXA', 1, [['exp-comp-atual','exp-comp-total'], ['texp-comp-atual','texp-comp-total']]);
 
   // Atualiza Saúde da Equipe do dashboard (se já carregada)
@@ -5754,9 +5752,21 @@ function refreshDashboardSaudeEquipe() {
 }
 window.refreshDashboardSaudeEquipe = refreshDashboardSaudeEquipe;
 
+let _lastDashSaudeFetchTs = 0;
+
+function _isDashSaudeRelevant() {
+  if (typeof currentUser === 'undefined' || !currentUser) return false;
+  const opView = document.getElementById('view-operador');
+  if (opView && opView.classList.contains('active')) return false;
+  return true;
+}
+
 async function fetchDashboardSaudeEquipe(force) {
-  // Aba em segundo plano nao precisa consultar (menos requisicoes = menos log ingestion)
+  // Aba em segundo plano ou terminal exclusivo de operador não precisa consultar
   if (force !== true && typeof document !== 'undefined' && document.hidden) return;
+  if (force !== true && !_isDashSaudeRelevant()) return;
+  if (force !== true && (Date.now() - _lastDashSaudeFetchTs < 60000)) return; // evita chamadas duplicadas em menos de 60s
+  _lastDashSaudeFetchTs = Date.now();
   try {
     if (typeof seLoadRosterCustomsFromDb === 'function') await seLoadRosterCustomsFromDb();
     const todayISO = _localISODate();
@@ -5798,10 +5808,12 @@ async function fetchDashboardSaudeEquipe(force) {
   }
 }
 setInterval(fetchDashboardSaudeEquipe, 300000); // 5 min
-// Ao voltar para a aba do navegador, atualiza na hora (o intervalo ignora aba oculta)
-document.addEventListener('visibilitychange', () => { if (!document.hidden) fetchDashboardSaudeEquipe(); });
-setTimeout(fetchDashboardSaudeEquipe, 3000);
-setTimeout(_dashChecklistsRecount, 1000);
+// Ao voltar para a aba do navegador, só atualiza se passaram pelo menos 3 min desde a última leitura
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && (Date.now() - _lastDashSaudeFetchTs >= 180000)) {
+    fetchDashboardSaudeEquipe();
+  }
+});
 
 // ════ CONSULTA ════
 let _consultaDateKey = null;   // dateKey currently shown in consulta (kept for compat)
@@ -13149,14 +13161,38 @@ function parseDuracao(dur){
   return secs > 0 ? secs : null;
 }
 
-async function loadModeloAllPeriods(){
+const _MODELO_90D_CACHE_KEY = 'sb_modelo_90d_cache_v1';
+const _MODELO_90D_TTL_MS    = 6 * 3600 * 1000; // 6 horas de cache local (economiza megabytes a cada F5)
+
+async function loadModeloAllPeriods(force = false){
   const loadingEl = document.getElementById('modelo-loading');
   if(loadingEl) loadingEl.style.display = 'block';
+
+  // 1) Tenta hidratar do cache local se estiver dentro da validade (6h)
+  if(!force){
+    try {
+      const rawCache = localStorage.getItem(_MODELO_90D_CACHE_KEY);
+      if(rawCache){
+        const parsed = JSON.parse(rawCache);
+        if(parsed && parsed.ts && (Date.now() - parsed.ts < _MODELO_90D_TTL_MS) && Array.isArray(parsed.recs) && parsed.recs.length > 0){
+          const seenIds = new Set((history || []).map(h => h._docId).filter(Boolean));
+          const merged = [...(history || [])];
+          parsed.recs.forEach(r => {
+            if(r && r._docId && !seenIds.has(r._docId)){
+              seenIds.add(r._docId);
+              merged.push(r);
+            }
+          });
+          _modeloAllRecs = merged;
+          if(loadingEl) loadingEl.style.display = 'none';
+          return;
+        }
+      }
+    } catch(e){}
+  }
+
   const today = new Date();
-  // Antes: 1 GET por dia (~89 requests) via dbGet('/history/'+dk).
-  // Agora: poucas páginas por start_epoch (tipicamente 1–3 requests).
   let allRecs = [...(history || [])];
-  // Completa com o restante do range (90 dias) em poucas páginas REST
   const seen = new Set(allRecs.map(h => h._docId).filter(Boolean));
   try {
     if(typeof _supa !== 'undefined'){
@@ -13164,25 +13200,57 @@ async function loadModeloAllPeriods(){
       const PAGE = 1000;
       let from = 0;
       for(let page = 0; page < 20; page++){ // hard cap ~20k rows
+        // OTIMIZAÇÃO EGRESS: projeta apenas os campos necessários para o cálculo de média e modal,
+        // sem baixar o JSONB `raw` inteiro (que contém textos longos de followup/observações).
+        let rows = null;
         const { data, error } = await _supa
           .from('history')
-          .select('id,date_key,raw,start_epoch')
+          .select('id,date_key,start_epoch,selb:raw->>selb,name:raw->>name,sector:raw->>sector,equipamento:raw->>equipamento,status:raw->>status,duracao:raw->>duracao,start:raw->>start,end:raw->>end,rawEndEpoch:raw->>endEpoch,rawStartEpoch:raw->>startEpoch')
           .gte('start_epoch', since)
           .order('start_epoch', { ascending: false })
           .range(from, from + PAGE - 1);
-        if(error) throw error;
-        const rows = data || [];
-        rows.forEach(row => {
-          if(!row || !row.id || seen.has(row.id)) return;
-          seen.add(row.id);
-          const raw = (row.raw && typeof row.raw === 'object') ? row.raw : {};
-          allRecs.push({
-            ...raw,
-            _docId: row.id,
-            _dateKey: row.date_key || raw._dateKey || '',
-            startEpoch: raw.startEpoch || row.start_epoch,
+        if(!error && data){
+          rows = data;
+          rows.forEach(row => {
+            if(!row || !row.id || seen.has(row.id)) return;
+            seen.add(row.id);
+            allRecs.push({
+              _docId: row.id,
+              _dateKey: row.date_key || '',
+              selb: row.selb || '',
+              name: row.name || '',
+              sector: row.sector || '',
+              equipamento: row.equipamento || '',
+              status: row.status || '',
+              duracao: row.duracao || '',
+              start: row.start || '',
+              end: row.end || '',
+              startEpoch: Number(row.rawStartEpoch || row.start_epoch) || 0,
+              endEpoch: Number(row.rawEndEpoch) || 0,
+            });
           });
-        });
+        } else {
+          // Fallback caso alguma versão do PostgREST rejeite alias JSON
+          const { data: fbData, error: fbErr } = await _supa
+            .from('history')
+            .select('id,date_key,raw,start_epoch')
+            .gte('start_epoch', since)
+            .order('start_epoch', { ascending: false })
+            .range(from, from + PAGE - 1);
+          if(fbErr) throw fbErr;
+          rows = fbData || [];
+          rows.forEach(row => {
+            if(!row || !row.id || seen.has(row.id)) return;
+            seen.add(row.id);
+            const raw = (row.raw && typeof row.raw === 'object') ? row.raw : {};
+            allRecs.push({
+              ...raw,
+              _docId: row.id,
+              _dateKey: row.date_key || raw._dateKey || '',
+              startEpoch: raw.startEpoch || row.start_epoch,
+            });
+          });
+        }
         if(rows.length < PAGE) break;
         from += PAGE;
       }
@@ -13207,36 +13275,27 @@ async function loadModeloAllPeriods(){
       }
     }
   } catch(e){
-    console.warn('[T. Médio Modelo] carga otimizada falhou, tentando fallback por dia:', e);
-    try {
-      const dateKeys = [];
-      for(let i = 1; i < 90; i++){
-        const d = new Date(today); d.setDate(today.getDate() - i);
-        dateKeys.push(d.toDateString().replace(/ /g,'_'));
-      }
-      const BATCH = 10;
-      for(let i = 0; i < dateKeys.length; i += BATCH){
-        const batch = dateKeys.slice(i, i+BATCH);
-        const results = await Promise.all(batch.map(async dk => {
-          try {
-            const data = await dbGet('/history/'+dk);
-            if(!data) return [];
-            return Object.entries(data).map(([k,v])=>({...v,_docId:k,_dateKey:dk}));
-          } catch(e2){ return []; }
-        }));
-        results.forEach(recs => {
-          recs.forEach(r => {
-            if(r._docId && seen.has(r._docId)) return;
-            if(r._docId) seen.add(r._docId);
-            allRecs.push(r);
-          });
-        });
-      }
-    } catch(e2){
-      console.warn('[T. Médio Modelo] fallback também falhou:', e2);
-    }
+    console.warn('[T. Médio Modelo] carga otimizada falhou, tentando fallback:', e);
   }
   _modeloAllRecs = allRecs;
+  // Salva versão enxuta no cache local por 6 horas
+  try {
+    const compactRecs = allRecs.map(r => ({
+      _docId: r._docId,
+      _dateKey: r._dateKey,
+      selb: r.selb,
+      name: r.name,
+      sector: r.sector,
+      equipamento: r.equipamento,
+      status: r.status,
+      duracao: r.duracao,
+      start: r.start,
+      end: r.end,
+      startEpoch: r.startEpoch,
+      endEpoch: r.endEpoch
+    }));
+    localStorage.setItem(_MODELO_90D_CACHE_KEY, JSON.stringify({ ts: Date.now(), recs: compactRecs }));
+  } catch(e){}
   if(loadingEl) loadingEl.style.display = 'none';
 }
 
@@ -13245,6 +13304,8 @@ async function recarregarModeloRel(){
   if(btn){ btn.textContent = '⏳ Carregando...'; btn.disabled = true; }
   _modeloAllRecs = [];
   _modeloLoadedMonths.clear();
+  try { localStorage.removeItem(_MODELO_90D_CACHE_KEY); } catch(e){}
+  await loadModeloAllPeriods(true);
   await renderModeloRel();
   if(btn){ btn.textContent = '🔄 Recarregar dados'; btn.disabled = false; }
 }
@@ -23143,12 +23204,14 @@ let _fluxolabData = {};
 // `intervalMs` para refletir mudanças de outros usuários — aceitável
 // para telas que não precisam ser 100% instantâneas.
 function pollRef(ref, intervalMs, cb, errCb) {
-  let stopped = false, inFlight = false;
+  let stopped = false, inFlight = false, lastTickTs = 0;
+  const minVisGap = Math.min(intervalMs || 300000, 300000); // mínimo 5 min entre leituras no Alt+Tab
   async function tick() {
     if (stopped || inFlight) return;
     // Economiza requests enquanto a aba está em segundo plano
     if (typeof document !== 'undefined' && document.hidden) return;
     inFlight = true;
+    lastTickTs = Date.now();
     try { await ref.once('value', cb, errCb); }
     catch (e) { if (errCb) errCb(e); }
     finally { inFlight = false; }
@@ -23156,7 +23219,7 @@ function pollRef(ref, intervalMs, cb, errCb) {
   tick();
   const id = setInterval(tick, intervalMs);
   const onVis = () => {
-    if (!document.hidden && !stopped) tick();
+    if (!document.hidden && !stopped && (Date.now() - lastTickTs >= minVisGap)) tick();
   };
   if (typeof document !== 'undefined' && document.addEventListener) {
     document.addEventListener('visibilitychange', onVis);
@@ -23926,6 +23989,7 @@ function _fluxolabRenderGrid() {
         .filter(x => x.items.length > 0)
     : bolsaoList;
 
+  const hasEquipamentosLoaded = Object.keys(equipamentos).length > 0;
   grid.innerHTML = bolsaoListView.map(({ b, items, maxDias }) => {
     const count = items.length;
 
@@ -23942,7 +24006,7 @@ function _fluxolabRenderGrid() {
     const chips = itemsSorted.map(([k, v]) => {
       const timeAgo = v.ts ? _fluxolabTimeAgo(v.ts) : '';
       const selbCode = v.selb || k;
-      const notInEquip = Object.keys(equipamentos).length > 0 && (typeof getEquipName === 'function') && !getEquipName(selbCode);
+      const notInEquip = hasEquipamentosLoaded && (typeof getEquipName === 'function') && !getEquipName(selbCode);
       const warnBadge = notInEquip
         ? '<span title="SELB não encontrado na planilha de equipamentos atual — pode ter sido removido" style="margin-left:3px;font-size:11px;cursor:default">⚠️</span>'
         : '';
@@ -25338,12 +25402,12 @@ function fluxolabSwitchTab(tab) {
   if (tab === 'liberados')  fluxolabRenderLiberadosHoje();
     if (tab === 'planejamento') {
       if (typeof fluxolabLoadPlanejamento === 'function' && (typeof _fluxolabPlanLoaded === 'undefined' || !_fluxolabPlanLoaded)) {
-        fluxolabLoadPlanejamento().then(() => fluxolabRenderPlanejamento?.()).catch(e => console.warn('[Planejamento] carga:', e));
+        fluxolabLoadPlanejamento().catch(e => console.warn('[Planejamento] carga:', e));
       } else if (typeof fluxolabRenderPlanejamento === 'function') fluxolabRenderPlanejamento();
     }
     if (tab === 'pendencias') {
       if (typeof fluxolabLoadPendencias === 'function' && (typeof _fluxolabPendLoaded === 'undefined' || !_fluxolabPendLoaded)) {
-        fluxolabLoadPendencias().then(() => fluxolabRenderPendencias?.()).catch(e => console.warn('[Pendências] carga:', e));
+        fluxolabLoadPendencias().catch(e => console.warn('[Pendências] carga:', e));
       } else if (typeof fluxolabRenderPendencias === 'function') fluxolabRenderPendencias();
     }
 }
@@ -25742,6 +25806,8 @@ function fluxolabRenderModelos() {
 
   // (modelosNoPlano já definido acima)
 
+  window._fluxolabRenderDetalhesPedidosLazy = _renderDetalhesPedidos;
+
   const rows = entradas.map(([modelo, dados], idx) => {
     const clTotal = checklistIdx.get(_fluxolabNormModel(modelo)) || 0;
     // Total de SELBs do modelo (soma de todos os bolsões, incluindo SCRAP) para base proporcional
@@ -25858,9 +25924,9 @@ function fluxolabRenderModelos() {
     const detId = 'fxmod-det-' + idx;
     const normKey = _fluxolabNormModel(modelo);
     const totalCols = 6 + bolsoesAtivos.length; // Modelo + Total + Checklists + Dias Úteis + Dias Aberto + Faltantes + bolsões
-    const detalhesHtml = _renderDetalhesPedidos(normKey);
     const hasDet = clTotal > 0;
     const isOpen = window._fluxolabModelosExpanded.has(normKey);
+    const detalhesHtml = (hasDet && isOpen) ? _renderDetalhesPedidos(normKey) : '';
 
     // Badges pequenos: Urgências (vermelho), Troca Técnica (amarelo) e Urgência TT (badge compacto "Urgência TT")
     const _detInfo = checklistDetalhes.get(normKey);
@@ -25882,7 +25948,7 @@ function fluxolabRenderModelos() {
     const mainRow = `<tr style="background:${rowBgFinal};${rowInset}transition:background .12s;cursor:${hasDet?'pointer':'default'}"
       data-modelo-enc="${modeloEnc}"
       oncontextmenu="return fluxolabModeloCtxMenu(event, this.getAttribute('data-modelo-enc'))"
-      ${hasDet ? `onclick="(function(el,id,nk){var t=document.getElementById(id);var open=t.style.display!=='none';t.style.display=open?'none':'';var a=el.querySelector('.fxmod-arr');if(a)a.style.transform=open?'':'rotate(180deg)';if(open)window._fluxolabModelosExpanded.delete(nk);else window._fluxolabModelosExpanded.add(nk);})(this,'${detId}','${normKey}')"` : ''}
+      ${hasDet ? `onclick="(function(el,id,nk){var t=document.getElementById(id);var open=t.style.display!=='none';if(!open){var td=t.querySelector('td');if(td&&!td.hasChildNodes()&&window._fluxolabRenderDetalhesPedidosLazy)td.innerHTML=window._fluxolabRenderDetalhesPedidosLazy(nk);}t.style.display=open?'none':'';var a=el.querySelector('.fxmod-arr');if(a)a.style.transform=open?'':'rotate(180deg)';if(open)window._fluxolabModelosExpanded.delete(nk);else window._fluxolabModelosExpanded.add(nk);})(this,'${detId}','${normKey}')"` : ''}
       onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background='${rowBgFinal}'">
       <td style="padding:10px 16px;border-bottom:1px solid var(--border);min-width:220px;max-width:340px">
         <div style="display:flex;align-items:center;gap:10px">
@@ -26043,13 +26109,73 @@ let _fluxolabChecklistsImported = []; // [{ ...rowFromXlsx }]
 // Cada linha é salva como string JSON para evitar que nomes de colunas com caracteres
 // proibidos pelo Supabase (. # $ / [ ]) se tornem chaves aninhadas.
 let _fluxolabChecklistsListener = null;
-function fluxolabStartChecklistsListener(){
-  if (_fluxolabChecklistsListener) return;
-  _fluxolabChecklistsListener = _db.ref('/fluxolab_checklists').on('value', function(snap){
-    if (!snap.exists()){ _fluxolabChecklistsImported = []; window._fluxolabImportedAt = null; }
-    else {
+const _CL_CACHE_KEY    = 'sb_checklists_cache_v1';
+const _CL_CACHE_TS_KEY = 'sb_checklists_cache_ts_v1';
+
+function _fluxolabApplyChecklistsLoaded() {
+  window._fluxolabChecklistsVer = (window._fluxolabChecklistsVer || 0) + 1;
+  if (_fluxolabActiveTab === 'checklists') fluxolabRenderChecklistsImported();
+  if (_fluxolabActiveTab === 'modelos')    fluxolabRenderModelos();
+  _fluxolabAtualizarBadgeCaindo();
+  if (typeof _fluxolabAtualizarBadgeChecklists === 'function') {
+    _fluxolabAtualizarBadgeChecklists(_fluxolabChecklistsImported.length);
+  }
+  if (_fluxolabActiveTab === 'caindo') fluxolabRenderCaindoHoje();
+  if (typeof _fluxolabPendLoaded !== 'undefined' && _fluxolabPendLoaded
+      && typeof pendGroupStateByPedido === 'function'
+      && typeof _fluxolabPendenciasState !== 'undefined') {
+    try {
+      Object.keys(_fluxolabPendenciasState || {}).forEach(function(t) { pendGroupStateByPedido(t); });
+      if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'pendencias'
+          && typeof fluxolabRenderPendencias === 'function') {
+        fluxolabRenderPendencias();
+      }
+    } catch(_e) { console.warn('[FluxoLAB] Erro ao re-ordenar pendências por urgência:', _e); }
+  }
+  if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'planejamento'
+      && typeof fluxolabRenderPlanejamento === 'function') {
+    try { fluxolabRenderPlanejamento(); } catch(_e) {}
+  }
+  const _qualView = document.getElementById('view-qualidade') || document.getElementById('view-gaiola-lab');
+  if (_qualView && _qualView.classList.contains('active')) {
+    try { if (typeof renderQualRegistros === 'function') renderQualRegistros(); } catch(e) {}
+  }
+}
+
+async function _fluxolabLoadChecklistsCached(force = false) {
+  // 1) Tenta hidratar do localStorage e validar apenas pelo timestamp leve (checklists_import_at ~50 bytes)
+  if (!force) {
+    try {
+      const localRaw = localStorage.getItem(_CL_CACHE_KEY);
+      const localTs  = localStorage.getItem(_CL_CACHE_TS_KEY);
+      if (localRaw && localTs) {
+        const { data: cfg } = await _supa.from('app_config').select('value').eq('key', 'checklists_import_at').maybeSingle();
+        const serverTs = cfg && cfg.value && cfg.value.ts ? String(cfg.value.ts) : null;
+        if (!serverTs || serverTs === String(localTs)) {
+          const parsed = JSON.parse(localRaw);
+          if (parsed && Array.isArray(parsed.rows)) {
+            _fluxolabChecklistsImported = parsed.rows;
+            window._fluxolabImportedAt  = parsed.importedAt || null;
+            _fluxolabApplyChecklistsLoaded();
+            return;
+          }
+        }
+      }
+    } catch(e) {}
+  }
+
+  // 2) Cache ausente ou nova planilha importada: baixa uma única vez do banco e salva no localStorage
+  try {
+    const snap = await _db.ref('/fluxolab_checklists').once('value');
+    if (!snap || !snap.exists()) {
+      _fluxolabChecklistsImported = [];
+      window._fluxolabImportedAt = null;
+      try {
+        localStorage.removeItem(_CL_CACHE_KEY);
+        localStorage.removeItem(_CL_CACHE_TS_KEY);
+      } catch(e) {}
+    } else {
       const val = snap.val();
-      // Extrai e remove o timestamp antes de parsear as linhas
       try {
         const atEntry = val['_importedAt'];
         window._fluxolabImportedAt = atEntry ? JSON.parse(atEntry) : null;
@@ -26061,40 +26187,63 @@ function fluxolabStartChecklistsListener(){
         _fluxolabChecklistsImported = [];
         console.warn('[FluxoLAB] erro ao parsear checklists do Supabase', e);
       }
-    }
-    fluxolabRenderChecklistsImported();
-    // Atualiza badge e painel "Caindo Hoje" se estiver ativo
-    _fluxolabAtualizarBadgeCaindo();
-    // Atualiza badge de total de checklists na aba
-    if (typeof _fluxolabAtualizarBadgeChecklists === 'function') {
-      _fluxolabAtualizarBadgeChecklists(_fluxolabChecklistsImported.length);
-    }
-    if (_fluxolabActiveTab === 'caindo') fluxolabRenderCaindoHoje();
-    // Re-ordena Pendências Mistas/Complexas por urgência agora que os checklists chegaram.
-    // (Na carga inicial, pendGroupStateByPedido roda antes dos checklists estarem disponíveis
-    // no Firebase, então urgências ficavam fora de ordem até o próximo sort manual.)
-    if (typeof _fluxolabPendLoaded !== 'undefined' && _fluxolabPendLoaded
-        && typeof pendGroupStateByPedido === 'function'
-        && typeof _fluxolabPendenciasState !== 'undefined') {
       try {
-        Object.keys(_fluxolabPendenciasState || {}).forEach(function(t) { pendGroupStateByPedido(t); });
-        if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'pendencias'
-            && typeof fluxolabRenderPendencias === 'function') {
-          fluxolabRenderPendencias();
-        }
-      } catch(_e) { console.warn('[FluxoLAB] Erro ao re-ordenar pendências por urgência:', _e); }
+        const tsToSave = (window._fluxolabImportedAt && window._fluxolabImportedAt.ts) ? String(window._fluxolabImportedAt.ts) : String(Date.now());
+        localStorage.setItem(_CL_CACHE_KEY, JSON.stringify({ importedAt: window._fluxolabImportedAt, rows: _fluxolabChecklistsImported }));
+        localStorage.setItem(_CL_CACHE_TS_KEY, tsToSave);
+      } catch(e) {}
     }
-    if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'planejamento'
-        && typeof fluxolabRenderPlanejamento === 'function') {
-      try { fluxolabRenderPlanejamento(); } catch(_e) {}
+    _fluxolabApplyChecklistsLoaded();
+  } catch(e) {
+    console.warn('[FluxoLAB] erro ao carregar checklists:', e);
+  }
+}
+
+function fluxolabStartChecklistsListener(){
+  if (_fluxolabChecklistsListener) return;
+  window._fluxolabChecklistsListener = true;
+  // Hidrata imediatamente do cache local se disponível (0ms na abertura da tela)
+  try {
+    const localRaw = localStorage.getItem(_CL_CACHE_KEY);
+    if (localRaw) {
+      const parsed = JSON.parse(localRaw);
+      if (parsed && Array.isArray(parsed.rows) && parsed.rows.length > 0 && !_fluxolabChecklistsImported.length) {
+        _fluxolabChecklistsImported = parsed.rows;
+        window._fluxolabImportedAt  = parsed.importedAt || null;
+        _fluxolabApplyChecklistsLoaded();
+      }
     }
-    // Re-renderiza a tabela de Qualidade se estiver visível, para que o badge
-    // "📋 Checklist" apareça nos registros assim que os dados chegarem do Firebase
-    // (sem precisar que o usuário visite o FluxoLAB primeiro).
-    const _qualView = document.getElementById('view-qualidade') || document.getElementById('view-gaiola-lab');
-    if (_qualView && _qualView.classList.contains('active')) {
-      try { if (typeof renderQualRegistros === 'function') renderQualRegistros(); } catch(e) {}
+  } catch(e) {}
+  // Mantém o listener via shim_bus para receber deleções individuais (consumo de checklist na Qualidade)
+  // e novas importações em tempo real em todas as abas abertas.
+  _fluxolabChecklistsListener = _db.ref('/fluxolab_checklists').on('value', function(snap){
+    if (!snap.exists()){
+      _fluxolabChecklistsImported = [];
+      window._fluxolabImportedAt = null;
+      try {
+        localStorage.removeItem(_CL_CACHE_KEY);
+        localStorage.removeItem(_CL_CACHE_TS_KEY);
+      } catch(e) {}
+    } else {
+      const val = snap.val();
+      try {
+        const atEntry = val['_importedAt'];
+        window._fluxolabImportedAt = atEntry ? JSON.parse(atEntry) : null;
+      } catch(e) { window._fluxolabImportedAt = null; }
+      const dataVal = Object.fromEntries(Object.entries(val).filter(([k]) => k !== '_importedAt'));
+      try {
+        _fluxolabChecklistsImported = Object.entries(dataVal).map(([k, s]) => ({ ...JSON.parse(s), _rowKey: k }));
+      } catch(e) {
+        _fluxolabChecklistsImported = [];
+        console.warn('[FluxoLAB] erro ao parsear checklists do Supabase', e);
+      }
+      try {
+        const tsToSave = (window._fluxolabImportedAt && window._fluxolabImportedAt.ts) ? String(window._fluxolabImportedAt.ts) : String(Date.now());
+        localStorage.setItem(_CL_CACHE_KEY, JSON.stringify({ importedAt: window._fluxolabImportedAt, rows: _fluxolabChecklistsImported }));
+        localStorage.setItem(_CL_CACHE_TS_KEY, tsToSave);
+      } catch(e) {}
     }
+    _fluxolabApplyChecklistsLoaded();
   });
 }
 
@@ -26140,6 +26289,15 @@ async function fluxolabImportChecklists(ev){
     batch['_importedAt'] = JSON.stringify(_importedMeta);
     await dbPatch('/fluxolab_checklists', batch);
 
+    // Atualiza imediatamente em memória e no cache local (sem precisar baixar de novo)
+    _fluxolabChecklistsImported = rows.map((r, i) => ({ ...r, _rowKey: String(i) }));
+    window._fluxolabImportedAt = _importedMeta;
+    try {
+      localStorage.setItem(_CL_CACHE_KEY, JSON.stringify({ importedAt: _importedMeta, rows: _fluxolabChecklistsImported }));
+      localStorage.setItem(_CL_CACHE_TS_KEY, String(_importedMeta.ts));
+    } catch(e) {}
+    _fluxolabApplyChecklistsLoaded();
+
     // Salva também no app_config para acesso instantâneo pelo Dashboard sem carregar a planilha
     try {
       await _supa.from('app_config').upsert({ key: 'checklists_import_at', value: _importedMeta }, { onConflict: 'key' });
@@ -26163,6 +26321,13 @@ async function fluxolabClearChecklists(){
   if (!_fluxolabChecklistsImported.length) return;
   if (!confirm('Limpar checklists importados?')) return;
   await dbDelete('/fluxolab_checklists');
+  _fluxolabChecklistsImported = [];
+  window._fluxolabImportedAt = null;
+  try {
+    localStorage.removeItem(_CL_CACHE_KEY);
+    localStorage.removeItem(_CL_CACHE_TS_KEY);
+  } catch(e) {}
+  _fluxolabApplyChecklistsLoaded();
   try {
     await _supa.from('app_config').upsert({ key: 'checklists_import_at', value: { ts: Date.now(), count: 0 } }, { onConflict: 'key' });
   } catch(e) {}
@@ -26371,7 +26536,38 @@ function fluxolabRenderChecklistsImported(){
     return;
   }
 
-  // ── renderiza lista ──
+  // ── renderiza lista (detalhes gerados sob demanda ao expandir) ──
+  const detailHeaders = ['Pedido','Andamento','Cliente','Status','Dias Aberto',''];
+  const detailKeys    = [kPedido,kAndamento,kCliente,kStatus,kDias];
+  const isAdminUser   = !!(currentUser && currentUser.isAdmin);
+  window._fluxolabClRenderDetailIdx = function(i) {
+    const entry = entradas[i];
+    if (!entry) return '';
+    const g = entry[1];
+    const detailRows = g.items.map(r => {
+      const pedNum = kPedido ? String(r[kPedido] || '').trim() : '';
+      const btnRemover = isAdminUser && pedNum
+        ? `<td style="padding:4px 8px;border-bottom:1px solid var(--border)"><button onclick="(function(btn,ped){if(!confirm('Remover pedido '+ped+' da lista do FluxoLAB?'))return;btn.disabled=true;btn.textContent='...';if(typeof fluxolabRemoverPedidoDaLista==='function')fluxolabRemoverPedidoDaLista(ped).then(function(){}).catch(function(e){btn.disabled=false;btn.textContent='🗑️';});})(this,'${pedNum.replace(/'/g,"\\\'")}')" style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:6px;color:#ef4444;font-size:11px;font-weight:700;padding:3px 8px;cursor:pointer;white-space:nowrap">🗑️ Remover</button></td>`
+        : `<td style="padding:4px 8px;border-bottom:1px solid var(--border)"></td>`;
+      const _urgRow = _fluxolabRowUrgente(r);
+      const _isTroca = _urgRow && _fluxolabIsTrocaTecnica(r, kStatus);
+      const _rowStyle = _urgRow
+        ? (_isTroca
+            ? ' style="background:rgba(245,158,11,.20);box-shadow:inset 5px 0 0 #f59e0b"'
+            : ' style="background:rgba(239,68,68,.18);box-shadow:inset 5px 0 0 #ef4444"')
+        : '';
+      return `<tr${_rowStyle}>${detailKeys.map(k =>
+        `<td style="padding:7px 12px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border)">${esc(k?r[k]:'—')}</td>`
+      ).join('')}${btnRemover}</tr>`;
+    }).join('');
+    return `<table style="width:100%;border-collapse:collapse">
+      <thead><tr style="background:var(--bg3)">${detailHeaders.map(h =>
+        `<th style="padding:7px 12px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-bottom:1px solid var(--border2)">${h}</th>`
+      ).join('')}</tr></thead>
+      <tbody>${detailRows}</tbody>
+    </table>`;
+  };
+
   const listHtml = entradas.map(([modelo, g], idx) => {
     const labQtd   = labByModelo[modelo]  || 0;
     const docaQtd  = docaByModelo[modelo] || 0;
@@ -26394,32 +26590,11 @@ function fluxolabRenderChecklistsImported(){
       ? `<span style="flex-shrink:0;font-size:13px;font-weight:700;color:#ef4444;white-space:nowrap">Falta ${faltantes}▾</span>`
       : `<span style="flex-shrink:0;font-size:13px;font-weight:700;color:#22c55e;white-space:nowrap">✓ Coberto</span>`;
 
-    const detailHeaders = ['Pedido','Andamento','Cliente','Status','Dias Aberto',''];
-    const detailKeys    = [kPedido,kAndamento,kCliente,kStatus,kDias];
-    const isAdminUser = !!(currentUser && currentUser.isAdmin);
-    const detailRows    = g.items.map(r => {
-      const pedNum = kPedido ? String(r[kPedido] || '').trim() : '';
-      const rowKey = r._rowKey || '';
-      const btnRemover = isAdminUser && pedNum
-        ? `<td style="padding:4px 8px;border-bottom:1px solid var(--border)"><button onclick="(function(btn,ped){if(!confirm('Remover pedido '+ped+' da lista do FluxoLAB?'))return;btn.disabled=true;btn.textContent='...';if(typeof fluxolabRemoverPedidoDaLista==='function')fluxolabRemoverPedidoDaLista(ped).then(function(){}).catch(function(e){btn.disabled=false;btn.textContent='🗑️';});})(this,'${pedNum.replace(/'/g,"\\\'")}')" style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.4);border-radius:6px;color:#ef4444;font-size:11px;font-weight:700;padding:3px 8px;cursor:pointer;white-space:nowrap">🗑️ Remover</button></td>`
-        : `<td style="padding:4px 8px;border-bottom:1px solid var(--border)"></td>`;
-      const _urgRow = _fluxolabRowUrgente(r);
-      const _isTroca = _urgRow && _fluxolabIsTrocaTecnica(r, kStatus);
-      const _rowStyle = _urgRow
-        ? (_isTroca
-            ? ' style="background:rgba(245,158,11,.20);box-shadow:inset 5px 0 0 #f59e0b"'
-            : ' style="background:rgba(239,68,68,.18);box-shadow:inset 5px 0 0 #ef4444"')
-        : '';
-      return `<tr${_rowStyle}>${detailKeys.map(k =>
-        `<td style="padding:7px 12px;font-size:12px;color:var(--text);border-bottom:1px solid var(--border)">${esc(k?r[k]:'—')}</td>`
-      ).join('')}${btnRemover}</tr>`;
-    }).join('');
-
     const _grpUrg = g.items.some(_fluxolabRowUrgente);
     return `
     <div style="border-bottom:1px solid var(--border)${_grpUrg ? ';box-shadow:inset 4px 0 0 #ef4444' : ''}">
       <div style="display:flex;align-items:center;gap:12px;padding:13px 18px;cursor:pointer;transition:background .12s;${_grpUrg ? 'background:rgba(239,68,68,.08)' : ''}"
-           onclick="(function(el,id){var t=document.getElementById(id);var open=t.style.display!=='none';t.style.display=open?'none':'';el.querySelector('.cl-arr').style.transform=open?'':'rotate(180deg)';})(this,'${detailId}')"
+           onclick="(function(el,id,i){var t=document.getElementById(id);var open=t.style.display!=='none';if(!open&&!t.hasChildNodes()&&window._fluxolabClRenderDetailIdx)t.innerHTML=window._fluxolabClRenderDetailIdx(i);t.style.display=open?'none':'';el.querySelector('.cl-arr').style.transform=open?'':'rotate(180deg)';})(this,'${detailId}',${idx})"
            onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background='${_grpUrg ? 'rgba(239,68,68,.08)' : ''}'">
         ${atrBadge}
         ${_fluxolabModeloUrgBadgesHtml(modelo)}
@@ -26431,14 +26606,7 @@ function fluxolabRenderChecklistsImported(){
         ${cobertura}
         <span class="cl-arr" style="flex-shrink:0;color:var(--muted);font-size:14px;transition:transform .2s">▾</span>
       </div>
-      <div id="${detailId}" style="display:none;background:var(--bg1)">
-        <table style="width:100%;border-collapse:collapse">
-          <thead><tr style="background:var(--bg3)">${detailHeaders.map(h =>
-            `<th style="padding:7px 12px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-bottom:1px solid var(--border2)">${h}</th>`
-          ).join('')}</tr></thead>
-          <tbody>${detailRows}</tbody>
-        </table>
-      </div>
+      <div id="${detailId}" style="display:none;background:var(--bg1)"></div>
     </div>`;
   }).join('');
 
@@ -26604,6 +26772,10 @@ function fluxolabRenderCaindoHoje() {
   }
 
   const entradas = Object.entries(grupos).sort((a, b) => b[1].length - a[1].length);
+  window._fluxolabCaindoRenderIdx = function(i) {
+    const e = entradas[i];
+    return e ? renderDetalhes(e[1]) : '';
+  };
 
   const trs = entradas.map(([modelo, items], idx) => {
     const detId = 'caindo-det-' + idx;
@@ -26628,7 +26800,7 @@ function fluxolabRenderCaindoHoje() {
          </td>`;
 
     const mainRow = `<tr style="background:${rowBg};transition:background .12s;cursor:pointer"
-      onclick="(function(el,id,nk){var t=document.getElementById(id);var open=t.style.display!=='none';t.style.display=open?'none':'';var a=el.querySelector('.caindo-arr');if(a)a.style.transform=open?'':'rotate(180deg)';if(open)window._fluxolabCaindoExpanded.delete(nk);else window._fluxolabCaindoExpanded.add(nk);})(this,'${detId}','${normKey}')"
+      onclick="(function(el,id,nk,i){var t=document.getElementById(id);var open=t.style.display!=='none';if(!open){var td=t.querySelector('td');if(td&&!td.hasChildNodes()&&window._fluxolabCaindoRenderIdx)td.innerHTML=window._fluxolabCaindoRenderIdx(i);}t.style.display=open?'none':'';var a=el.querySelector('.caindo-arr');if(a)a.style.transform=open?'':'rotate(180deg)';if(open)window._fluxolabCaindoExpanded.delete(nk);else window._fluxolabCaindoExpanded.add(nk);})(this,'${detId}','${normKey}',${idx})"
       onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background='${rowBg}'">
       <td style="padding:10px 16px;border-bottom:1px solid var(--border);min-width:220px;max-width:340px">
         <div style="display:flex;align-items:center;gap:10px">
@@ -26656,7 +26828,7 @@ function fluxolabRenderCaindoHoje() {
     </tr>`;
 
     const detRow = `<tr id="${detId}" style="display:${isOpen ? '' : 'none'};background:var(--bg1)">
-      <td colspan="7" style="padding:0;border-bottom:1px solid var(--border2)">${renderDetalhes(items)}</td>
+      <td colspan="7" style="padding:0;border-bottom:1px solid var(--border2)">${isOpen ? renderDetalhes(items) : ''}</td>
     </tr>`;
 
     return mainRow + detRow;
@@ -26909,20 +27081,60 @@ function fluxolabRelatorioPorDia() {
 // Um checklist é "urgência" quando qualquer coluna de status/andamento/
 // prioridade da planilha contém "urg" (ex.: "Urgência Laboratório").
 // ═══════════════════════════════════════════════════════════════════
+// ── Cache por linha (WeakMap) para evitar re-normalizar strings em cada filtro/sort ──
+const _fluxolabRowMetaMap = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+function _fluxolabGetRowMeta(r, kTipo){
+  if (!r || typeof r !== 'object') return { urg: false, statusUrg: '', tipo: '', ehTT: false, isTroca: false };
+  if (_fluxolabRowMetaMap) {
+    const hit = _fluxolabRowMetaMap.get(r);
+    if (hit) return hit;
+  }
+  let urg = false;
+  let statusUrg = '';
+  let tipo = '';
+  if (kTipo && r[kTipo] != null && String(r[kTipo]).trim() !== '') {
+    tipo = String(r[kTipo]).trim();
+  }
+  let hasTrocaVal = false;
+  for (const k of Object.keys(r)) {
+    const kn = String(k).toLowerCase();
+    const rawVal = String(r[k] == null ? '' : r[k]);
+    if (!rawVal) continue;
+    const normVal = rawVal.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (kn.includes('status') || kn.includes('andamento') || kn.includes('prioridade')) {
+      if (normVal.includes('URG')) urg = true;
+    }
+    if (kn.includes('status')) {
+      if (normVal.includes('URGENCIA TT') || /URG\.?\s*TT/.test(normVal)) statusUrg = 'TT';
+      else if (normVal.includes('URG') && statusUrg !== 'TT') statusUrg = 'URG';
+    }
+    if (!tipo) {
+      const knNorm = kn.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      if (knNorm === 'tipo' || knNorm.includes('tipo')) {
+        if (rawVal.trim()) tipo = rawVal.trim();
+      } else if (normVal.includes('TROCA TECNICA') || normVal.includes('A INSTALAR')) {
+        tipo = rawVal.trim();
+      }
+    }
+    if (normVal.includes('TROCA TECNICA') || normVal.includes('URGENCIA TT') || /\bURG\.?\s*TT\b/.test(normVal)) {
+      hasTrocaVal = true;
+    }
+  }
+  const tipoNorm = tipo ? tipo.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '') : '';
+  const ehTT = tipoNorm.includes('TROCA') || /\bTT\b/.test(tipoNorm);
+  const isTroca = ehTT || hasTrocaVal;
+  const meta = { urg, statusUrg, tipo, ehTT, isTroca };
+  if (_fluxolabRowMetaMap) _fluxolabRowMetaMap.set(r, meta);
+  return meta;
+}
+
 function _fluxolabIsUrgenteValor(v){
   const s = String(v == null ? '' : v).toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   return s.includes('urg');
 }
 function _fluxolabRowUrgente(r){
-  if (!r || typeof r !== 'object') return false;
-  for (const k of Object.keys(r)) {
-    const kn = String(k).toLowerCase();
-    if (kn.includes('status') || kn.includes('andamento') || kn.includes('prioridade')) {
-      if (_fluxolabIsUrgenteValor(r[k])) return true;
-    }
-  }
-  return false;
+  return _fluxolabGetRowMeta(r).urg;
 }
 
 function _fluxolabRowTipo(r, kTipo) {
@@ -26930,39 +27142,16 @@ function _fluxolabRowTipo(r, kTipo) {
   if (kTipo && r[kTipo] != null && String(r[kTipo]).trim() !== '') {
     return String(r[kTipo]).trim();
   }
-  for (const k of Object.keys(r)) {
-    const kn = k.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    if (kn === 'tipo' || kn.includes('tipo')) {
-      const v = String(r[k] || '').trim();
-      if (v) return v;
-    }
-  }
-  for (const k of Object.keys(r)) {
-    const s = String(r[k] || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    if (s.includes('TROCA TECNICA') || s.includes('A INSTALAR')) {
-      return String(r[k]).trim();
-    }
-  }
-  return '';
+  return _fluxolabGetRowMeta(r, kTipo).tipo;
 }
 
 function _fluxolabIsTrocaTecnica(r, kTipo) {
-  const t = _fluxolabRowTipo(r, kTipo).toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  if (t.includes('TROCA') || /\bTT\b/.test(t)) return true;
-  for (const k of Object.keys(r)) {
-    const val = String(r[k] || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    if (val.includes('TROCA TECNICA') || val.includes('URGENCIA TT') || /\bURG\.?\s*TT\b/.test(val)) return true;
-  }
-  return false;
+  return _fluxolabGetRowMeta(r, kTipo).isTroca;
 }
 
 function _fluxolabRowUrgenciaTT(r, kTipo) {
-  if (!r || typeof r !== 'object') return false;
-  for (const k of Object.keys(r)) {
-    const val = String(r[k] || '').toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    if (val.includes('URGENCIA TT') || /\bURG\.?\s*TT\b/.test(val)) return true;
-  }
-  return _fluxolabRowUrgente(r) && _fluxolabIsTrocaTecnica(r, kTipo);
+  const m = _fluxolabGetRowMeta(r, kTipo);
+  return m.statusUrg === 'TT' || (m.urg && m.isTroca);
 }
 
 // Renderiza os badges pequenos: redondos (só com o número) para Urgências (vermelho) e Troca Técnica (amarelo),
@@ -26983,33 +27172,154 @@ function _fluxolabSmallCountBadgesHtml(urgencias, trocas, urgenciasTT) {
   }
   return html;
 }
+
+// ── Índice Mestre de Checklists (O(1) para todas as tabelas do FluxoLAB) ──
+let _fluxolabMasterIdxCache = null;
+let _fluxolabMasterIdxSig = '';
+const _EMPTY_CHK_STATS = Object.freeze({
+  count: 0, media: 0, mediaAberto: 0, maxAberto: 0, maxDiasUteis: 0, minDiasUteis: 0,
+  urgencias: 0, trocas: 0, urgenciasTT: 0, rows: [], keys: {}, bestPedido: ''
+});
+
+function _fluxolabGetChecklistMasterIndex() {
+  const arr = Array.isArray(_fluxolabChecklistsImported) ? _fluxolabChecklistsImported : [];
+  const len = arr.length;
+  const firstK = len > 0 ? (arr[0]._rowKey || '') : '';
+  const lastK  = len > 0 ? (arr[len - 1]._rowKey || '') : '';
+  const sig = `${len}|${firstK}|${lastK}|${window._fluxolabChecklistsVer || 0}`;
+  if (_fluxolabMasterIdxCache && _fluxolabMasterIdxSig === sig && _fluxolabMasterIdxCache.arrRef === arr) {
+    return _fluxolabMasterIdxCache;
+  }
+
+  const countIdx = new Map();
+  const urgIdx = new Map();
+  const statsByModel = new Map();
+  const urgResolvedCache = new Map();
+
+  if (len > 0) {
+    const sample = arr[0];
+    const kModelo = _fluxolabFindKey(sample, 'Descrição Equipamento') || _fluxolabFindKey(sample, 'Descricao Equipamento') || _fluxolabFindKey(sample, 'Modelo') || _fluxolabFindKey(sample, 'Equipamento');
+    const kDias   = _fluxolabFindKey(sample, 'Dias Úteis Andamento') || _fluxolabFindKey(sample, 'Dias Uteis Andamento') || _fluxolabFindKey(sample, 'Dias Úteis') || _fluxolabFindKey(sample, 'Dias Uteis');
+    const kAberto = _fluxolabFindKey(sample, 'Dias Aberto') || _fluxolabFindKey(sample, 'Dias em Aberto') || _fluxolabFindKey(sample, 'Dias Abertos');
+    const kPedido = _fluxolabFindKey(sample, 'Pedido');
+    const kStatus = _fluxolabFindKey(sample, 'Status Checklist') || _fluxolabFindKey(sample, 'Status');
+    let kTipo = _fluxolabFindKey(sample, 'Tipo');
+    if (!kTipo) {
+      const kSt = Object.keys(sample).find(k => k.trim().toLowerCase() === 'status');
+      if (kSt && kSt !== kStatus) kTipo = kSt;
+    }
+    const sharedKeys = { kModelo, kDias, kAberto, kPedido, kTipo };
+
+    if (kModelo) {
+      for (let i = 0; i < len; i++) {
+        const r = arr[i];
+        const m = _fluxolabNormModel(r[kModelo]);
+        if (!m) continue;
+        countIdx.set(m, (countIdx.get(m) || 0) + 1);
+
+        const meta = _fluxolabGetRowMeta(r, kTipo);
+        if (meta.urg) {
+          urgIdx.set(m, (urgIdx.get(m) || 0) + 1);
+        }
+
+        let st = statsByModel.get(m);
+        if (!st) {
+          st = {
+            count: 0, somaDias: 0, somaAberto: 0, countAberto: 0,
+            maxAberto: 0, maxDiasUteis: 0, minDiasUteis: Infinity,
+            urgencias: 0, trocas: 0, urgenciasTT: 0,
+            urgTotal: 0, hasUrgInstalar: false,
+            bestDiasForPedido: -1, bestPedido: '',
+            rows: [], keys: sharedKeys
+          };
+          statsByModel.set(m, st);
+        }
+        st.count++;
+        st.rows.push(r);
+        if (meta.statusUrg === 'TT') st.urgenciasTT++;
+        else if (meta.statusUrg === 'URG') st.urgencias++;
+        if (meta.ehTT) st.trocas++;
+        if (meta.urg) {
+          st.urgTotal++;
+          if (!meta.isTroca) st.hasUrgInstalar = true;
+        }
+        let dVal = 0;
+        if (kDias) {
+          const d = parseInt(r[kDias]);
+          if (!isNaN(d)) {
+            dVal = d;
+            st.somaDias += d;
+            if (d > st.maxDiasUteis) st.maxDiasUteis = d;
+            if (d < st.minDiasUteis) st.minDiasUteis = d;
+          }
+        }
+        if (kAberto) {
+          const a = parseInt(r[kAberto]);
+          if (!isNaN(a)) {
+            st.somaAberto += a;
+            st.countAberto++;
+            if (a > st.maxAberto) st.maxAberto = a;
+          }
+        }
+        if (kPedido && dVal > st.bestDiasForPedido) {
+          st.bestDiasForPedido = dVal;
+          st.bestPedido = String(r[kPedido] || '').trim();
+        }
+      }
+
+      for (const [, st] of statsByModel) {
+        st.media = st.count > 0 ? Math.round(st.somaDias / st.count) : 0;
+        st.mediaAberto = st.countAberto > 0 ? Math.round(st.somaAberto / st.countAberto) : 0;
+        if (st.minDiasUteis === Infinity) st.minDiasUteis = 0;
+        st.urgCor = st.urgTotal > 0 ? (st.hasUrgInstalar ? 'red' : 'laranja') : 'red';
+        st.badgesHtml   = _fluxolabBadgeTT(st.trocas) + _fluxolabBadgeURGTT(st.urgenciasTT) + _fluxolabBadgeURG(st.urgencias);
+        st.badgesHtmlXs = _fluxolabBadgeTT(st.trocas, 'xs') + _fluxolabBadgeURGTT(st.urgenciasTT, 'xs') + _fluxolabBadgeURG(st.urgencias, 'xs');
+      }
+    }
+  }
+
+  _fluxolabMasterIdxSig = sig;
+  _fluxolabMasterIdxCache = { arrRef: arr, countIdx, urgIdx, statsByModel, urgResolvedCache };
+  return _fluxolabMasterIdxCache;
+}
+
+window._fluxolabGetChecklistStatsFast = function(modeloName) {
+  if (!modeloName) return _EMPTY_CHK_STATS;
+  const master = _fluxolabGetChecklistMasterIndex();
+  const nk = _fluxolabNormModel(modeloName);
+  return master.statsByModel.get(nk) || _EMPTY_CHK_STATS;
+};
+
+function _fluxolabResolveModelEntry(modeloTexto) {
+  if (!modeloTexto) return null;
+  const master = _fluxolabGetChecklistMasterIndex();
+  const nk = _fluxolabNormModel(modeloTexto);
+  if (!nk) return null;
+  if (master.urgResolvedCache.has(nk)) return master.urgResolvedCache.get(nk);
+
+  let found = master.statsByModel.get(nk) || null;
+  if (!found) {
+    const tokens = nk.split(/\s+/).filter(t => t.length >= 4);
+    if (tokens.length) {
+      for (const [k, st] of master.statsByModel) {
+        if (tokens.every(t => k.includes(t))) {
+          found = st;
+          break;
+        }
+      }
+    }
+  }
+  master.urgResolvedCache.set(nk, found);
+  return found;
+}
+
 // modelo normalizado -> qtd de checklists em urgência
 function _fluxolabBuildUrgenciaIndex(){
-  const idx = new Map();
-  if (!Array.isArray(_fluxolabChecklistsImported) || !_fluxolabChecklistsImported.length) return idx;
-  const sample = _fluxolabChecklistsImported[0];
-  const k = _fluxolabFindKey(sample, 'Descrição Equipamento') || _fluxolabFindKey(sample, 'Descricao Equipamento');
-  if (!k) return idx;
-  for (const r of _fluxolabChecklistsImported){
-    if (!_fluxolabRowUrgente(r)) continue;
-    const m = _fluxolabNormModel(r[k]);
-    if (!m) continue;
-    idx.set(m, (idx.get(m) || 0) + 1);
-  }
-  return idx;
+  return _fluxolabGetChecklistMasterIndex().urgIdx;
 }
 function _fluxolabModeloUrgenteQtd(modeloTexto){
-  if (!modeloTexto) return 0;
-  const idx = _fluxolabBuildUrgenciaIndex();
-  const nk = _fluxolabNormModel(modeloTexto);
-  if (idx.has(nk)) return idx.get(nk);
-  // match aproximado (nomes do Supabase x planilha)
-  const tokens = nk.split(/\s+/).filter(t => t.length >= 4);
-  if (!tokens.length) return 0;
-  for (const [k, q] of idx) {
-    if (tokens.every(t => k.includes(t))) return q;
-  }
-  return 0;
+  const st = _fluxolabResolveModelEntry(modeloTexto);
+  return st ? st.urgTotal : 0;
 }
 // Badge pequeno compacto (mesmo porte do badge "✓ CHECKLIST"):
 // exibe "Urgência TT" (amarelo/dourado) para Troca Técnica urgente, ou "Urgência" (vermelho) para A Instalar urgente
@@ -27033,19 +27343,10 @@ function _fluxolabUrgBadge(qtd, size, corTipo){
 // Status Checklist = Urgência TT → badge "URG.TT" (laranja)
 // Status Checklist = Urgência (outras) → badge "URG." (vermelho)
 function _fluxolabRowStatusUrg(r) {
-  if (!r || typeof r !== 'object') return '';
-  let res = '';
-  for (const k of Object.keys(r)) {
-    if (!String(k).toLowerCase().includes('status')) continue;
-    const v = String(r[k] == null ? '' : r[k]).toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    if (v.includes('URGENCIA TT') || /URG\.?\s*TT/.test(v)) return 'TT';
-    if (v.includes('URG')) res = 'URG';
-  }
-  return res;
+  return _fluxolabGetRowMeta(r).statusUrg;
 }
 function _fluxolabRowEhTT(r, kTipo) {
-  const t = _fluxolabRowTipo(r, kTipo).toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-  return t.includes('TROCA') || /\bTT\b/.test(t);
+  return _fluxolabGetRowMeta(r, kTipo).ehTT;
 }
 function _fluxolabBadgeSm(label, qtd, bg, color, border, title, size) {
   const isXs = size === 'xs';
@@ -27067,35 +27368,14 @@ function _fluxolabRowsBadgesHtml(rows, kTipo, size) {
   return _fluxolabBadgeTT(tt, size) + _fluxolabBadgeURGTT(urgtt, size) + _fluxolabBadgeURG(urg, size);
 }
 function _fluxolabModeloUrgBadgesHtml(modeloTexto, size){
-  if (!modeloTexto || !Array.isArray(_fluxolabChecklistsImported) || !_fluxolabChecklistsImported.length) return '';
-  const sample = _fluxolabChecklistsImported[0];
-  const kMod = _fluxolabFindKey(sample, 'Descrição Equipamento') || _fluxolabFindKey(sample, 'Descricao Equipamento');
-  const kTipo = _fluxolabFindKey(sample, 'Tipo') || Object.keys(sample).find(x => x.trim().toLowerCase() === 'status');
-  const nk = _fluxolabNormModel(modeloTexto);
-  let rows = _fluxolabChecklistsImported.filter(r => _fluxolabNormModel(r[kMod]) === nk);
-  if (!rows.length) {
-    const tokens = nk.split(/\s+/).filter(t => t.length >= 4);
-    if (tokens.length) rows = _fluxolabChecklistsImported.filter(r => tokens.every(t => _fluxolabNormModel(r[kMod]).includes(t)));
-  }
-  return _fluxolabRowsBadgesHtml(rows, kTipo, size);
+  const st = _fluxolabResolveModelEntry(modeloTexto);
+  if (!st) return '';
+  return size === 'xs' ? st.badgesHtmlXs : st.badgesHtml;
 }
 
 function _fluxolabModeloUrgenteCor(modeloTexto){
-  if (!modeloTexto || !Array.isArray(_fluxolabChecklistsImported) || !_fluxolabChecklistsImported.length) return 'red';
-  const sample = _fluxolabChecklistsImported[0];
-  const kMod = _fluxolabFindKey(sample, 'Descrição Equipamento') || _fluxolabFindKey(sample, 'Descricao Equipamento');
-  const kTipo = _fluxolabFindKey(sample, 'Tipo') || Object.keys(sample).find(x => x.trim().toLowerCase() === 'status');
-  const nk = _fluxolabNormModel(modeloTexto);
-  const rows = _fluxolabChecklistsImported.filter(r => _fluxolabRowUrgente(r) && _fluxolabNormModel(r[kMod]) === nk);
-  if (!rows.length) {
-    const tokens = nk.split(/\s+/).filter(t => t.length >= 4);
-    if (!tokens.length) return 'red';
-    const matchRow = _fluxolabChecklistsImported.find(r => _fluxolabRowUrgente(r) && tokens.every(t => _fluxolabNormModel(r[kMod]).includes(t)));
-    if (matchRow) return _fluxolabIsTrocaTecnica(matchRow, kTipo) ? 'laranja' : 'red';
-    return 'red';
-  }
-  const hasInstalar = rows.some(r => !_fluxolabIsTrocaTecnica(r, kTipo));
-  return hasInstalar ? 'red' : 'laranja';
+  const st = _fluxolabResolveModelEntry(modeloTexto);
+  return st ? st.urgCor : 'red';
 }
 try {
   if (typeof document !== 'undefined') {
@@ -27109,11 +27389,19 @@ try {
   }
 } catch(_e) {}
 
+const _fluxolabNormModelCache = new Map();
 function _fluxolabNormModel(s){
-  return String(s||'').toLowerCase()
+  const raw = String(s||'');
+  if (!raw) return '';
+  let cached = _fluxolabNormModelCache.get(raw);
+  if (cached !== undefined) return cached;
+  cached = raw.toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
     .replace(/[-_./\\()\[\]{}|#@!?*,;:'"]/g,' ')
     .replace(/\s+/g,' ').trim();
+  if (_fluxolabNormModelCache.size > 15000) _fluxolabNormModelCache.clear();
+  _fluxolabNormModelCache.set(raw, cached);
+  return cached;
 }
 
 /** Modelos presentes em Programação Entrada em Lote (tabela1) OU Pendências Mistas/Complexas */
@@ -27274,17 +27562,7 @@ function fluxolabIncluirModeloNoPlano(destino, modelo){
   }
 }
 function _fluxolabBuildChecklistIndex(){
-  const idx = new Map();
-  if (!Array.isArray(_fluxolabChecklistsImported) || !_fluxolabChecklistsImported.length) return idx;
-  const sample = _fluxolabChecklistsImported[0];
-  const k = _fluxolabFindKey(sample, 'Descrição Equipamento') || _fluxolabFindKey(sample, 'Descricao Equipamento');
-  if (!k) return idx;
-  for (const r of _fluxolabChecklistsImported){
-    const m = _fluxolabNormModel(r[k]);
-    if (!m) continue;
-    idx.set(m, (idx.get(m) || 0) + 1);
-  }
-  return idx;
+  return _fluxolabGetChecklistMasterIndex().countIdx;
 }
 
 // Retorna true se o modelo informado tem checklist(s) importado(s) pendente(s).
@@ -27312,6 +27590,10 @@ async function fluxolabConsumirChecklistPorModelo(modeloTexto, meta){
     // Otimista: remove localmente também, refletindo na hora sem esperar o listener
     const idx = _fluxolabChecklistsImported.indexOf(row);
     if (idx >= 0) _fluxolabChecklistsImported.splice(idx, 1);
+    try {
+      localStorage.setItem(_CL_CACHE_KEY, JSON.stringify({ importedAt: window._fluxolabImportedAt, rows: _fluxolabChecklistsImported }));
+      _supa.from('app_config').upsert({ key: 'checklists_import_at', value: { ts: Date.now(), count: _fluxolabChecklistsImported.length } }, { onConflict: 'key' }).catch(()=>{});
+    } catch(e) {}
 
     // Registra o evento para o relatório "Checklists liberados no dia"
     const liberadoEntry = {
@@ -27365,6 +27647,10 @@ async function fluxolabRemoverPedidoDaLista(numeroPedido) {
     }
   }
 
+  try {
+    localStorage.setItem(_CL_CACHE_KEY, JSON.stringify({ importedAt: window._fluxolabImportedAt, rows: _fluxolabChecklistsImported }));
+    _supa.from('app_config').upsert({ key: 'checklists_import_at', value: { ts: Date.now(), count: _fluxolabChecklistsImported.length } }, { onConflict: 'key' }).catch(()=>{});
+  } catch(e) {}
   try { fluxolabRenderChecklistsImported(); } catch(e) {}
   try { if (typeof _fluxolabRenderGrid === 'function') _fluxolabRenderGrid(); } catch(e) {}
   try { _fluxolabAtualizarBadgeCaindo(); } catch(e) {}
@@ -27428,6 +27714,10 @@ async function fluxolabVerificarPedidosRegistrados(btn) {
 
   if (btn) { btn.disabled = false; btn.textContent = txtOrig; }
 
+  try {
+    localStorage.setItem(_CL_CACHE_KEY, JSON.stringify({ importedAt: window._fluxolabImportedAt, rows: _fluxolabChecklistsImported }));
+    _supa.from('app_config').upsert({ key: 'checklists_import_at', value: { ts: Date.now(), count: _fluxolabChecklistsImported.length } }, { onConflict: 'key' }).catch(()=>{});
+  } catch(e) {}
   try { fluxolabRenderChecklistsImported(); } catch(e) {}
   try { if (typeof fluxolabRenderModelos === 'function') fluxolabRenderModelos(); } catch(e) {}
   alert('✅ ' + ok + ' pedido(s) removido(s) da lista de checklists.');

@@ -425,9 +425,6 @@ function fluxolabUpdateRowElem(elem, tableName, field) {
       const savedSizes = JSON.parse(localStorage.getItem('fluxolabPlanSizes') || '{}');
       const themeColor = tableName === 'tabela1' ? '#22d3ee' : (tableName === 'tabela2' ? '#a78bfa' : '#fb923c');
       tbody.insertAdjacentHTML('beforeend', fluxolabBuildPlanRowHtml(tableName, newRow, newIdx, themeColor, savedSizes));
-      if (_planResizeObserver && tbody.lastElementChild) {
-        tbody.lastElementChild.querySelectorAll('.plan-textarea').forEach(el => _planResizeObserver.observe(el));
-      }
     } catch (e) {
       setTimeout(() => fluxolabScheduleRerender(tableName), 10);
     }
@@ -843,7 +840,7 @@ function planDragEnd(e) {
   e.target.setAttribute('draggable', 'false');
 }
 
-// Salvamento de Larguras e Alturas no LocalStorage
+// Salvamento de Larguras e Alturas no LocalStorage (otimizado: sem ResizeObserver em centenas de textareas)
 let _planResizeObserver = null;
 function planInitResizeObserver() {
   if (_planResizeObserver) _planResizeObserver.disconnect();
@@ -852,12 +849,9 @@ function planInitResizeObserver() {
     let savedSizes = JSON.parse(localStorage.getItem('fluxolabPlanSizes') || '{}');
     let changed = false;
     for (let entry of entries) {
-      if (entry.target.id) {
-        if (entry.target.classList.contains('plan-header-resizer')) {
+      if (entry.target.id && entry.target.classList.contains('plan-header-resizer')) {
+        if (entry.target.style.width && savedSizes[entry.target.id] !== entry.target.style.width) {
           savedSizes[entry.target.id] = entry.target.style.width;
-          changed = true;
-        } else if (entry.target.tagName.toLowerCase() === 'textarea') {
-          savedSizes[entry.target.id] = entry.target.style.height;
           changed = true;
         }
       }
@@ -865,8 +859,44 @@ function planInitResizeObserver() {
     if (changed) localStorage.setItem('fluxolabPlanSizes', JSON.stringify(savedSizes));
   });
   
-  document.querySelectorAll('.plan-header-resizer, .plan-textarea').forEach(el => _planResizeObserver.observe(el));
+  document.querySelectorAll('.plan-header-resizer').forEach(el => _planResizeObserver.observe(el));
 }
+if (typeof window !== 'undefined' && !window._planTextareaMouseupBound) {
+  window._planTextareaMouseupBound = true;
+  window.addEventListener('mouseup', e => {
+    const t = e.target;
+    if (t && t.id && t.classList && t.classList.contains('plan-textarea') && t.style.height) {
+      try {
+        const saved = JSON.parse(localStorage.getItem('fluxolabPlanSizes') || '{}');
+        if (saved[t.id] !== t.style.height) {
+          saved[t.id] = t.style.height;
+          localStorage.setItem('fluxolabPlanSizes', JSON.stringify(saved));
+        }
+      } catch (_e) {}
+    }
+  });
+}
+
+// Datalist compartilhada única no DOM (evita recriar milhares de <option> a cada render)
+let _modelosDatalistLastCount = -1;
+function _fluxolabEnsureModelosDatalist() {
+  try {
+    const eqObj = typeof equipamentos !== 'undefined' && equipamentos ? equipamentos : {};
+    const keysCount = Object.keys(eqObj).length;
+    let dl = document.getElementById('modelos-lista');
+    if (dl && _modelosDatalistLastCount === keysCount) return;
+    _modelosDatalistLastCount = keysCount;
+    const modelosUnicos = Array.from(new Set(Object.values(eqObj).filter(Boolean)));
+    modelosUnicos.sort((a, b) => a.localeCompare(b));
+    if (!dl) {
+      dl = document.createElement('datalist');
+      dl.id = 'modelos-lista';
+      document.body.appendChild(dl);
+    }
+    dl.innerHTML = modelosUnicos.map(m => `<option value="${String(m).replace(/"/g, '&quot;')}">`).join('');
+  } catch (e) {}
+}
+window._fluxolabEnsureModelosDatalist = _fluxolabEnsureModelosDatalist;
 
 // Badge visual ao lado do modelo: indica se existe checklist importado para ele
 // e exibe badges pequenos só com o número (quantidade) de Urgências (vermelho), Trocas Técnicas (amarelo/laranja)
@@ -894,8 +924,11 @@ function planBadgeHtml(count, filled, urgencias, trocas, urgenciasTT) {
   return html;
 }
 
-// Helpers de cálculo
+// Helpers de cálculo (usa índice O(1) pré-computado em app.js)
 function fluxolabPlanGetChecklistStats(modeloName) {
+  if (typeof window._fluxolabGetChecklistStatsFast === 'function') {
+    return window._fluxolabGetChecklistStatsFast(modeloName);
+  }
   if (!modeloName || typeof _fluxolabChecklistsImported === 'undefined' || !_fluxolabChecklistsImported.length) return { count: 0, media: 0, mediaAberto: 0, maxAberto: 0, urgencias: 0, trocas: 0, urgenciasTT: 0 };
   const sample = _fluxolabChecklistsImported[0];
   const kModelo = (typeof _fluxolabFindKey === 'function') ? (_fluxolabFindKey(sample, 'Descrição Equipamento') || _fluxolabFindKey(sample, 'Descricao Equipamento') || _fluxolabFindKey(sample, 'Modelo') || _fluxolabFindKey(sample, 'Equipamento')) : null;
@@ -969,75 +1002,97 @@ function fluxolabPlanGetChecklistStats(modeloName) {
   };
 }
 
-function fluxolabPlanGetBolsaoStats(modeloName) {
-  if (!modeloName || typeof _fluxolabData === 'undefined' || !_fluxolabData) return { doca: 0, lab: 0, qual: 0 };
-  const normAlvo = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(modeloName) : modeloName.toUpperCase().replace(/\s+/g,'');
-  
-  let docaCount = 0;
-  let labCount = 0;
-  let qualCount = 0;
-  
-  Object.entries(_fluxolabData).forEach(([bolsao, items]) => {
-    if (!items) return;
-    Object.values(items).forEach(v => {
+// ── Índice O(1) de Bolsões por Modelo (evita varrer _fluxolabData a cada célula) ──
+let _fluxolabBolsaoIdxCache = null;
+let _fluxolabBolsaoIdxSig = '';
+const _EMPTY_BOLSAO_STATS = Object.freeze({ doca: 0, lab: 0, qual: 0 });
+const _EMPTY_BOLSAO_LOCAIS = Object.freeze([]);
+
+function _fluxolabGetBolsaoMasterIndex() {
+  if (typeof _fluxolabData === 'undefined' || !_fluxolabData) return null;
+  let sig = '';
+  const entries = Object.entries(_fluxolabData);
+  for (let i = 0; i < entries.length; i++) {
+    const bKey = entries[i][0];
+    const items = entries[i][1];
+    if (!items) continue;
+    const ks = Object.keys(items);
+    sig += bKey + ':' + ks.length + (ks.length ? ':' + ks[0] + ':' + ks[ks.length - 1] : '') + ';';
+  }
+  if (_fluxolabBolsaoIdxCache && _fluxolabBolsaoIdxSig === sig && _fluxolabBolsaoIdxCache.dataRef === _fluxolabData) {
+    return _fluxolabBolsaoIdxCache;
+  }
+
+  const byModel = new Map();
+  const bolsaoDefs = {};
+  if (typeof FLUXOLAB_BOLSOES !== 'undefined' && Array.isArray(FLUXOLAB_BOLSOES)) {
+    for (let i = 0; i < FLUXOLAB_BOLSOES.length; i++) {
+      bolsaoDefs[FLUXOLAB_BOLSOES[i].key] = FLUXOLAB_BOLSOES[i];
+    }
+  }
+
+  for (let i = 0; i < entries.length; i++) {
+    const bolsao = entries[i][0];
+    const items = entries[i][1];
+    if (!items) continue;
+    const vals = Object.values(items);
+    for (let j = 0; j < vals.length; j++) {
+      const v = vals[j];
+      if (!v) continue;
       const code = String(v.selb || '').trim();
-      // Usa primeiro o "equipamento" já salvo no próprio item — a MESMA
-      // fonte e a MESMA regra que a aba 🗂️ Bolsões usa pra exibir o card
-      // (inclusive ignorando o placeholder 'DESCONHECIDO') — e só recorre
-      // ao getEquipName(selb) — busca no cadastro ATUAL — como último
-      // recurso. Sem esse fallback, itens com SELB que não existe mais no
-      // cadastro (comum em coisas paradas há mais tempo na Doca 1) ficavam
-      // com modelo vazio e nunca eram contados, mesmo aparecendo
-      // normalmente na aba Bolsões.
       const _eqStored = v.equipamento && v.equipamento !== 'DESCONHECIDO' ? v.equipamento : '';
-      let m = _eqStored || (typeof getEquipName === 'function' ? getEquipName(code) : '') || '';
-      let normM = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(m) : m.toUpperCase().replace(/\s+/g,'');
-      
-      if (normM === normAlvo) {
-        if (bolsao === 'DOCA_1') {
-          docaCount++;
-        } else if (bolsao === 'QUALIDADE') {
-          qualCount++;
-          labCount++;
-        } else if (bolsao !== 'RETORNO_ESTOQUE' && bolsao !== 'LIBERADAS' && bolsao !== 'SCRAP') {
-          labCount++;
-        }
+      const m = _eqStored || (typeof getEquipName === 'function' ? getEquipName(code) : '') || '';
+      if (!m) continue;
+      const normM = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(m) : m.toUpperCase().replace(/\s+/g, '');
+      if (!normM) continue;
+
+      let entry = byModel.get(normM);
+      if (!entry) {
+        entry = { doca: 0, lab: 0, qual: 0, porBolsao: {}, locais: null };
+        byModel.set(normM, entry);
       }
-    });
-  });
-  
-  return { doca: docaCount, lab: labCount, qual: qualCount };
+      entry.porBolsao[bolsao] = (entry.porBolsao[bolsao] || 0) + 1;
+      if (bolsao === 'DOCA_1') {
+        entry.doca++;
+      } else if (bolsao === 'QUALIDADE') {
+        entry.qual++;
+        entry.lab++;
+      } else if (bolsao !== 'RETORNO_ESTOQUE' && bolsao !== 'LIBERADAS' && bolsao !== 'SCRAP') {
+        entry.lab++;
+      }
+    }
+  }
+
+  for (const [, entry] of byModel) {
+    entry.locais = Object.entries(entry.porBolsao).map(([key, count]) => {
+      const def = bolsaoDefs[key] || null;
+      return { key, label: def ? def.label : key, color: def ? def.color : 'var(--muted)', count };
+    }).sort((a, b) => b.count - a.count);
+  }
+
+  _fluxolabBolsaoIdxSig = sig;
+  _fluxolabBolsaoIdxCache = { dataRef: _fluxolabData, byModel };
+  return _fluxolabBolsaoIdxCache;
+}
+
+function fluxolabPlanGetBolsaoStats(modeloName) {
+  if (!modeloName || typeof _fluxolabData === 'undefined' || !_fluxolabData) return _EMPTY_BOLSAO_STATS;
+  const master = _fluxolabGetBolsaoMasterIndex();
+  if (!master) return _EMPTY_BOLSAO_STATS;
+  const normAlvo = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(modeloName) : modeloName.toUpperCase().replace(/\s+/g,'');
+  return master.byModel.get(normAlvo) || _EMPTY_BOLSAO_STATS;
 }
 
 // Retorna EM QUAL(IS) bolsão(ões) específico(s) o modelo está fisicamente agora
 // (ex.: "Complexa", "Linha 3"), diferente de fluxolabPlanGetBolsaoStats que só
 // soma totais de Doca/Lab. Usado pela coluna "Bolsão" das tabelas de Pendências.
 function fluxolabPlanGetBolsaoLocais(modeloName) {
-  if (!modeloName || typeof _fluxolabData === 'undefined' || !_fluxolabData) return [];
+  if (!modeloName || typeof _fluxolabData === 'undefined' || !_fluxolabData) return _EMPTY_BOLSAO_LOCAIS;
+  const master = _fluxolabGetBolsaoMasterIndex();
+  if (!master) return _EMPTY_BOLSAO_LOCAIS;
   const normAlvo = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(modeloName) : modeloName.toUpperCase().replace(/\s+/g,'');
-
-  const porBolsao = {}; // key -> count
-
-  Object.entries(_fluxolabData).forEach(([bolsao, items]) => {
-    if (!items) return;
-    Object.values(items).forEach(v => {
-      const code = String(v.selb || '').trim();
-      // Mesmo ajuste de fluxolabPlanGetBolsaoStats: prioriza o equipamento
-      // já salvo no item (ignorando 'DESCONHECIDO'), com getEquipName(selb)
-      // só como fallback — igual à aba 🗂️ Bolsões.
-      const _eqStored = v.equipamento && v.equipamento !== 'DESCONHECIDO' ? v.equipamento : '';
-      let m = _eqStored || (typeof getEquipName === 'function' ? getEquipName(code) : '') || '';
-      let normM = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(m) : m.toUpperCase().replace(/\s+/g,'');
-      if (normM === normAlvo) {
-        porBolsao[bolsao] = (porBolsao[bolsao] || 0) + 1;
-      }
-    });
-  });
-
-  return Object.entries(porBolsao).map(([key, count]) => {
-    const def = (typeof FLUXOLAB_BOLSOES !== 'undefined') ? FLUXOLAB_BOLSOES.find(b => b.key === key) : null;
-    return { key, label: def ? def.label : key, color: def ? def.color : 'var(--muted)', count };
-  }).sort((a, b) => b.count - a.count);
+  const entry = master.byModel.get(normAlvo);
+  return entry ? entry.locais : _EMPTY_BOLSAO_LOCAIS;
 }
 
 // Soma os checklists de todos os modelos preenchidos numa tabela (Ord, Lote, etc. não contam)
@@ -1104,11 +1159,11 @@ function fluxolabBuildPlanRowHtml(tableName, row, idx, themeColor, savedSizes) {
         
         <td style="${tdStyle}">
           <div style="display:flex;align-items:center;gap:6px;height:100%;padding:0 8px 0 12px">
-            <input id="plan-${tableName}-r${idx}-modelo" type="text" list="modelos-lista" placeholder="Digite..." value="${row.modelo || ''}" 
-                   onfocus="${inpFocus}" onblur="${inpBlur}" 
+            <input id="plan-${tableName}-r${idx}-modelo" type="text" placeholder="Digite..." value="${row.modelo || ''}" 
+                   onfocus="if(!this.getAttribute('list'))this.setAttribute('list','modelos-lista');${inpFocus}" onblur="${inpBlur}" 
                    oninput="fluxolabUpdateRowElem(this, '${tableName}', 'modelo')"
                    onchange="fluxolabUpdateRowElem(this, '${tableName}', 'modelo')" 
-                   style="flex:1;min-width:0;height:100%;min-height:36px;border:none;background:transparent;text-align:left;font-weight:800;outline:none;font-family:var(--font);font-size:15px;color:${themeColor};transition:all .2s;padding:0" />
+                   style="flex:1;min-width:0;height:100%;min-height:36px;border:none;background:transparent;text-align:left;font-weight:800;outline:none;font-family:var(--font);font-size:15px;color:${themeColor};padding:0" />
             <span id="plan-${tableName}-r${idx}-badge" style="display:flex;align-items:center;gap:4px">${planBadgeHtml(statsChk.count, isFilled, statsChk.urgencias, statsChk.trocas, statsChk.urgenciasTT)}</span>
           </div>
         </td>
@@ -1280,15 +1335,9 @@ function fluxolabRenderPlanejamento() {
   if (!panel) return;
   _planInjectLightCss();
   panel.classList.toggle('plan-light', planIsLightBg());
+  _fluxolabEnsureModelosDatalist();
   
-  let modelosUnicos = Array.from(new Set(Object.values(typeof equipamentos !== 'undefined' ? equipamentos : {}).filter(Boolean)));
-  modelosUnicos.sort((a,b) => a.localeCompare(b));
-  
-  let dataListHtml = '<datalist id="modelos-lista">';
-  modelosUnicos.forEach(m => dataListHtml += `<option value="${m}">`);
-  dataListHtml += '</datalist>';
-  
-  let html = dataListHtml;
+  let html = '';
   
   html += `
     <div style="margin-bottom:24px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;justify-content:space-between">
@@ -1321,6 +1370,6 @@ function fluxolabRenderPlanejamento() {
   panel.innerHTML = html;
   planInitResizeObserver();
 }
+// OTIMIZAÇÃO EGRESS/REALTIME: Planejamento carrega sob demanda ao abrir a aba FluxoLAB → Planejamento.
 
-setTimeout(fluxolabLoadPlanejamento, 1500);
 
