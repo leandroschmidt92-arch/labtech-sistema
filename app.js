@@ -18658,7 +18658,8 @@ window._qualIniciarUploadEmSegundoPlano = async function(regId, selb, dataStr, f
     const pastaUrl = uploadRes.pastaUrl || '';
 
     // Busca versão mais recente do registro (caso alguém tenha alterado pedido/etiqueta enquanto subia)
-    let regAtual = (window._qualRegistros && window._qualRegistros[regId]) || null;
+    const _qCache = (typeof _qualRegistros !== 'undefined' && _qualRegistros) ? _qualRegistros : (window._qualRegistros || null);
+    let regAtual = (_qCache && _qCache[regId]) || null;
     if (typeof _supaAuthed === 'function') {
       try {
         const { data: freshRow } = await _supaAuthed()
@@ -18702,28 +18703,32 @@ window._qualIniciarUploadEmSegundoPlano = async function(regId, selb, dataStr, f
         if (upErr) throw upErr;
       }
 
-      if (window._qualRegistros) {
+      if (_qCache) {
         regAtual.id = regId;
-        window._qualRegistros[regId] = regAtual;
+        _qCache[regId] = regAtual;
       }
     }
 
     delete window._qualUploadsAtivos[regId];
     if (typeof renderQualRegistros === 'function') renderQualRegistros();
+    if (typeof window._qualRenderRegFotosPanel === 'function') window._qualRenderRegFotosPanel();
+    if (typeof toast === 'function') toast('✅ ' + fotosNovas.length + ' foto(s) de ' + selb + ' salvas no Drive!');
     console.log('[Qualidade] Upload em segundo plano concluído para', selb, fotosNovas.length, 'fotos.');
   } catch (err) {
     console.error('[Qualidade] Falha no upload em segundo plano para', selb, err);
     delete window._qualUploadsAtivos[regId];
-    if (window._qualRegistros && window._qualRegistros[regId]) {
-      delete window._qualRegistros[regId].fotos_enviando;
+    const _qCacheErr = (typeof _qualRegistros !== 'undefined' && _qualRegistros) ? _qualRegistros : (window._qualRegistros || null);
+    if (_qCacheErr && _qCacheErr[regId]) {
+      delete _qCacheErr[regId].fotos_enviando;
       if (typeof _supaAuthed === 'function') {
-        const rawErr = { ...window._qualRegistros[regId] };
+        const rawErr = { ..._qCacheErr[regId] };
         delete rawErr.raw;
         delete rawErr._id;
         _supaAuthed().from('qualidade_registros').update({ raw: rawErr }).eq('id', regId).catch(() => {});
       }
     }
     if (typeof renderQualRegistros === 'function') renderQualRegistros();
+    if (typeof window._qualRenderRegFotosPanel === 'function') window._qualRenderRegFotosPanel();
     alert('⚠️ Erro ao enviar fotos do SELB ' + selb + ' para o Google Drive: ' + (err.message || err) + '\n\nVocê pode clicar em "📷 Anexar fotos" nesse registro para tentar enviar novamente.');
   }
 };
@@ -18769,14 +18774,29 @@ if (!window._qualEscListenerRegistrado) {
   window._qualEscListenerRegistrado = true;
   document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
+      const qr = document.getElementById('modal-qual-qr-fotos-scanner');
+      if (qr && qr.style.display === 'flex') {
+        qualFecharScannerQrFotos();
+        return;
+      }
       const lb = document.getElementById('modal-qual-foto-lightbox');
       if (lb && lb.style.display === 'flex') {
         qualFecharFotoLightbox();
         return;
       }
+      const ma = document.getElementById('modal-qual-anexar-fotos');
+      if (ma && ma.style.display === 'flex') {
+        qualFecharModalAnexarFotos();
+        return;
+      }
       const mf = document.getElementById('modal-qual-fotos');
       if (mf && mf.style.display === 'flex') {
         qualFecharModalFotos();
+        return;
+      }
+      const rf = document.getElementById('modal-qual-reg-fotos-panel');
+      if (rf && rf.style.display === 'flex') {
+        rf.style.display = 'none';
       }
     }
   });
@@ -18791,37 +18811,56 @@ window._qualNovasFotosAnexo = [];
 window._qualRegistroAlvoAnexo = null;
 window._qualUltimoRegVisualizado = null;
 
-window.qualAbrirModalAnexarFotos = async function(regIdOrSelb) {
-  let reg = null;
+async function _qualBuscarRegistroPorIdOuSelb(regIdOrSelb) {
+  const clean = String(regIdOrSelb || '').trim();
+  if (!clean) return null;
+  const upper = clean.toUpperCase();
+  const qCache = (typeof _qualRegistros !== 'undefined' && _qualRegistros) ? _qualRegistros : (window._qualRegistros || null);
 
-  // Busca registro no cache
-  if (window._qualRegistros) {
-    if (window._qualRegistros[regIdOrSelb]) {
-      reg = window._qualRegistros[regIdOrSelb];
+  let reg = null;
+  if (qCache) {
+    if (qCache[clean]) {
+      reg = { ...qCache[clean], id: qCache[clean].id || clean, _id: qCache[clean]._id || clean };
     } else {
-      const all = Object.values(window._qualRegistros);
-      reg = all.find(r => r._id === regIdOrSelb || r.id === regIdOrSelb)
-         || all.find(r => r.selb && String(r.selb).toUpperCase().trim() === String(regIdOrSelb).toUpperCase().trim());
+      const entries = Object.entries(qCache);
+      const byId = entries.find(([k, r]) => r && (r._id === clean || r.id === clean || k === clean));
+      if (byId) {
+        reg = { ...byId[1], id: byId[1].id || byId[0], _id: byId[1]._id || byId[0] };
+      } else {
+        const matches = entries
+          .filter(([, r]) => r && r.selb && String(r.selb).toUpperCase().trim() === upper)
+          .sort((a, b) => (b[1].ts || 0) - (a[1].ts || 0));
+        if (matches.length) {
+          reg = { ...matches[0][1], id: matches[0][1].id || matches[0][0], _id: matches[0][1]._id || matches[0][0] };
+        }
+      }
     }
   }
 
-  // Fallback busca direto no Supabase
   if (!reg && typeof _supaAuthed === 'function') {
     try {
-      const clean = String(regIdOrSelb || '').trim();
       let query = _supaAuthed().from('qualidade_registros').select('*');
       if (clean.length > 20) query = query.eq('id', clean);
-      else query = query.eq('selb', clean.toUpperCase()).order('ts', { ascending: false });
+      else query = query.eq('selb', upper).order('ts', { ascending: false });
       const { data } = await query.limit(1);
       if (data && data.length) {
         if (typeof _qualIngestRow === 'function') _qualIngestRow(data[0]);
-        reg = (window._qualRegistros && window._qualRegistros[data[0].id]) || data[0].raw || data[0];
+        const row = data[0];
+        const freshCache = (typeof _qualRegistros !== 'undefined' && _qualRegistros) ? _qualRegistros : window._qualRegistros;
+        const stored = (freshCache && freshCache[row.id]) || row.raw || row;
+        reg = { ...stored, id: stored.id || row.id, _id: stored._id || row.id };
       }
     } catch(e){}
   }
+  return reg;
+}
+
+window.qualAbrirModalAnexarFotos = async function(regIdOrSelb, opts) {
+  opts = opts || {};
+  const reg = await _qualBuscarRegistroPorIdOuSelb(regIdOrSelb);
 
   if (!reg) {
-    alert('Registro não encontrado no sistema.');
+    alert('Registro não encontrado no sistema para "' + (regIdOrSelb || '—') + '".');
     return;
   }
 
@@ -18842,6 +18881,7 @@ window.qualAbrirModalAnexarFotos = async function(regIdOrSelb) {
   const statusEl = document.getElementById('modal-qual-anexo-status');
   const errEl = document.getElementById('modal-qual-anexo-err');
   const btnSalvar = document.getElementById('modal-qual-anexo-btn-salvar');
+  const btnQr = document.getElementById('modal-qual-anexo-btn-qr');
 
   if (!modal) return;
 
@@ -18850,7 +18890,20 @@ window.qualAbrirModalAnexarFotos = async function(regIdOrSelb) {
 
   if (titEl) titEl.innerHTML = '📷 Anexar Fotos — <b style="color:var(--accent)">' + (reg.selb || '—') + '</b>';
   if (subEl) subEl.textContent = (reg.equipamento || '—') + ' · Liberado em ' + (reg.data || '') + ' por ' + (reg.responsavel || 'Qualidade');
-  if (infoEl) infoEl.innerHTML = 'Este registro possui <b>' + qtdFotos + '</b> foto(s) cadastrada(s). Você pode tirar novas fotos ou anexar da galeria para adicionar a este equipamento.';
+  if (infoEl) {
+    if (opts.fromQr) {
+      infoEl.style.background = 'rgba(16,185,129,0.12)';
+      infoEl.style.borderColor = 'rgba(16,185,129,0.4)';
+      infoEl.style.color = '#6ee7b7';
+      infoEl.innerHTML = '✅ <b>QR Code lido: SELB ' + (reg.selb || '—') + '</b> (' + qtdFotos + ' foto(s) já registrada(s)). Tire a foto abaixo e clique em Enviar.';
+    } else {
+      infoEl.style.background = 'rgba(255,255,255,0.03)';
+      infoEl.style.borderColor = 'var(--border)';
+      infoEl.style.color = 'var(--muted)';
+      infoEl.innerHTML = 'Este registro possui <b>' + qtdFotos + '</b> foto(s) cadastrada(s). Você pode tirar novas fotos ou anexar da galeria para adicionar a este equipamento.';
+    }
+  }
+  if (btnQr) btnQr.style.display = opts.fromQr ? 'inline-flex' : 'none';
   if (statusEl) statusEl.style.display = 'none';
   if (errEl) errEl.style.display = 'none';
   if (previewBox) previewBox.innerHTML = '';
@@ -18861,6 +18914,15 @@ window.qualAbrirModalAnexarFotos = async function(regIdOrSelb) {
 
   modal.style.setProperty('display', 'flex', 'important');
   modal.classList.remove('hidden');
+
+  if (opts.autoCamera) {
+    setTimeout(() => {
+      try {
+        const camInp = document.getElementById('qual-anexo-input-camera');
+        if (camInp) camInp.click();
+      } catch (e) {}
+    }, 80);
+  }
 };
 
 window.qualFecharModalAnexarFotos = function() {
@@ -18965,47 +19027,15 @@ window.qualSalvarFotosAnexadas = async function() {
 
   // Fecha o modal imediatamente e inicia upload rápido em segundo plano
   qualFecharModalAnexarFotos();
+  if (typeof toast === 'function') toast(`📤 Enviando ${novas.length} foto(s) de ${selb} para o Drive...`, 'ok');
   window._qualIniciarUploadEmSegundoPlano(regId, selb, dataStr, novas, fotosExistentes);
+  if (typeof window._qualRenderRegFotosPanel === 'function') window._qualRenderRegFotosPanel();
 };
 
 window.qualAbrirModalFotos = async function(regIdOrSelb) {
   console.log('[Qualidade] qualAbrirModalFotos acionado para:', regIdOrSelb);
   window._qualUltimoRegVisualizado = regIdOrSelb;
-  let reg = null;
-
-  // 1. Tenta encontrar no cache da memória local
-  if (window._qualRegistros) {
-    if (window._qualRegistros[regIdOrSelb]) {
-      reg = window._qualRegistros[regIdOrSelb];
-    } else {
-      const all = Object.values(window._qualRegistros);
-      reg = all.find(r => r._id === regIdOrSelb || r.id === regIdOrSelb)
-         || all.find(r => r.selb && String(r.selb).toUpperCase().trim() === String(regIdOrSelb).toUpperCase().trim());
-    }
-  }
-
-  // 2. Se não encontrou no cache local (ex: feito em outro computador ou antes do sync), busca direto no Supabase na nuvem
-  if (!reg && typeof _supaAuthed === 'function') {
-    try {
-      const selbClean = String(regIdOrSelb || '').trim();
-      let query = _supaAuthed().from('qualidade_registros').select('*');
-      if (selbClean.length > 20) {
-        query = query.eq('id', selbClean);
-      } else {
-        query = query.eq('selb', selbClean.toUpperCase()).order('ts', { ascending: false });
-      }
-      const { data: supaData, error: supaErr } = await query.limit(1);
-      if (!supaErr && supaData && supaData.length > 0) {
-        const supaRow = supaData[0];
-        if (typeof _qualIngestRow === 'function') {
-          _qualIngestRow(supaRow);
-        }
-        reg = (window._qualRegistros && window._qualRegistros[supaRow.id]) || supaRow.raw || supaRow;
-      }
-    } catch(errFetch) {
-      console.warn('[Qualidade] Erro ao buscar registro no Supabase:', errFetch);
-    }
-  }
+  const reg = await _qualBuscarRegistroPorIdOuSelb(regIdOrSelb);
 
   const modal = document.getElementById('modal-qual-fotos');
   const titEl = document.getElementById('modal-qual-fotos-titulo');
@@ -19083,6 +19113,326 @@ window.qualFecharModalFotos = function() {
     modal.style.display = 'none';
     modal.classList.add('hidden');
   }
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// REGISTROS DE FOTOS — Painel dedicado + Leitor de QR Code direto para câmera
+// ══════════════════════════════════════════════════════════════════════════════
+let _qualQrHtml5 = null;
+let _qualQrLibPromise = null;
+let _qualQrHandlingResult = false;
+window._qualRegFotosFilterStatus = window._qualRegFotosFilterStatus || 'sem'; // 'todos' | 'sem' | 'com'
+
+function _qualLoadHtml5QrcodeLib() {
+  if (typeof Html5Qrcode !== 'undefined') return Promise.resolve();
+  if (_qualQrLibPromise) return _qualQrLibPromise;
+  const loadSrc = (url) => new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = url;
+    s.async = true;
+    s.onload = () => res();
+    s.onerror = () => rej(new Error('Falha ao carregar ' + url));
+    document.head.appendChild(s);
+  });
+  _qualQrLibPromise = loadSrc('https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js')
+    .catch(() => loadSrc('https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js'))
+    .catch(err => { _qualQrLibPromise = null; throw err; });
+  return _qualQrLibPromise;
+}
+
+function _qualExtrairSelbDeQr(rawText) {
+  const txt = String(rawText || '').trim().toUpperCase();
+  if (!txt) return '';
+  if (/^[A-Z0-9]{4,10}$/.test(txt)) return txt;
+  const urlMatch = txt.match(/[?&]SELB=([A-Z0-9]{4,10})/i);
+  if (urlMatch) return urlMatch[1].toUpperCase();
+  const lblMatch = txt.match(/SELB\s*[:=\-]\s*([A-Z0-9]{4,10})/i);
+  if (lblMatch) return lblMatch[1].toUpperCase();
+  const tokMatch = txt.match(/\b([A-Z0-9]{4,10})\b/);
+  return tokMatch ? tokMatch[1].toUpperCase() : txt;
+}
+
+window._qualSetRegFotosFilterStatus = function(st) {
+  window._qualRegFotosFilterStatus = st || 'sem';
+  window._qualRenderRegFotosPanel();
+};
+
+window.qualAbrirPainelRegistrosFotos = function() {
+  window._qualRegFotosFilterStatus = 'sem';
+  let ov = document.getElementById('modal-qual-reg-fotos-panel');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'modal-qual-reg-fotos-panel';
+    ov.setAttribute('style', 'position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,.72);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:16px');
+    ov.innerHTML = ''
+      + '<div style="background:var(--bg2);border:1px solid rgba(56,189,248,.45);border-radius:16px;width:min(920px,100%);max-height:90vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.65)">'
+      +   '<div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;background:rgba(56,189,248,.05)">'
+      +     '<div>'
+      +       '<h3 style="margin:0;font-size:16px;font-weight:800;color:#38bdf8;display:flex;align-items:center;gap:8px">📸 Registros de Fotos</h3>'
+      +       '<div id="qual-rf-subtitle" style="margin-top:3px;font-size:12px;color:var(--muted)">Carregando...</div>'
+      +     '</div>'
+      +     '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'
+      +       '<button type="button" onclick="qualAbrirScannerQrFotos()" style="background:linear-gradient(135deg,#10b981,#059669);border:1px solid rgba(110,231,183,.55);color:#fff;font-size:13px;font-weight:800;padding:9px 18px;border-radius:10px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;box-shadow:0 6px 20px rgba(16,185,129,.35)">📷 Ler QR Code</button>'
+      +       '<button type="button" onclick="document.getElementById(\'modal-qual-reg-fotos-panel\').style.display=\'none\'" style="background:rgba(255,255,255,.06);border:1px solid var(--border2);color:var(--muted);width:34px;height:34px;border-radius:9px;cursor:pointer;font-size:16px;line-height:1">✕</button>'
+      +     '</div>'
+      +   '</div>'
+      +   '<div style="padding:12px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;background:rgba(255,255,255,.015)">'
+      +     '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
+      +       '<button type="button" id="qual-rf-f-todos" onclick="_qualSetRegFotosFilterStatus(\'todos\')" style="padding:6px 12px;border-radius:8px;font-size:11.5px;font-weight:700;cursor:pointer;border:1px solid var(--border2)">Todos</button>'
+      +       '<button type="button" id="qual-rf-f-sem" onclick="_qualSetRegFotosFilterStatus(\'sem\')" style="padding:6px 12px;border-radius:8px;font-size:11.5px;font-weight:700;cursor:pointer;border:1px solid var(--border2)">Sem foto</button>'
+      +       '<button type="button" id="qual-rf-f-com" onclick="_qualSetRegFotosFilterStatus(\'com\')" style="padding:6px 12px;border-radius:8px;font-size:11.5px;font-weight:700;cursor:pointer;border:1px solid var(--border2)">Com foto</button>'
+      +       '<label style="display:inline-flex;align-items:center;gap:5px;color:var(--muted);font-size:11.5px;margin-left:6px;cursor:pointer"><input id="qual-rf-today" type="checkbox" checked onchange="_qualRenderRegFotosPanel()"> Na data selecionada</label>'
+      +     '</div>'
+      +     '<input id="qual-rf-search" placeholder="🔍 Buscar SELB ou modelo..." oninput="_qualRenderRegFotosPanel()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-size:12px;padding:7px 12px;outline:none;width:220px;max-width:100%">'
+      +   '</div>'
+      +   '<div id="qual-rf-body" style="overflow-y:auto;flex:1;min-height:180px"></div>'
+      + '</div>';
+    document.body.appendChild(ov);
+    ov.addEventListener('click', e => { if (e.target === ov) ov.style.display = 'none'; });
+  }
+  ov.style.display = 'flex';
+  window._qualRenderRegFotosPanel();
+};
+
+window._qualRenderRegFotosPanel = function() {
+  const body = document.getElementById('qual-rf-body');
+  const sub = document.getElementById('qual-rf-subtitle');
+  if (!body) return;
+
+  const st = window._qualRegFotosFilterStatus || 'sem';
+  const btnMap = { todos: 'qual-rf-f-todos', sem: 'qual-rf-f-sem', com: 'qual-rf-f-com' };
+  Object.entries(btnMap).forEach(([k, id]) => {
+    const b = document.getElementById(id);
+    if (!b) return;
+    const active = st === k;
+    b.style.background = active ? 'rgba(56,189,248,.18)' : 'var(--bg3)';
+    b.style.color = active ? '#38bdf8' : 'var(--muted)';
+    b.style.borderColor = active ? 'rgba(56,189,248,.55)' : 'var(--border2)';
+  });
+
+  const q = (document.getElementById('qual-rf-search')?.value || '').toUpperCase().trim();
+  const onlyDate = document.getElementById('qual-rf-today')?.checked !== false;
+  let targetDateStr = '';
+  const dateFilter = document.getElementById('qual-reg-date-filter');
+  if (onlyDate && dateFilter && dateFilter.value) {
+    const [yyyy, mm, dd] = dateFilter.value.split('-');
+    targetDateStr = `${dd}/${mm}/${yyyy}`;
+  } else if (onlyDate) {
+    targetDateStr = new Date().toLocaleDateString('pt-BR');
+  }
+
+  const qCache = (typeof _qualRegistros !== 'undefined' && _qualRegistros) ? _qualRegistros : (window._qualRegistros || {});
+  let rows = Object.entries(qCache)
+    .map(([id, r]) => ({ ...r, _id: id }))
+    .filter(r => !targetDateStr || q || r.data === targetDateStr);
+
+  if (q) {
+    rows = rows.filter(r =>
+      (r.selb || '').toUpperCase().includes(q) ||
+      (r.equipamento || '').toUpperCase().includes(q) ||
+      (r.responsavel || '').toUpperCase().includes(q)
+    );
+  }
+  rows.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+
+  const getFotos = r => {
+    let f = r.fotos || (r.raw && r.raw.fotos) || [];
+    if (typeof f === 'string') { try { f = JSON.parse(f); } catch(e) { f = []; } }
+    return Array.isArray(f) ? f : [];
+  };
+
+  const comFotoCount = rows.filter(r => getFotos(r).length > 0).length;
+  const semFotoCount = rows.length - comFotoCount;
+  if (sub) {
+    sub.innerHTML = `<b style="color:#38bdf8">${comFotoCount}</b> com foto(s) · <b style="color:#fbbf24">${semFotoCount}</b> sem foto (${rows.length} registro${rows.length !== 1 ? 's' : ''})`;
+  }
+
+  if (st === 'com') rows = rows.filter(r => getFotos(r).length > 0);
+  else if (st === 'sem') rows = rows.filter(r => getFotos(r).length === 0);
+
+  if (!rows.length) {
+    body.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:13px;padding:42px 20px">Nenhum registro encontrado. Use <b style="color:#34d399">📷 Ler QR Code</b> acima para ler o QR Code de qualquer folha impressa.</div>';
+    return;
+  }
+
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+  body.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px">
+    <thead>
+      <tr style="position:sticky;top:0;z-index:2;background:var(--bg2)">
+        <th style="padding:10px 14px;text-align:left;font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;border-bottom:1px solid var(--border2)">SELB</th>
+        <th style="padding:10px 14px;text-align:left;font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;border-bottom:1px solid var(--border2)">EQUIPAMENTO</th>
+        <th style="padding:10px 14px;text-align:left;font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;border-bottom:1px solid var(--border2)">DATA / HORA</th>
+        <th style="padding:10px 14px;text-align:center;font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;border-bottom:1px solid var(--border2)">FOTOS</th>
+        <th style="padding:10px 14px;text-align:right;font-size:10px;font-weight:700;color:var(--muted);letter-spacing:.06em;text-transform:uppercase;border-bottom:1px solid var(--border2)">AÇÃO</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows.map(r => {
+        const fa = getFotos(r);
+        const up = window._qualUploadsAtivos && window._qualUploadsAtivos[r._id];
+        const statusFotos = up
+          ? `<span style="background:rgba(245,158,11,0.18);border:1px solid rgba(245,158,11,0.5);border-radius:6px;color:#fbbf24;font-size:11px;font-weight:700;padding:3px 8px">⏳ Enviando ${up.enviadas}/${up.total}</span>`
+          : (fa.length > 0
+              ? `<button type="button" onclick="qualAbrirModalFotos('${r._id}')" style="background:rgba(59,130,246,0.18);border:1px solid rgba(59,130,246,0.5);border-radius:6px;color:#60a5fa;font-size:11px;font-weight:700;padding:3px 9px;cursor:pointer">📷 ${fa.length} foto(s)</button>`
+              : `<span style="color:var(--muted);font-size:11px">Sem fotos</span>`);
+        return `<tr style="border-bottom:1px solid var(--border);transition:background .1s" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">
+          <td style="padding:10px 14px;font-family:var(--mono);font-weight:800;font-size:13px;color:#38bdf8">${esc(r.selb || '—')}</td>
+          <td style="padding:10px 14px;color:var(--text);max-width:260px">${esc(r.equipamento || '—')}</td>
+          <td style="padding:10px 14px;color:var(--muted);font-family:var(--mono);white-space:nowrap">${esc(r.data || '—')} ${esc(r.hora || '')}</td>
+          <td style="padding:10px 14px;text-align:center">${statusFotos}</td>
+          <td style="padding:10px 14px;text-align:right;white-space:nowrap">
+            <button type="button" onclick="qualAbrirModalAnexarFotos('${r._id}', { autoCamera: true })" style="background:rgba(16,185,129,0.16);border:1px solid rgba(16,185,129,0.5);border-radius:7px;color:#34d399;font-size:11.5px;font-weight:700;padding:5px 11px;cursor:pointer">📸 Tirar / Anexar Foto</button>
+          </td>
+        </tr>`;
+      }).join('')}
+    </tbody>
+  </table>`;
+};
+
+window.qualFecharScannerQrFotos = async function() {
+  const m = document.getElementById('modal-qual-qr-fotos-scanner');
+  if (m) m.style.display = 'none';
+  if (_qualQrHtml5) {
+    const inst = _qualQrHtml5;
+    _qualQrHtml5 = null;
+    try { await inst.stop(); } catch (e) {}
+    try { inst.clear(); } catch (e) {}
+  }
+  _qualQrHandlingResult = false;
+};
+
+window.qualAbrirScannerQrFotos = async function() {
+  let m = document.getElementById('modal-qual-qr-fotos-scanner');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'modal-qual-qr-fotos-scanner';
+    m.setAttribute('style', 'position:fixed;inset:0;z-index:100050;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(4px)');
+    m.innerHTML = ''
+      + '<div style="width:100%;max-width:460px;background:var(--bg2);border:1px solid rgba(56,189,248,.45);border-radius:16px;padding:16px;box-shadow:0 24px 64px rgba(0,0,0,.75)">'
+      +   '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">'
+      +     '<div style="font-size:15px;font-weight:800;color:#38bdf8;display:flex;align-items:center;gap:8px">📷 Ler QR Code do SELB</div>'
+      +     '<button type="button" id="qual-qr-scan-close" style="background:rgba(255,255,255,.07);border:1px solid var(--border2);color:var(--muted);width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:16px">✕</button>'
+      +   '</div>'
+      +   '<div id="qual-qr-foto-reader" style="width:100%;border-radius:12px;overflow:hidden;background:#000;min-height:240px"></div>'
+      +   '<div id="qual-qr-foto-status" style="margin-top:10px;font-size:12px;color:var(--muted);text-align:center;min-height:18px">Carregando câmera…</div>'
+      +   '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center">'
+      +     '<input id="qual-qr-manual-selb" type="text" placeholder="Ou digite o SELB (ex: BUT2)" maxlength="12" style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:var(--mono);font-size:13px;font-weight:700;padding:8px 10px;text-transform:uppercase;outline:none" onkeydown="if(event.key===\'Enter\')document.getElementById(\'qual-qr-manual-btn\').click()">'
+      +     '<button type="button" id="qual-qr-manual-btn" style="background:rgba(16,185,129,.2);border:1px solid rgba(16,185,129,.5);color:#6ee7b7;font-size:12px;font-weight:700;padding:8px 14px;border-radius:8px;cursor:pointer;white-space:nowrap">📸 Abrir Câmera</button>'
+      +   '</div>'
+      + '</div>';
+    document.body.appendChild(m);
+    m.querySelector('#qual-qr-scan-close').addEventListener('click', () => qualFecharScannerQrFotos());
+    m.addEventListener('click', e => { if (e.target === m) qualFecharScannerQrFotos(); });
+    m.querySelector('#qual-qr-manual-btn').addEventListener('click', () => {
+      const val = (document.getElementById('qual-qr-manual-selb')?.value || '').trim().toUpperCase();
+      if (val) _qualProcessarQrLidoParaFoto(val);
+    });
+  }
+
+  const statusEl = document.getElementById('qual-qr-foto-status');
+  const manualInp = document.getElementById('qual-qr-manual-selb');
+  if (manualInp) manualInp.value = '';
+  m.style.display = 'flex';
+  if (statusEl) {
+    statusEl.style.color = 'var(--muted)';
+    statusEl.textContent = 'Carregando câmera…';
+  }
+  _qualQrHandlingResult = false;
+
+  async function _qualProcessarQrLidoParaFoto(rawText) {
+    if (_qualQrHandlingResult) return;
+    _qualQrHandlingResult = true;
+    const selb = _qualExtrairSelbDeQr(rawText);
+    if (!selb) {
+      _qualQrHandlingResult = false;
+      return;
+    }
+
+    try { if (navigator.vibrate) navigator.vibrate(80); } catch (e) {}
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'square'; o.frequency.value = 920;
+      g.gain.value = 0.08;
+      o.connect(g); g.connect(ctx.destination);
+      o.start();
+      setTimeout(() => { try { o.stop(); ctx.close(); } catch (e) {} }, 110);
+    } catch (e) {}
+
+    if (statusEl) {
+      statusEl.style.color = '#34d399';
+      statusEl.textContent = '✓ QR Code lido: ' + selb + ' — localizando na Qualidade...';
+    }
+
+    // Libera a câmera do leitor ANTES de abrir a câmera de foto (essencial no celular)
+    await qualFecharScannerQrFotos();
+
+    const reg = await _qualBuscarRegistroPorIdOuSelb(selb);
+    if (!reg) {
+      alert('⚠️ SELB "' + selb + '" não encontrado nos registros da Qualidade.\n\nRegistre o equipamento na Qualidade primeiro antes de tirar as fotos.');
+      return;
+    }
+
+    // Abre direto para tirar a foto referente ao SELB registrado na Qualidade
+    await qualAbrirModalAnexarFotos(reg.id || reg._id || selb, { autoCamera: true, fromQr: true });
+  }
+
+  try {
+    await _qualLoadHtml5QrcodeLib();
+  } catch (e) {
+    if (statusEl) {
+      statusEl.style.color = '#f87171';
+      statusEl.textContent = 'Erro ao carregar leitor de QR Code. Use o campo abaixo para digitar o SELB.';
+    }
+    return;
+  }
+
+  if (_qualQrHtml5) {
+    try { await _qualQrHtml5.stop(); } catch (e) {}
+    try { _qualQrHtml5.clear(); } catch (e) {}
+    _qualQrHtml5 = null;
+  }
+
+  const optsCtor = { verbose: false };
+  if (typeof Html5QrcodeSupportedFormats !== 'undefined' && Html5QrcodeSupportedFormats.QR_CODE !== undefined) {
+    optsCtor.formatsToSupport = [Html5QrcodeSupportedFormats.QR_CODE];
+  }
+  _qualQrHtml5 = new Html5Qrcode('qual-qr-foto-reader', optsCtor);
+
+  const scanCfg = {
+    fps: 12,
+    qrbox: (vw, vh) => {
+      const size = Math.round(Math.min(vw, vh) * 0.72);
+      return { width: size, height: size };
+    },
+    aspectRatio: 1.0,
+  };
+
+  if (statusEl) statusEl.textContent = 'Aponte a câmera para o QR Code do SELB…';
+
+  _qualQrHtml5.start({ facingMode: { exact: 'environment' } }, scanCfg, _qualProcessarQrLidoParaFoto)
+    .catch(() => {
+      if (!_qualQrHtml5) return;
+      return _qualQrHtml5.start({ facingMode: 'environment' }, scanCfg, _qualProcessarQrLidoParaFoto)
+        .catch(() => {
+          if (!_qualQrHtml5) return;
+          return Html5Qrcode.getCameras().then(cams => {
+            if (cams && cams.length && _qualQrHtml5) {
+              return _qualQrHtml5.start(cams[cams.length - 1].id, scanCfg, _qualProcessarQrLidoParaFoto);
+            }
+            throw new Error('Nenhuma câmera encontrada');
+          });
+        })
+        .catch(err => {
+          if (statusEl) {
+            statusEl.style.color = '#f87171';
+            statusEl.textContent = 'Câmera indisponível (' + (err && err.message ? err.message : err) + '). Digite o SELB abaixo.';
+          }
+        });
+    });
 };
 
 // ── Salvar registro de qualidade ──
@@ -19775,11 +20125,40 @@ function renderQualRegistros(){
     cardChkRef.insertAdjacentElement('afterend', card);
     statsLib = document.getElementById('qual-stats-liberadas');
   }
+  // ── Card REGISTROS DE FOTOS — painel de fotos + leitor de QR Code ──
+  const cardLibRef = document.getElementById('qual-card-liberadas');
+  let statsFotos = document.getElementById('qual-stats-reg-fotos');
+  if(!statsFotos && cardLibRef){
+    const card = document.createElement('div');
+    card.className = cardLibRef.className || 'sum-card';
+    card.id = 'qual-card-reg-fotos';
+    card.setAttribute('style', (cardLibRef.getAttribute('style')||'').replace(/border-color:[^;]+;?/,'') + ';border-color:rgba(56,189,248,.45);cursor:pointer;transition:all .15s');
+    card.title = 'Clique para abrir Registros de Fotos e ler QR Code do SELB';
+    card.onclick = function(){ window.qualAbrirPainelRegistrosFotos && window.qualAbrirPainelRegistrosFotos(); };
+    card.innerHTML = '<div class="slbl" style="color:#38bdf8;letter-spacing:.08em;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:space-between;gap:6px">REGISTROS DE FOTOS<span style="font-size:13px">📷</span></div>'
+      + '<div class="sval" id="qual-stats-reg-fotos" style="color:#38bdf8;font-size:28px;font-weight:800">0</div>';
+    cardLibRef.insertAdjacentElement('afterend', card);
+    statsFotos = document.getElementById('qual-stats-reg-fotos');
+  }
   // Conta liberadas do dia
   if(statsLib){
     const libs = Object.values(window._qualLiberadas || {});
     const libsDia = targetDateStr ? libs.filter(r => r.data === targetDateStr) : libs;
     statsLib.textContent = libsDia.length;
+  }
+
+  // Conta registros com fotos na data selecionada (card REGISTROS DE FOTOS)
+  const allValuesForFotos = Object.values(_qualRegistros || {});
+  const totalComFotosDia = allValuesForFotos.filter(r => {
+    if (targetDateStr && r.data !== targetDateStr) return false;
+    if (q && !(r.selb||'').toUpperCase().includes(q) && !(r.equipamento||'').toUpperCase().includes(q)) return false;
+    const f = r.fotos || (r.raw && r.raw.fotos) || [];
+    return Array.isArray(f) && f.length > 0;
+  }).length;
+  if (statsFotos) statsFotos.textContent = totalComFotosDia;
+  if (typeof window._qualRenderRegFotosPanel === 'function') {
+    const _rfPanel = document.getElementById('modal-qual-reg-fotos-panel');
+    if (_rfPanel && _rfPanel.style.display === 'flex') window._qualRenderRegFotosPanel();
   }
 
   const cardConcl = document.getElementById('qual-card-concluidos');
@@ -21418,37 +21797,73 @@ window.abrirFolhaLiberacao = function(regId){
   };
 };
 
+function _qualGerarQrDataUrl(texto, size) {
+  const t = String(texto || '').trim();
+  if (!t) return '';
+  try {
+    if (typeof ZXing !== 'undefined' && typeof ZXing.BrowserQRCodeSvgWriter === 'function') {
+      const writer = new ZXing.BrowserQRCodeSvgWriter();
+      const s = size || 240;
+      const svgEl = writer.write(t, s, s);
+      if (svgEl) {
+        if (!svgEl.getAttribute('xmlns')) svgEl.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        const xml = new XMLSerializer().serializeToString(svgEl);
+        return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(xml);
+      }
+    }
+  } catch (e) {}
+  return qualQrURL(t, size || 320);
+}
+
 function _imprimirFolhaLiberacao({ selb, dataFmt, usuario, senha, liberado, equipamento, contadorPB, contadorColor }){
   const w = window.open('', '_blank', 'width=800,height=1000');
   if(!w){ alert('Permita pop-ups para imprimir.'); return; }
+  const qrSelbSrc = selb ? _qualGerarQrDataUrl(selb, 260) : '';
   w.document.write(`<!doctype html><html><head>
 <meta charset="utf-8">
 <title>Folha de Liberação — ${selb}</title>
 <style>
-  @page { size: A4; margin: 18mm; }
+  @page { size: A4; margin: 16mm; }
   * { box-sizing:border-box; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   body { margin:0; font-family: Arial, Helvetica, sans-serif; color:#111; }
+  .qr-topo { display:flex; align-items:center; justify-content:space-between; border:1.5px solid #111; border-bottom:none; padding:10px 16px; background:#fff; }
+  .qr-topo-info { display:flex; flex-direction:column; gap:3px; }
+  .qr-topo-tit { font-size:10px; font-weight:800; color:#444; letter-spacing:.06em; text-transform:uppercase; }
+  .qr-topo-selb { font-size:20px; font-weight:900; color:#111; letter-spacing:.04em; }
+  .qr-topo-sub { font-size:10px; color:#555; }
+  .qr-topo-box { padding:3px; background:#fff; text-align:center; }
+  .qr-topo-box img { width:88px; height:88px; display:block; }
   table.folha { width:100%; border-collapse:collapse; border:1.5px solid #111; }
-  table.folha td { padding:14px 16px; vertical-align:middle; }
+  table.folha td { padding:13px 16px; vertical-align:middle; }
   .marca { width:34%; border-right:1.5px solid #111; text-align:center; }
   .marca img { height:38px; width:auto; display:inline-block; }
   .titulo { width:33%; border-right:1.5px solid #111; text-align:center; font-weight:800; font-size:16px; line-height:1.3; }
   .selo { width:33%; text-align:center; }
-  .selo-badge { border:3px solid #1c6b45; color:#1c6b45; border-radius:50%; width:88px; height:88px; display:inline-flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; text-align:center; line-height:1.2; }
-  .campo-cell { border-top:1.5px solid #111; padding:12px 16px; font-size:15px; font-weight:700; }
+  .selo-badge { border:3px solid #1c6b45; color:#1c6b45; border-radius:50%; width:84px; height:84px; display:inline-flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; text-align:center; line-height:1.2; }
+  .campo-cell { border-top:1.5px solid #111; padding:11px 16px; font-size:15px; font-weight:700; }
   .campo-cell.borda-dir { border-right:1.5px solid #111; }
   .linha-equip { border-top:1.5px solid #111; padding:10px 16px; font-size:12px; font-weight:600; color:#333; }
-  .corpo { padding:22px 20px 30px; }
-  .campo { font-size:15px; font-weight:700; margin-bottom:26px; }
+  .corpo { padding:18px 20px 24px; }
+  .campo { font-size:15px; font-weight:700; margin-bottom:20px; }
   .campo .val { font-weight:400; margin-left:6px; border-bottom:1px solid #111; padding-bottom:2px; }
-  .espaco { height:60px; }
-  .ass-line { border-top:1px solid #111; margin-top:36px; padding-top:6px; font-size:14px; }
-  .qr-rodape { display:flex; justify-content:flex-end; margin-top:28px; }
+  .espaco { height:40px; }
+  .ass-line { border-top:1px solid #111; margin-top:30px; padding-top:6px; font-size:14px; }
+  .qr-rodape { display:flex; justify-content:flex-end; margin-top:18px; }
   .qr-box { text-align:center; width:130px; }
   .qr-box img { width:110px; height:110px; display:block; margin:0 auto 4px; }
   .qr-box .qr-tit { font-size:9px; font-weight:800; line-height:1.25; text-transform:uppercase; }
 </style>
 </head><body>
+  ${qrSelbSrc ? `<div class="qr-topo">
+    <div class="qr-topo-info">
+      <div class="qr-topo-tit">QR Code SELB • Registro de Fotos</div>
+      <div class="qr-topo-selb">SELB: ${selb || ''}</div>
+      <div class="qr-topo-sub">Aponte o leitor da aba Qualidade para vincular fotos a este equipamento</div>
+    </div>
+    <div class="qr-topo-box">
+      <img id="qr-selb-img" src="${qrSelbSrc}" alt="QR Code SELB ${selb}">
+    </div>
+  </div>` : ''}
   <table class="folha" cellspacing="0" cellpadding="0">
     <tr>
       <td class="marca"><img src="${SELBETTI_LOGO_DATAURL}" alt="selbetti"></td>
@@ -21484,7 +21899,22 @@ function _imprimirFolhaLiberacao({ selb, dataFmt, usuario, senha, liberado, equi
   </table>
 </body></html>`);
   w.document.close();
-  setTimeout(() => { try{ w.focus(); w.print(); }catch(e){} }, 300);
+  (function waitAndPrint(){
+    let printed = false;
+    const doPrint = () => {
+      if(printed) return;
+      printed = true;
+      try{ w.focus(); w.print(); }catch(e){}
+    };
+    const img = w.document.getElementById('qr-selb-img');
+    if(img && !img.complete){
+      img.addEventListener('load', () => setTimeout(doPrint, 120), { once: true });
+      img.addEventListener('error', () => setTimeout(doPrint, 120), { once: true });
+      setTimeout(doPrint, 2500);
+    } else {
+      setTimeout(doPrint, 250);
+    }
+  })();
 }
 
 function qualClearPrintArea(){

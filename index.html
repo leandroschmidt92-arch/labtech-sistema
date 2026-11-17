@@ -5072,13 +5072,18 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       </div>
 
       <!-- Footer -->
-      <div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid var(--border);background:rgba(255,255,255,0.02)">
-        <button type="button" onclick="qualFecharModalAnexarFotos()" style="background:transparent;border:1px solid var(--border);color:var(--muted);font-size:12px;font-weight:600;padding:8px 16px;border-radius:8px;cursor:pointer">
-          Cancelar
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 20px;border-top:1px solid var(--border);background:rgba(255,255,255,0.02);flex-wrap:wrap">
+        <button type="button" id="modal-qual-anexo-btn-qr" onclick="qualFecharModalAnexarFotos();qualAbrirScannerQrFotos()" style="display:none;background:rgba(56,189,248,0.16);border:1px solid rgba(56,189,248,0.45);color:#38bdf8;font-size:12px;font-weight:700;padding:8px 14px;border-radius:8px;cursor:pointer;align-items:center;gap:6px">
+          📷 Ler outro QR Code
         </button>
-        <button type="button" id="modal-qual-anexo-btn-salvar" onclick="qualSalvarFotosAnexadas()" class="btn bp" style="font-size:12px;font-weight:700;padding:8px 18px;border-radius:8px;display:inline-flex;align-items:center;gap:6px" disabled>
-          💾 Enviar Fotos para o Drive
-        </button>
+        <div style="display:flex;align-items:center;gap:10px;margin-left:auto">
+          <button type="button" onclick="qualFecharModalAnexarFotos()" style="background:transparent;border:1px solid var(--border);color:var(--muted);font-size:12px;font-weight:600;padding:8px 16px;border-radius:8px;cursor:pointer">
+            Cancelar
+          </button>
+          <button type="button" id="modal-qual-anexo-btn-salvar" onclick="qualSalvarFotosAnexadas()" class="btn bp" style="font-size:12px;font-weight:700;padding:8px 18px;border-radius:8px;display:inline-flex;align-items:center;gap:6px" disabled>
+            💾 Enviar Fotos para o Drive
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -5088,7 +5093,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="supabase-compat-shim.js?v=4"></script>
-<script src="app.js?v=95"></script>
+<script src="app.js?v=97"></script>
 <script src="planejamento.js?v=15"></script>
 <script src="pendencias.js?v=15"></script>
 
