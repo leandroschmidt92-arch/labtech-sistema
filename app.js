@@ -14913,6 +14913,7 @@ async function loadEquipamentos(force = false){
   if(serverCfg) window._equipImportAt = serverCfg;
 
   _equipSaveToLocalCache(sTs, serverCfg);
+  if (typeof window._fluxolabEnsureModelosDatalist === 'function') window._fluxolabEnsureModelosDatalist();
 }
 
 // Helper de normalização global para busca tolerante de SELBs
@@ -14934,6 +14935,7 @@ async function loadMaquinasAEquip(){
     const tmp = {};
     (data || []).forEach(e => { tmp[e.id] = e.nome ? e.nome : e.id; });
     _maquinasAEquip = tmp;
+    if (typeof window._fluxolabEnsureModelosDatalist === 'function') window._fluxolabEnsureModelosDatalist();
   } catch(e) {
     console.warn('[Máquina A] Erro ao carregar planilha exclusiva:', e);
   }
@@ -25858,6 +25860,18 @@ function fluxolabFiltrarPorBadge(key) {
 }
 window.fluxolabFiltrarPorBadge = fluxolabFiltrarPorBadge;
 
+function fluxolabToggleModeloSortCol(col) {
+  const sel = document.getElementById('fluxolab-modelo-sort');
+  if (!sel) return;
+  if (col === 'diasUteis') {
+    sel.value = sel.value === 'diasUteisDesc' ? 'diasUteisAsc' : 'diasUteisDesc';
+  } else if (col === 'diasAberto') {
+    sel.value = sel.value === 'diasAbertoDesc' ? 'diasAbertoAsc' : 'diasAbertoDesc';
+  }
+  fluxolabRenderModelos();
+}
+window.fluxolabToggleModeloSortCol = fluxolabToggleModeloSortCol;
+
 function fluxolabRenderModelos() {
   window._fluxolabModelosExpanded = window._fluxolabModelosExpanded || new Set();
   const grid = document.getElementById('fluxolab-modelos-grid');
@@ -26190,11 +26204,36 @@ function fluxolabRenderModelos() {
   });
 
   // Ordenação
+  const isStrictColSort = (
+    sortFilter === 'diasUteisDesc' || sortFilter === 'diasUteisAsc' ||
+    sortFilter === 'diasAbertoDesc' || sortFilter === 'diasAbertoAsc'
+  );
   entradas.sort((a, b) => {
-    // ── Urgências sempre no topo (qualquer filtro/sort) ───────────────────
-    const urgA = _fluxolabModeloUrgenteQtd(a[0]) > 0 ? 1 : 0;
-    const urgB = _fluxolabModeloUrgenteQtd(b[0]) > 0 ? 1 : 0;
-    if (urgA !== urgB) return urgB - urgA;
+    if (sortFilter === 'diasUteisDesc' || sortFilter === 'diasUteisAsc') {
+      const hasA = a[1].temDadosDias ? 1 : 0;
+      const hasB = b[1].temDadosDias ? 1 : 0;
+      if (hasA !== hasB) return hasB - hasA; // modelos sem dado sempre no final
+      const va = Number(a[1].maxDiasUteis || 0);
+      const vb = Number(b[1].maxDiasUteis || 0);
+      if (va !== vb) return sortFilter === 'diasUteisAsc' ? va - vb : vb - va;
+      return (b[1].maxAberto || 0) - (a[1].maxAberto || 0);
+    }
+    if (sortFilter === 'diasAbertoDesc' || sortFilter === 'diasAbertoAsc') {
+      const va = Number(a[1].maxAberto || 0);
+      const vb = Number(b[1].maxAberto || 0);
+      const hasA = va > 0 ? 1 : 0;
+      const hasB = vb > 0 ? 1 : 0;
+      if (hasA !== hasB) return hasB - hasA; // modelos sem dado ('—') sempre no final
+      if (va !== vb) return sortFilter === 'diasAbertoAsc' ? va - vb : vb - va;
+      return (b[1].maxDiasUteis || 0) - (a[1].maxDiasUteis || 0);
+    }
+
+    // ── Urgências sempre no topo (demais filtros/ordenações) ─────────────
+    if (!isStrictColSort) {
+      const urgA = _fluxolabModeloUrgenteQtd(a[0]) > 0 ? 1 : 0;
+      const urgB = _fluxolabModeloUrgenteQtd(b[0]) > 0 ? 1 : 0;
+      if (urgA !== urgB) return urgB - urgA;
+    }
 
     if (sortFilter === 'mediaDias') return b[1].mediaDiasUteis - a[1].mediaDiasUteis;
     if (sortFilter === 'maxDias')   return b[1].maxAberto   - a[1].maxAberto;
@@ -26499,8 +26538,8 @@ function fluxolabRenderModelos() {
             <th style="padding:10px 16px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);text-align:left;border-bottom:2px solid var(--border2);background:var(--bg3)">Modelo</th>
             <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text);text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3)">Total</th>
             <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#f59e0b;text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap">📋 Checklists</th>
-            <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap">⏱ Dias Úteis Andamento${sortFilter === 'mediaDias' ? ' (média)' : ''}</th>
-            <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#fbbf24;text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap">📅 Dias em Aberto</th>
+            <th onclick="fluxolabToggleModeloSortCol('diasUteis')" title="Clique para ordenar por Dias Úteis Andamento (crescente / decrescente)" style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:${(sortFilter === 'diasUteisDesc' || sortFilter === 'diasUteisAsc') ? '#38bdf8' : 'var(--muted)'};text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap;cursor:pointer;user-select:none">⏱ Dias Úteis Andamento${sortFilter === 'mediaDias' ? ' (média)' : sortFilter === 'diasUteisDesc' ? ' ▼' : sortFilter === 'diasUteisAsc' ? ' ▲' : ' ⇅'}</th>
+            <th onclick="fluxolabToggleModeloSortCol('diasAberto')" title="Clique para ordenar por Dias em Aberto (crescente / decrescente)" style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:${(sortFilter === 'diasAbertoDesc' || sortFilter === 'diasAbertoAsc') ? '#fbbf24' : '#fbbf24'};text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap;cursor:pointer;user-select:none">📅 Dias em Aberto${sortFilter === 'diasAbertoDesc' ? ' ▼' : sortFilter === 'diasAbertoAsc' ? ' ▲' : ' ⇅'}</th>
             <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#ef4444;text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap">⚠ Faltantes</th>
             ${colHeaders}
           </tr>

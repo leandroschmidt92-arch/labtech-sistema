@@ -929,22 +929,55 @@ if (typeof window !== 'undefined' && !window._planTextareaMouseupBound) {
 }
 
 // Datalist compartilhada única no DOM (evita recriar milhares de <option> a cada render)
-let _modelosDatalistLastCount = -1;
+let _modelosDatalistLastSig = '';
 function _fluxolabEnsureModelosDatalist() {
   try {
-    const eqObj = typeof equipamentos !== 'undefined' && equipamentos ? equipamentos : {};
-    const keysCount = Object.keys(eqObj).length;
+    const eqObj = (typeof equipamentos !== 'undefined' && equipamentos) ? equipamentos : {};
+    const maObj = (typeof _maquinasAEquip !== 'undefined' && _maquinasAEquip) ? _maquinasAEquip : {};
+    const chkArr = (typeof _fluxolabChecklistsImported !== 'undefined' && Array.isArray(_fluxolabChecklistsImported)) ? _fluxolabChecklistsImported : [];
+    const bolData = (typeof _fluxolabData !== 'undefined' && _fluxolabData && typeof _fluxolabData === 'object') ? _fluxolabData : {};
+
+    const sig = `${Object.keys(eqObj).length}|${Object.keys(maObj).length}|${chkArr.length}|${Object.keys(bolData).length}`;
     let dl = document.getElementById('modelos-lista');
-    if (dl && _modelosDatalistLastCount === keysCount) return;
-    _modelosDatalistLastCount = keysCount;
-    const modelosUnicos = Array.from(new Set(Object.values(eqObj).filter(Boolean)));
+    if (dl && _modelosDatalistLastSig === sig) return;
+    _modelosDatalistLastSig = sig;
+
+    const seen = new Map();
+    const addModel = (val) => {
+      const s = String(val || '').trim();
+      if (!s) return;
+      const up = s.toUpperCase();
+      if (!seen.has(up)) seen.set(up, s);
+    };
+
+    Object.values(eqObj).forEach(addModel);
+    Object.values(maObj).forEach(addModel);
+
+    if (chkArr.length) {
+      const sample = chkArr[0];
+      const kMod = (typeof _fluxolabFindKey === 'function')
+        ? (_fluxolabFindKey(sample, 'Descrição Equipamento') || _fluxolabFindKey(sample, 'Descricao Equipamento') || _fluxolabFindKey(sample, 'Modelo') || _fluxolabFindKey(sample, 'Equipamento'))
+        : Object.keys(sample || {}).find(k => /descri|equipamento|modelo/i.test(k));
+      if (kMod) {
+        for (let i = 0; i < chkArr.length; i++) addModel(chkArr[i][kMod]);
+      }
+    }
+
+    for (const [bolsao, items] of Object.entries(bolData)) {
+      if (!bolsao || bolsao.charAt(0) === '_' || !items || typeof items !== 'object') continue;
+      for (const item of Object.values(items)) {
+        if (item && typeof item === 'object' && item.equipamento) addModel(item.equipamento);
+      }
+    }
+
+    const modelosUnicos = Array.from(seen.values());
     modelosUnicos.sort((a, b) => a.localeCompare(b));
     if (!dl) {
       dl = document.createElement('datalist');
       dl.id = 'modelos-lista';
       document.body.appendChild(dl);
     }
-    dl.innerHTML = modelosUnicos.map(m => `<option value="${String(m).replace(/"/g, '&quot;')}">`).join('');
+    dl.innerHTML = modelosUnicos.map(m => `<option value="${String(m).replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></option>`).join('');
   } catch (e) {}
 }
 window._fluxolabEnsureModelosDatalist = _fluxolabEnsureModelosDatalist;
@@ -1210,8 +1243,8 @@ function fluxolabBuildPlanRowHtml(tableName, row, idx, themeColor, savedSizes) {
         
         <td style="${tdStyle}">
           <div style="display:flex;align-items:center;gap:6px;height:100%;padding:0 8px 0 12px">
-            <input id="plan-${tableName}-r${idx}-modelo" type="text" placeholder="Digite..." value="${row.modelo || ''}" 
-                   onfocus="if(!this.getAttribute('list'))this.setAttribute('list','modelos-lista');${inpFocus}" onblur="${inpBlur}" 
+            <input id="plan-${tableName}-r${idx}-modelo" type="text" list="modelos-lista" placeholder="Digite..." value="${String(row.modelo || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;')}" 
+                   onfocus="${inpFocus}" onblur="${inpBlur}" 
                    oninput="fluxolabUpdateRowElem(this, '${tableName}', 'modelo')"
                    onchange="fluxolabUpdateRowElem(this, '${tableName}', 'modelo')" 
                    style="flex:1;min-width:0;height:100%;min-height:36px;border:none;background:transparent;text-align:left;font-weight:800;outline:none;font-family:var(--font);font-size:15px;color:${themeColor};padding:0" />

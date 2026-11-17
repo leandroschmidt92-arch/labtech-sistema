@@ -4144,6 +4144,10 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           <button onclick="fluxolabVerificarPedidosRegistrados(this)" title="Verifica se há pedidos do checklist já registrados na Qualidade e remove-os da lista" style="background:rgba(16,185,129,.12);border:1px solid var(--accent);border-radius:9px;color:var(--accent);font-family:var(--font);font-size:12px;font-weight:700;padding:7px 14px;outline:none;cursor:pointer">&#128260; Verificar Pedidos Registrados</button>
           <select id="fluxolab-modelo-sort" onchange="fluxolabRenderModelos()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--text);font-family:var(--font);font-size:12px;padding:7px 12px;outline:none;cursor:pointer">
             <option value="maxDias" selected>&#9650; Maior dia parado</option>
+            <option value="diasUteisDesc">&#9201; Dias &Uacute;teis: Decrescente (maior)</option>
+            <option value="diasUteisAsc">&#9201; Dias &Uacute;teis: Crescente (menor)</option>
+            <option value="diasAbertoDesc">&#128197; Dias em Aberto: Decrescente (maior)</option>
+            <option value="diasAbertoAsc">&#128197; Dias em Aberto: Crescente (menor)</option>
             <option value="total">&#8597; Ordenar: Total</option>
             <option value="mediaDias">&#128197; Dias médios em aberto</option>
             <option value="urgencia">&#128680; Urgência</option>
@@ -5093,9 +5097,9 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="supabase-compat-shim.js?v=4"></script>
-<script src="app.js?v=97"></script>
-<script src="planejamento.js?v=15"></script>
-<script src="pendencias.js?v=15"></script>
+<script src="app.js?v=99"></script>
+<script src="planejamento.js?v=16"></script>
+<script src="pendencias.js?v=16"></script>
 
 
 <!-- ═══ ALERTA FIXO: SELB EM ANDAMENTO (Complexa / Montagem / Limpeza) ═══ -->

@@ -1667,8 +1667,8 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
            ${pendIsAcessorio(row.modelo) ? pendAcessorioBadgeHtml() : ''}
          </div>`
       : `<div style="display:flex;align-items:center;gap:6px;height:100%;padding:0 8px 0 12px">
-           <input id="pnd-${tableName}-r${idx}-modelo" type="text" placeholder="Digite..." value="${row.modelo || ''}"
-                  onfocus="if(!this.getAttribute('list'))this.setAttribute('list','modelos-lista');${inpFocus}" onblur="${inpBlur}"
+           <input id="pnd-${tableName}-r${idx}-modelo" type="text" list="modelos-lista" placeholder="Digite..." value="${esc(row.modelo || '')}"
+                  onfocus="${inpFocus}" onblur="${inpBlur}"
                   onchange="fluxolabUpdateRowElemPend(this, '${tableName}', 'modelo')"
                   style="flex:1;min-width:0;height:100%;min-height:36px;border:none;background:transparent;text-align:left;font-weight:800;outline:none;font-family:var(--font);font-size:15px;color:#ffffff;padding:0" />
            <span id="pnd-${tableName}-r${idx}-badge" style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">${pendBadgeHtml(statsChk.count, isFilled, row.modelo)}${urgBadgeHtml}</span>
