@@ -4217,7 +4217,7 @@ async function restaurarBackupSupabase(dateKey){
     await _supa.from('app_config').upsert({ key: 'lastResetDay', value: dateKey.replace(/_/g,' ') }, { onConflict: 'key' }).catch(()=>{});
     hideLoader();
     alert('✅ Backup restaurado!\nDia: '+dateKey.replace(/_/g,' ')+'\n\nA página será recarregada.');
-    setTimeout(()=>location.reload(), 1500);
+    setTimeout(()=>{ if(window.qualRecarregarSeguro) window.qualRecarregarSeguro(); else location.reload(); }, 1500);
   } catch(e){
     showError('Erro ao restaurar: '+e.message);
   }
@@ -4245,7 +4245,7 @@ async function importarBackupArquivo(input){
     hideLoader();
     input.value='';
     alert('✅ Backup restaurado!\nA página será recarregada.');
-    setTimeout(()=>location.reload(), 1500);
+    setTimeout(()=>{ if(window.qualRecarregarSeguro) window.qualRecarregarSeguro(); else location.reload(); }, 1500);
   } catch(e){
     showError('Erro ao restaurar: '+e.message);
     input.value='';
@@ -18517,221 +18517,652 @@ window.qualLimparFotos = function() {
   qualRenderizarPreviewFotos();
 };
 
-// Envia fotos para o Webhook do Google Drive
-window._qualUploadsAtivos = window._qualUploadsAtivos || {};
+// ════════════════════════════════════════════════════════════════
+// 📸 ENVIO CONFIÁVEL DE FOTOS AO DRIVE (OUTBOX PERSISTENTE)
+// ────────────────────────────────────────────────────────────────
+// Garantias:
+//  1) As fotos são gravadas no IndexedDB do aparelho ANTES de enviar. Se a
+//     página for recarregada/fechada, o celular perder o sinal ou o Drive
+//     falhar, o envio é RETOMADO automaticamente (ao abrir, ao voltar a
+//     internet e a cada 60s) até concluir.
+//  2) Cada lote enviado ao Drive é gravado no registro IMEDIATAMENTE
+//     (antes, uma falha em 1 lote jogava fora as fotos que já estavam no
+//     Drive e o registro ficava "Sem fotos").
+//  3) Tentativas com espera crescente + timeout, aguardando a internet voltar.
+//  4) Sem duplicar: o resultado do Drive é guardado no outbox antes de gravar
+//     no registro; o registro deduplica por id/url/nome.
+//  5) Bloqueia fechar/atualizar a página enquanto há envio em andamento e
+//     mantém a tela acesa (Wake Lock) durante o envio.
+// ════════════════════════════════════════════════════════════════
+window._qualUploadsAtivos = window._qualUploadsAtivos || {};     // regId -> {enviadas,total,selb} (em andamento nesta aba)
+window._qualUploadsPendentes = window._qualUploadsPendentes || {}; // regId -> qtd de fotos que falharam e aguardam retentativa
+window._qualOutboxRodando = window._qualOutboxRodando || {};     // regId -> Promise
 
-// Protege contra fechamento acidental da aba enquanto ainda há fotos subindo
+// Aviso visual leve (o app não tinha um toast global definido)
+function _qualNotificar(msg, tipo) {
+  try {
+    if (typeof toast === 'function') { toast(msg, tipo); return; }
+    let box = document.getElementById('qual-notif-box');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'qual-notif-box';
+      box.style.cssText = 'position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:2000000;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;max-width:92vw';
+      document.body.appendChild(box);
+    }
+    const el = document.createElement('div');
+    const erro = tipo === 'err';
+    el.style.cssText = 'background:' + (erro ? '#7f1d1d' : '#064e3b') + ';color:#fff;border:1px solid ' + (erro ? '#f87171' : '#34d399') + ';border-radius:10px;padding:10px 16px;font-size:13px;font-weight:600;box-shadow:0 8px 24px rgba(0,0,0,.45);text-align:center';
+    el.textContent = msg;
+    box.appendChild(el);
+    setTimeout(function() { el.remove(); }, erro ? 9000 : 4500);
+  } catch (e) { console.log('[Qualidade]', msg); }
+}
+
+const _QUAL_OUTBOX_DB = 'labtech_foto_outbox';
+const _QUAL_OUTBOX_STORE = 'jobs';
+const _qualOutboxMem = new Map(); // fallback se IndexedDB indisponível
+let _qualOutboxDbPromise = null;
+
+function _qualOutboxOpen() {
+  if (_qualOutboxDbPromise) return _qualOutboxDbPromise;
+  _qualOutboxDbPromise = new Promise(function(resolve) {
+    try {
+      if (typeof indexedDB === 'undefined') return resolve(null);
+      const req = indexedDB.open(_QUAL_OUTBOX_DB, 1);
+      req.onupgradeneeded = function() {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(_QUAL_OUTBOX_STORE)) {
+          const st = db.createObjectStore(_QUAL_OUTBOX_STORE, { keyPath: 'key' });
+          st.createIndex('regId', 'regId', { unique: false });
+        }
+      };
+      req.onsuccess = function() { resolve(req.result); };
+      req.onerror = function() { console.warn('[Qualidade] IndexedDB indisponível:', req.error); resolve(null); };
+      req.onblocked = function() { resolve(null); };
+    } catch (e) { resolve(null); }
+  });
+  return _qualOutboxDbPromise;
+}
+
+async function _qualOutboxTx(mode, fn) {
+  const db = await _qualOutboxOpen();
+  if (!db) return null;
+  return new Promise(function(resolve, reject) {
+    try {
+      const tx = db.transaction(_QUAL_OUTBOX_STORE, mode);
+      const st = tx.objectStore(_QUAL_OUTBOX_STORE);
+      let out;
+      try { out = fn(st); } catch (e) { reject(e); return; }
+      tx.oncomplete = function() { resolve(out && out.result !== undefined ? out.result : out); };
+      tx.onerror = function() { reject(tx.error); };
+      tx.onabort = function() { reject(tx.error || new Error('Transação abortada')); };
+    } catch (e) { reject(e); }
+  });
+}
+
+async function _qualOutboxPut(jobs) {
+  jobs.forEach(function(j) { _qualOutboxMem.set(j.key, j); }); // sempre mantém cópia em memória
+  try {
+    await _qualOutboxTx('readwrite', function(st) { jobs.forEach(function(j) { st.put(j); }); });
+  } catch (e) {
+    console.warn('[Qualidade] Não foi possível gravar fotos no outbox local (seguem só em memória):', e);
+  }
+}
+
+async function _qualOutboxDel(keys) {
+  keys.forEach(function(k) { _qualOutboxMem.delete(k); });
+  try {
+    await _qualOutboxTx('readwrite', function(st) { keys.forEach(function(k) { st.delete(k); }); });
+  } catch (e) { console.warn('[Qualidade] Erro ao limpar outbox:', e); }
+}
+
+async function _qualOutboxAll() {
+  const map = new Map();
+  _qualOutboxMem.forEach(function(v, k) { map.set(k, v); });
+  try {
+    const rows = await _qualOutboxTx('readonly', function(st) { return st.getAll(); });
+    if (Array.isArray(rows)) rows.forEach(function(r) { map.set(r.key, r); });
+  } catch (e) { console.warn('[Qualidade] Erro ao ler outbox:', e); }
+  return Array.from(map.values());
+}
+
+async function _qualOutboxPorReg(regId) {
+  const all = await _qualOutboxAll();
+  return all.filter(function(j) { return j.regId === regId; }).sort(function(a, b) { return a.seq - b.seq; });
+}
+
+// ── Wake Lock: evita a tela apagar (e o navegador suspender o envio) ──
+let _qualWakeLock = null;
+async function _qualWakeLockAtualizar() {
+  try {
+    const ativo = Object.keys(window._qualUploadsAtivos).length > 0;
+    if (ativo && !_qualWakeLock && navigator.wakeLock && document.visibilityState === 'visible') {
+      _qualWakeLock = await navigator.wakeLock.request('screen');
+      _qualWakeLock.addEventListener('release', function() { _qualWakeLock = null; });
+    } else if (!ativo && _qualWakeLock) {
+      await _qualWakeLock.release();
+      _qualWakeLock = null;
+    }
+  } catch (e) { /* não suportado / negado: ignora */ }
+}
+
+window._qualHaUploadAtivo = function() {
+  return Object.keys(window._qualUploadsAtivos || {}).length > 0;
+};
+
+// Recarrega a página só quando não houver envio de fotos em andamento
+window.qualRecarregarSeguro = function() {
+  if (window._qualHaUploadAtivo()) {
+    if (!confirm('⏳ Ainda há fotos sendo enviadas para o Google Drive.\n\nOK = aguardar terminar e atualizar a página automaticamente.\nCancelar = continuar usando o sistema.')) return;
+    window._qualReloadAposUpload = true;
+    _qualNotificar('⏳ A página será atualizada assim que as fotos terminarem de enviar.', 'ok');
+    return;
+  }
+  location.reload();
+};
+
+function _qualVerificarReloadPendente() {
+  if (window._qualReloadAposUpload && !window._qualHaUploadAtivo()) {
+    window._qualReloadAposUpload = false;
+    setTimeout(function() { location.reload(); }, 800);
+  }
+}
+
+// Protege contra fechamento/atualização acidental da aba enquanto ainda há fotos subindo
 if (!window._qualBeforeUnloadRegistrado) {
   window._qualBeforeUnloadRegistrado = true;
   window.addEventListener('beforeunload', function(e) {
-    if (window._qualUploadsAtivos && Object.keys(window._qualUploadsAtivos).length > 0) {
+    if (window._qualHaUploadAtivo()) {
       e.preventDefault();
       e.returnValue = 'Ainda há fotos sendo enviadas para o Google Drive. Deseja realmente sair?';
       return e.returnValue;
     }
   });
+  document.addEventListener('visibilitychange', function() {
+    if (document.visibilityState === 'visible') _qualWakeLockAtualizar();
+  });
+  window.addEventListener('online', function() {
+    if (typeof window._qualRetomarOutbox === 'function') window._qualRetomarOutbox('online');
+  });
 }
 
-async function _qualEnviarLoteDrive(selb, dataStr, arquivosLote, tentativa) {
-  tentativa = tentativa || 1;
-  const payload = {
-    selb: selb,
-    data: dataStr,
-    arquivos: arquivosLote
-  };
-  try {
-    const resp = await fetch(QUAL_GOOGLE_DRIVE_WEBHOOK, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(payload)
-    });
-    const resJson = await resp.json();
-    if (resJson.status !== "ok") {
-      throw new Error(resJson.message || "Falha ao salvar fotos no Drive");
-    }
-    return {
-      fotos: resJson.fotos || [],
-      pastaUrl: resJson.pastaUrl || ""
-    };
-  } catch (err) {
-    if (tentativa < 2) {
-      console.warn('[Qualidade] Repetindo lote de upload após erro:', err);
-      return _qualEnviarLoteDrive(selb, dataStr, arquivosLote, tentativa + 1);
-    }
-    throw err;
+function _qualEsperar(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+
+async function _qualAguardarOnline(maxMs) {
+  const limite = Date.now() + (maxMs || 120000);
+  while (typeof navigator !== 'undefined' && navigator.onLine === false && Date.now() < limite) {
+    await _qualEsperar(2000);
   }
 }
 
-// Envia fotos em lotes pequenos e paralelos para ser muito mais rápido e reportar progresso
-async function _qualUploadFotosParaDrive(selb, dataStr, arquivosParaUpload, startIndex, onProgress) {
-  const lista = arquivosParaUpload || window._qualFotosSelecionadas || [];
-  if (!lista.length) {
-    return { fotos: [], pastaUrl: "" };
-  }
-  startIndex = startIndex || 0;
-
-  const itens = lista.map((f, idx) => ({
-    nome: selb + "_foto_" + (startIndex + idx + 1),
-    mimeType: f.mimeType,
-    base64: f.base64
-  }));
-
-  // Divide em lotes de 2 fotos para resposta rápida e paralelismo seguro
-  const TAMANHO_LOTE = 2;
-  const lotes = [];
-  for (let i = 0; i < itens.length; i += TAMANHO_LOTE) {
-    lotes.push(itens.slice(i, i + TAMANHO_LOTE));
-  }
-
-  const resultadosPorLote = new Array(lotes.length);
-  let enviadas = 0;
-  let pastaUrlFinal = "";
-
-  // Envia o 1º lote sozinho primeiro para criar/garantir a pasta do SELB sem duplicar pasta no Drive
-  const resPrimeiro = await _qualEnviarLoteDrive(selb, dataStr, lotes[0]);
-  resultadosPorLote[0] = resPrimeiro.fotos || [];
-  if (resPrimeiro.pastaUrl) pastaUrlFinal = resPrimeiro.pastaUrl;
-  enviadas += lotes[0].length;
-  if (typeof onProgress === 'function') onProgress(enviadas, itens.length);
-
-  // Envia os demais lotes em paralelo (até 3 simultâneos)
-  if (lotes.length > 1) {
-    let proximoIdx = 1;
-    const CONCORRENCIA = Math.min(3, lotes.length - 1);
-    const workers = [];
-    for (let w = 0; w < CONCORRENCIA; w++) {
-      workers.push((async () => {
-        while (proximoIdx < lotes.length) {
-          const idxAtual = proximoIdx++;
-          const resLote = await _qualEnviarLoteDrive(selb, dataStr, lotes[idxAtual]);
-          resultadosPorLote[idxAtual] = resLote.fotos || [];
-          if (!pastaUrlFinal && resLote.pastaUrl) pastaUrlFinal = resLote.pastaUrl;
-          enviadas += lotes[idxAtual].length;
-          if (typeof onProgress === 'function') onProgress(enviadas, itens.length);
-        }
-      })());
-    }
-    await Promise.all(workers);
-  }
-
-  const todasFotos = [];
-  for (let i = 0; i < resultadosPorLote.length; i++) {
-    if (Array.isArray(resultadosPorLote[i])) {
-      todasFotos.push(...resultadosPorLote[i]);
+// Envia UM lote ao Drive, com timeout e até 4 tentativas (espera crescente)
+async function _qualEnviarLoteDrive(selb, dataStr, arquivosLote) {
+  const ESPERAS = [0, 3000, 8000, 15000];
+  let ultimoErro = null;
+  for (let t = 0; t < ESPERAS.length; t++) {
+    if (ESPERAS[t]) await _qualEsperar(ESPERAS[t]);
+    await _qualAguardarOnline(120000);
+    const ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(function() { ctrl.abort(); }, 120000) : null;
+    try {
+      const resp = await fetch(QUAL_GOOGLE_DRIVE_WEBHOOK, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ selb: selb, data: dataStr, arquivos: arquivosLote }),
+        signal: ctrl ? ctrl.signal : undefined
+      });
+      const resJson = await resp.json();
+      if (resJson.status !== 'ok') throw new Error(resJson.message || 'Falha ao salvar fotos no Drive');
+      const fotos = Array.isArray(resJson.fotos) ? resJson.fotos : [];
+      if (!fotos.length) throw new Error('O Drive não confirmou nenhuma foto');
+      return { fotos: fotos, pastaUrl: resJson.pastaUrl || '' };
+    } catch (err) {
+      ultimoErro = err;
+      console.warn('[Qualidade] Falha no envio do lote (tentativa ' + (t + 1) + '/' + ESPERAS.length + '):', err);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
-
-  return {
-    fotos: todasFotos,
-    pastaUrl: pastaUrlFinal
-  };
+  throw ultimoErro || new Error('Falha ao enviar fotos ao Drive');
 }
 
-// Executa o upload completo em segundo plano e atualiza registro no Supabase + tabela ao finalizar
-window._qualIniciarUploadEmSegundoPlano = async function(regId, selb, dataStr, fotosParaEnviar, fotosExistentes) {
-  fotosExistentes = Array.isArray(fotosExistentes) ? fotosExistentes : [];
-  window._qualUploadsAtivos[regId] = {
-    enviadas: 0,
-    total: fotosParaEnviar.length,
-    selb: selb
-  };
+// Chave estável para deduplicar fotos já registradas
+function _qualFotoChave(f) {
+  if (!f) return '';
+  if (f.id) return 'id:' + f.id;
+  if (f.url) {
+    const m = String(f.url).match(/\/d\/([a-zA-Z0-9_-]+)/) || String(f.url).match(/id=([a-zA-Z0-9_-]+)/);
+    return m ? 'id:' + m[1] : 'url:' + f.url;
+  }
+  return f.nome ? 'nome:' + f.nome : '';
+}
 
+// Grava fotos novas no registro (uma gravação por vez por registro, sem perder concorrência)
+const _qualMergeFila = {};
+function _qualMesclarFotosNoRegistro(regId, fotosNovas, pastaUrl, aindaEnviando) {
+  const anterior = _qualMergeFila[regId] || Promise.resolve();
+  const atual = anterior.catch(function() {}).then(function() {
+    return _qualMesclarFotosNoRegistroImpl(regId, fotosNovas, pastaUrl, aindaEnviando);
+  });
+  _qualMergeFila[regId] = atual;
+  return atual;
+}
+
+async function _qualMesclarFotosNoRegistroImpl(regId, fotosNovas, pastaUrl, aindaEnviando) {
+  const _qCache = (typeof _qualRegistros !== 'undefined' && _qualRegistros) ? _qualRegistros : (window._qualRegistros || null);
+  let regAtual = null;
+  let linhaExiste = true;
+  if (typeof _supaAuthed === 'function') {
+    const { data: freshRow, error: eFetch } = await _supaAuthed()
+      .from('qualidade_registros').select('id, raw').eq('id', regId).maybeSingle();
+    if (eFetch) throw eFetch; // não grava às cegas: o outbox tenta de novo depois
+    if (freshRow && freshRow.raw) {
+      regAtual = typeof freshRow.raw === 'string' ? JSON.parse(freshRow.raw) : freshRow.raw;
+    } else if (!freshRow) {
+      linhaExiste = false;
+    }
+  }
+  if (!linhaExiste) { const e = new Error('Registro não existe mais'); e.registroInexistente = true; throw e; }
+  if (!regAtual) regAtual = (_qCache && _qCache[regId]) ? Object.assign({}, _qCache[regId]) : null;
+  if (!regAtual) throw new Error('Registro ' + regId + ' não encontrado para gravar as fotos');
+
+  let base = regAtual.fotos;
+  if (typeof base === 'string') { try { base = JSON.parse(base); } catch (e) { base = []; } }
+  base = Array.isArray(base) ? base : [];
+  const vistos = new Set(base.map(_qualFotoChave).filter(Boolean));
+  const fotosFinais = base.slice();
+  (fotosNovas || []).forEach(function(f) {
+    const k = _qualFotoChave(f);
+    if (k && vistos.has(k)) return; // já registrada
+    if (k) vistos.add(k);
+    fotosFinais.push(f);
+  });
+
+  regAtual.fotos = fotosFinais;
+  regAtual.pasta_drive = regAtual.pasta_drive || pastaUrl || '';
+  if (aindaEnviando) {
+    regAtual.fotos_enviando = true;
+  } else {
+    delete regAtual.fotos_enviando;
+    delete regAtual.fotos_enviadas;
+    delete regAtual.fotos_total;
+  }
+
+  if (typeof _supaAuthed === 'function') {
+    const rawToSave = Object.assign({}, regAtual);
+    delete rawToSave.raw;
+    delete rawToSave._id;
+    let ultimoErro = null;
+    for (let t = 0; t < 3; t++) {
+      const { error: upErr } = await _supaAuthed().from('qualidade_registros').update({ raw: rawToSave }).eq('id', regId);
+      if (!upErr) { ultimoErro = null; break; }
+      ultimoErro = upErr;
+      await _qualEsperar(1500 * (t + 1));
+    }
+    if (ultimoErro) throw ultimoErro;
+  }
+
+  if (_qCache) {
+    regAtual.id = regId;
+    _qCache[regId] = regAtual;
+  }
+  return fotosFinais.length;
+}
+
+function _qualAtualizarUiUpload(regId) {
+  const up = window._qualUploadsAtivos[regId];
+  const badgeEl = document.getElementById('qual-upload-badge-' + regId);
+  if (badgeEl && up) badgeEl.textContent = '⏳ Enviando ' + up.enviadas + '/' + up.total + '...';
+  if (typeof window._qualRenderRegFotosPanel === 'function') window._qualRenderRegFotosPanel();
+}
+
+// Processa o outbox de UM registro. Retorna { ok, pendentes }
+function _qualProcessarOutboxReg(regId) {
+  if (window._qualOutboxRodando[regId]) return window._qualOutboxRodando[regId];
+  const p = _qualProcessarOutboxRegImpl(regId).finally(function() {
+    delete window._qualOutboxRodando[regId];
+  });
+  window._qualOutboxRodando[regId] = p;
+  return p;
+}
+
+async function _qualProcessarOutboxRegImpl(regId) {
+  let jobs = await _qualOutboxPorReg(regId);
+  if (!jobs.length) { return { ok: true, pendentes: 0 }; }
+
+  const selb = jobs[0].selb;
+  const dataStr = jobs[0].dataStr;
+  window._qualUploadsAtivos[regId] = { enviadas: 0, total: jobs.length, selb: selb };
+  delete window._qualUploadsPendentes[regId];
+  _qualWakeLockAtualizar();
   if (typeof renderQualRegistros === 'function') renderQualRegistros();
 
+  let erroFinal = null;
+  let registroInexistente = false;
   try {
-    const uploadRes = await _qualUploadFotosParaDrive(
-      selb,
-      dataStr,
-      fotosParaEnviar,
-      fotosExistentes.length,
-      function(enviadas, total) {
-        if (window._qualUploadsAtivos[regId]) {
-          window._qualUploadsAtivos[regId].enviadas = enviadas;
-          window._qualUploadsAtivos[regId].total = total;
-        }
-        const badgeEl = document.getElementById('qual-upload-badge-' + regId);
-        if (badgeEl) {
-          badgeEl.textContent = '⏳ Enviando ' + enviadas + '/' + total + '...';
-        }
-      }
-    );
-
-    const fotosNovas = uploadRes.fotos || [];
-    const pastaUrl = uploadRes.pastaUrl || '';
-
-    // Busca versão mais recente do registro (caso alguém tenha alterado pedido/etiqueta enquanto subia)
-    const _qCache = (typeof _qualRegistros !== 'undefined' && _qualRegistros) ? _qualRegistros : (window._qualRegistros || null);
-    let regAtual = (_qCache && _qCache[regId]) || null;
-    if (typeof _supaAuthed === 'function') {
-      try {
-        const { data: freshRow } = await _supaAuthed()
-          .from('qualidade_registros')
-          .select('id, raw')
-          .eq('id', regId)
-          .maybeSingle();
-        if (freshRow && freshRow.raw) {
-          regAtual = typeof freshRow.raw === 'string' ? JSON.parse(freshRow.raw) : freshRow.raw;
-        }
-      } catch (eFetch) {
-        console.warn('[Qualidade] Aviso ao recarregar registro pós-upload:', eFetch);
-      }
+    // 1) Itens que já estão no Drive mas ainda não foram gravados no registro (ex.: recarregou no meio)
+    const jaEnviados = jobs.filter(function(j) { return j.enviado; });
+    if (jaEnviados.length) {
+      const fotos = [];
+      let pasta = '';
+      jaEnviados.forEach(function(j) {
+        (j.resultado || []).forEach(function(f) { fotos.push(f); });
+        if (j.pastaUrl && !pasta) pasta = j.pastaUrl;
+      });
+      const restantes = jobs.length - jaEnviados.length;
+      await _qualMesclarFotosNoRegistro(regId, fotos, pasta, restantes > 0);
+      await _qualOutboxDel(jaEnviados.map(function(j) { return j.key; }));
+      window._qualUploadsAtivos[regId].enviadas += jaEnviados.length;
+      _qualAtualizarUiUpload(regId);
     }
 
-    if (regAtual) {
-      const baseFotos = Array.isArray(regAtual.fotos) && regAtual.fotos.length ? regAtual.fotos : fotosExistentes;
-      const fotosFinais = [...baseFotos, ...fotosNovas];
-      const pastaFinal = regAtual.pasta_drive || pastaUrl || '';
+    // 2) Itens ainda por enviar, em lotes pequenos
+    const faltam = jobs.filter(function(j) { return !j.enviado; });
+    const TAMANHO_LOTE = 2;
+    const lotes = [];
+    for (let i = 0; i < faltam.length; i += TAMANHO_LOTE) lotes.push(faltam.slice(i, i + TAMANHO_LOTE));
 
-      regAtual.fotos = fotosFinais;
-      regAtual.pasta_drive = pastaFinal;
-      delete regAtual.fotos_enviando;
-      delete regAtual.fotos_enviadas;
-      delete regAtual.fotos_total;
-
-      if (regAtual.raw && typeof regAtual.raw === 'object') {
-        regAtual.raw.fotos = fotosFinais;
-        regAtual.raw.pasta_drive = pastaFinal;
-        delete regAtual.raw.fotos_enviando;
-      }
-
-      if (typeof _supaAuthed === 'function') {
-        const rawToSave = { ...regAtual };
-        delete rawToSave.raw;
-        delete rawToSave._id;
-        const { error: upErr } = await _supaAuthed()
-          .from('qualidade_registros')
-          .update({ raw: rawToSave })
-          .eq('id', regId);
-        if (upErr) throw upErr;
-      }
-
-      if (_qCache) {
-        regAtual.id = regId;
-        _qCache[regId] = regAtual;
-      }
+    let abortar = false;
+    async function enviarLote(lote, aindaTemDepois) {
+      const arquivos = lote.map(function(j) { return { nome: j.nome, mimeType: j.mimeType, base64: j.base64 }; });
+      const res = await _qualEnviarLoteDrive(selb, dataStr, arquivos);
+      // Casa resposta ↔ foto por posição; o que o Drive não confirmou continua pendente
+      const confirmados = [];
+      lote.forEach(function(j, i) {
+        if (res.fotos[i]) {
+          const f = Object.assign({}, res.fotos[i]);
+          if (!f.nome) f.nome = j.nome;
+          confirmados.push({ job: j, foto: f });
+        }
+      });
+      // Guarda o resultado do Drive ANTES de gravar no registro (evita reenviar/duplicar se algo falhar)
+      confirmados.forEach(function(c) {
+        c.job.enviado = true;
+        c.job.base64 = null;
+        c.job.resultado = [c.foto];
+        c.job.pastaUrl = res.pastaUrl || '';
+      });
+      await _qualOutboxPut(confirmados.map(function(c) { return c.job; }));
+      const pendentesApos = jobs.length - window._qualUploadsAtivos[regId].enviadas - confirmados.length;
+      await _qualMesclarFotosNoRegistro(
+        regId,
+        confirmados.map(function(c) { return c.foto; }),
+        res.pastaUrl,
+        pendentesApos > 0 && !abortar
+      );
+      await _qualOutboxDel(confirmados.map(function(c) { return c.job.key; }));
+      window._qualUploadsAtivos[regId].enviadas += confirmados.length;
+      _qualAtualizarUiUpload(regId);
+      if (confirmados.length < lote.length) throw new Error('O Drive confirmou só ' + confirmados.length + ' de ' + lote.length + ' foto(s)');
     }
 
-    delete window._qualUploadsAtivos[regId];
+    if (lotes.length) {
+      // 1º lote sozinho: garante a pasta do SELB sem duplicar pasta no Drive
+      try { await enviarLote(lotes[0]); }
+      catch (e) { erroFinal = e; abortar = true; registroInexistente = !!e.registroInexistente; }
+
+      if (!abortar && lotes.length > 1) {
+        let proximo = 1;
+        const CONCORRENCIA = Math.min(2, lotes.length - 1);
+        const workers = [];
+        for (let w = 0; w < CONCORRENCIA; w++) {
+          workers.push((async function() {
+            while (!abortar && proximo < lotes.length) {
+              const idx = proximo++;
+              try { await enviarLote(lotes[idx]); }
+              catch (e) { erroFinal = erroFinal || e; abortar = true; registroInexistente = registroInexistente || !!e.registroInexistente; }
+            }
+          })());
+        }
+        await Promise.all(workers);
+      }
+    }
+  } catch (e) {
+    erroFinal = erroFinal || e;
+    registroInexistente = registroInexistente || !!e.registroInexistente;
+  }
+
+  const restantes = await _qualOutboxPorReg(regId);
+  delete window._qualUploadsAtivos[regId];
+  _qualWakeLockAtualizar();
+
+  if (registroInexistente) {
+    await _qualOutboxDel(restantes.map(function(j) { return j.key; }));
+    console.warn('[Qualidade] Registro removido; fotos pendentes descartadas:', regId);
+    if (typeof renderQualRegistros === 'function') renderQualRegistros();
+    _qualVerificarReloadPendente();
+    return { ok: true, pendentes: 0 };
+  }
+
+  if (restantes.length) {
+    window._qualUploadsPendentes[regId] = restantes.length;
+    // limpa a flag "enviando" do registro; as fotos seguem no aparelho aguardando retentativa
+    _qualMesclarFotosNoRegistro(regId, [], '', false).catch(function() {});
+    console.error('[Qualidade] Envio incompleto para', selb, '- pendentes:', restantes.length, erroFinal);
+    {
+      _qualNotificar('⚠️ ' + selb + ': ' + restantes.length + ' foto(s) ainda não enviadas. Elas estão salvas no aparelho e o envio será retomado automaticamente.', 'err');
+    }
     if (typeof renderQualRegistros === 'function') renderQualRegistros();
     if (typeof window._qualRenderRegFotosPanel === 'function') window._qualRenderRegFotosPanel();
-    if (typeof toast === 'function') toast('✅ ' + fotosNovas.length + ' foto(s) de ' + selb + ' salvas no Drive!');
-    console.log('[Qualidade] Upload em segundo plano concluído para', selb, fotosNovas.length, 'fotos.');
-  } catch (err) {
-    console.error('[Qualidade] Falha no upload em segundo plano para', selb, err);
-    delete window._qualUploadsAtivos[regId];
-    const _qCacheErr = (typeof _qualRegistros !== 'undefined' && _qualRegistros) ? _qualRegistros : (window._qualRegistros || null);
-    if (_qCacheErr && _qCacheErr[regId]) {
-      delete _qCacheErr[regId].fotos_enviando;
-      if (typeof _supaAuthed === 'function') {
-        const rawErr = { ..._qCacheErr[regId] };
-        delete rawErr.raw;
-        delete rawErr._id;
-        _supaAuthed().from('qualidade_registros').update({ raw: rawErr }).eq('id', regId).catch(() => {});
+    return { ok: false, pendentes: restantes.length, erro: erroFinal };
+  }
+
+  if (typeof renderQualRegistros === 'function') renderQualRegistros();
+  if (typeof window._qualRenderRegFotosPanel === 'function') window._qualRenderRegFotosPanel();
+  _qualNotificar('✅ Fotos de ' + selb + ' salvas no Drive!');
+  console.log('[Qualidade] Upload concluído para', selb);
+  _qualVerificarReloadPendente();
+  return { ok: true, pendentes: 0 };
+}
+
+// Retoma TODOS os envios pendentes (abertura da página, internet voltou, timer de 60s)
+window._qualRetomarOutbox = async function(motivo) {
+  try {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+    if (typeof _supaAuthed !== 'function') return;
+    const all = await _qualOutboxAll();
+    if (!all.length) return;
+    const regIds = Array.from(new Set(all.map(function(j) { return j.regId; })));
+    regIds.forEach(function(regId) {
+      if (!window._qualUploadsPendentes[regId] && !window._qualOutboxRodando[regId]) {
+        const n = all.filter(function(j) { return j.regId === regId; }).length;
+        window._qualUploadsPendentes[regId] = n; // marca como pendente para a UI desde já
       }
+    });
+    if (motivo === 'boot') {
+      _qualNotificar('📤 Retomando envio de ' + all.length + ' foto(s) que não tinham terminado de subir...', 'ok');
     }
-    if (typeof renderQualRegistros === 'function') renderQualRegistros();
-    if (typeof window._qualRenderRegFotosPanel === 'function') window._qualRenderRegFotosPanel();
-    alert('⚠️ Erro ao enviar fotos do SELB ' + selb + ' para o Google Drive: ' + (err.message || err) + '\n\nVocê pode clicar em "📷 Anexar fotos" nesse registro para tentar enviar novamente.');
+    for (let i = 0; i < regIds.length; i++) {
+      if (window._qualOutboxRodando[regIds[i]]) continue;
+      await _qualProcessarOutboxReg(regIds[i]);
+    }
+  } catch (e) {
+    console.warn('[Qualidade] Erro ao retomar outbox:', e);
+  }
+};
+
+// Botão "Reenviar" manual (usado na tabela quando há fotos pendentes)
+window.qualReenviarPendentes = function(regId) {
+  _qualNotificar('📤 Reenviando fotos pendentes...', 'ok');
+  return _qualProcessarOutboxReg(regId);
+};
+
+if (!window._qualOutboxTimersRegistrados) {
+  window._qualOutboxTimersRegistrados = true;
+  setTimeout(function() { window._qualRetomarOutbox('boot'); }, 6000);
+  setInterval(function() { window._qualRetomarOutbox('timer'); }, 60000);
+}
+
+// Envia fotos de um registro em segundo plano, de forma persistente e retomável
+window._qualIniciarUploadEmSegundoPlano = async function(regId, selb, dataStr, fotosParaEnviar, fotosExistentes) {
+  fotosExistentes = Array.isArray(fotosExistentes) ? fotosExistentes : [];
+  fotosParaEnviar = Array.isArray(fotosParaEnviar) ? fotosParaEnviar : [];
+  if (!fotosParaEnviar.length) return;
+
+  // numeração segura (considera fotos já registradas e fotos pendentes no outbox)
+  const pend = await _qualOutboxPorReg(regId);
+  let baseSeq = fotosExistentes.length;
+  pend.forEach(function(j) { if (j.seq > baseSeq) baseSeq = j.seq; });
+
+  const stamp = Date.now();
+  const novos = fotosParaEnviar.map(function(f, idx) {
+    const seq = baseSeq + idx + 1;
+    return {
+      key: regId + '|' + seq + '|' + stamp,
+      regId: regId,
+      selb: selb,
+      dataStr: dataStr,
+      seq: seq,
+      nome: selb + '_foto_' + seq,
+      mimeType: f.mimeType,
+      base64: f.base64,
+      enviado: false,
+      criadoEm: stamp
+    };
+  });
+  await _qualOutboxPut(novos); // 👈 a partir daqui as fotos sobrevivem a reload/queda de internet
+
+  // se já há um processamento deste registro rodando, espera acabar e processa o que sobrou/entrou
+  if (window._qualOutboxRodando[regId]) {
+    try { await window._qualOutboxRodando[regId]; } catch (e) {}
+  }
+  return _qualProcessarOutboxReg(regId);
+};
+
+// ════════════════════════════════════════════════════════════════
+// 📸 CÂMERA CONTÍNUA (várias fotos seguidas, sem reabrir a câmera)
+// A câmera nativa (<input capture>) pede "Usar foto" a cada clique e fecha.
+// Aqui a câmera fica aberta: cada toque no botão redondo já adiciona a foto.
+// target: 'anexo' (modal Anexar Fotos) | 'registro' (formulário de liberação)
+// ════════════════════════════════════════════════════════════════
+window._qualCamCont = { stream: null, target: null, fotos: 0 };
+
+window.qualAbrirCameraContinua = async function(target) {
+  const st = window._qualCamCont;
+  st.target = target === 'registro' ? 'registro' : 'anexo';
+  st.fotos = 0;
+
+  const fallbackNativo = function() {
+    const id = st.target === 'registro' ? 'qual-reg-fotos-camera' : 'qual-anexo-input-camera';
+    const inp = document.getElementById(id);
+    if (inp) inp.click();
+  };
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return fallbackNativo();
+
+  try {
+    st.stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false
+    });
+  } catch (e) {
+    console.warn('[Qualidade] Câmera contínua indisponível, usando câmera padrão:', e);
+    return fallbackNativo();
+  }
+
+  let ov = document.getElementById('qual-cam-cont');
+  if (ov) ov.remove();
+  ov = document.createElement('div');
+  ov.id = 'qual-cam-cont';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:2000001;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:space-between;touch-action:manipulation';
+  ov.innerHTML =
+    '<div style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:rgba(0,0,0,0.6);color:#fff;font-size:14px;font-weight:700">' +
+      '<span id="qual-cam-cont-tit">📷 Tire quantas fotos precisar</span>' +
+      '<span id="qual-cam-cont-cnt" style="background:#10b981;border-radius:12px;padding:3px 12px;font-size:13px">0 foto(s)</span>' +
+    '</div>' +
+    '<div style="position:relative;flex:1;width:100%;min-height:0;display:flex;align-items:center;justify-content:center">' +
+      '<video id="qual-cam-cont-video" autoplay playsinline muted style="max-width:100%;max-height:100%;width:100%;height:100%;object-fit:contain;background:#000"></video>' +
+      '<div id="qual-cam-cont-flash" style="position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .25s"></div>' +
+    '</div>' +
+    '<div id="qual-cam-cont-thumbs" style="width:100%;display:flex;gap:6px;overflow-x:auto;padding:8px 12px;background:rgba(0,0,0,0.6);min-height:56px"></div>' +
+    '<div style="width:100%;display:flex;align-items:center;justify-content:space-around;gap:8px;padding:14px 12px calc(16px + env(safe-area-inset-bottom));background:rgba(0,0,0,0.75)">' +
+      '<button type="button" id="qual-cam-cont-desfazer" onclick="qualCameraContinuaDesfazer()" style="background:rgba(255,255,255,0.12);border:1px solid rgba(255,255,255,0.3);color:#fff;border-radius:10px;padding:10px 12px;font-size:13px;font-weight:700;cursor:pointer">↩ Desfazer</button>' +
+      '<button type="button" id="qual-cam-cont-shutter" onclick="qualCameraContinuaCapturar()" aria-label="Tirar foto" style="width:74px;height:74px;border-radius:50%;background:#fff;border:5px solid #10b981;cursor:pointer;box-shadow:0 0 0 3px rgba(255,255,255,0.35)"></button>' +
+      '<div style="display:flex;flex-direction:column;gap:6px">' +
+        '<button type="button" onclick="qualFecharCameraContinua(false)" style="background:#10b981;border:none;color:#fff;border-radius:10px;padding:9px 12px;font-size:13px;font-weight:800;cursor:pointer">✓ Concluir</button>' +
+        (st.target === 'anexo' ? '<button type="button" onclick="qualFecharCameraContinua(true)" style="background:#2563eb;border:none;color:#fff;border-radius:10px;padding:9px 12px;font-size:13px;font-weight:800;cursor:pointer">📤 Enviar agora</button>' : '') +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(ov);
+
+  const video = document.getElementById('qual-cam-cont-video');
+  video.srcObject = st.stream;
+  try { await video.play(); } catch (e) {}
+};
+
+window.qualCameraContinuaCapturar = function() {
+  const st = window._qualCamCont;
+  const video = document.getElementById('qual-cam-cont-video');
+  if (!st.stream || !video || !video.videoWidth) return;
+
+  const maxDim = 1024, qualidade = 0.65;
+  let w = video.videoWidth, h = video.videoHeight;
+  if (w > maxDim || h > maxDim) {
+    if (w > h) { h = Math.round(h * maxDim / w); w = maxDim; }
+    else { w = Math.round(w * maxDim / h); h = maxDim; }
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+  const dataUrl = canvas.toDataURL('image/jpeg', qualidade);
+
+  const item = {
+    nome: 'foto_' + Date.now() + '_' + (st.fotos + 1),
+    base64: dataUrl.split(',')[1],
+    mimeType: 'image/jpeg',
+    previewUrl: dataUrl
+  };
+  if (st.target === 'registro') {
+    window._qualFotosSelecionadas.push(item);
+  } else {
+    window._qualNovasFotosAnexo = window._qualNovasFotosAnexo || [];
+    window._qualNovasFotosAnexo.push(item);
+  }
+  st.fotos++;
+
+  // feedback visual + vibração curta
+  const fl = document.getElementById('qual-cam-cont-flash');
+  if (fl) { fl.style.opacity = '0.85'; setTimeout(function() { fl.style.opacity = '0'; }, 90); }
+  try { if (navigator.vibrate) navigator.vibrate(30); } catch (e) {}
+  _qualCameraContinuaAtualizar();
+};
+
+window.qualCameraContinuaDesfazer = function() {
+  const st = window._qualCamCont;
+  if (!st.fotos) return;
+  const arr = st.target === 'registro' ? window._qualFotosSelecionadas : window._qualNovasFotosAnexo;
+  if (arr && arr.length) { arr.pop(); st.fotos--; }
+  _qualCameraContinuaAtualizar();
+};
+
+function _qualCameraContinuaAtualizar() {
+  const st = window._qualCamCont;
+  const arr = (st.target === 'registro' ? window._qualFotosSelecionadas : window._qualNovasFotosAnexo) || [];
+  const cnt = document.getElementById('qual-cam-cont-cnt');
+  if (cnt) cnt.textContent = st.fotos + ' foto(s)';
+  const box = document.getElementById('qual-cam-cont-thumbs');
+  if (box) {
+    const ult = arr.slice(-st.fotos);
+    box.innerHTML = ult.map(function(f) {
+      return '<img src="' + f.previewUrl + '" style="height:44px;width:44px;object-fit:cover;border-radius:6px;border:1px solid rgba(255,255,255,0.4);flex:0 0 auto">';
+    }).join('');
+    box.scrollLeft = box.scrollWidth;
+  }
+}
+
+window.qualFecharCameraContinua = function(enviar) {
+  const st = window._qualCamCont;
+  try { if (st.stream) st.stream.getTracks().forEach(function(t) { t.stop(); }); } catch (e) {}
+  st.stream = null;
+  const ov = document.getElementById('qual-cam-cont');
+  if (ov) ov.remove();
+  const fotos = st.fotos;
+  st.fotos = 0;
+  if (st.target === 'registro') {
+    if (typeof qualRenderizarPreviewFotos === 'function') qualRenderizarPreviewFotos();
+  } else {
+    if (typeof qualRenderizarPreviewAnexo === 'function') qualRenderizarPreviewAnexo();
+    if (enviar && fotos > 0 && typeof qualSalvarFotosAnexadas === 'function') qualSalvarFotosAnexadas();
   }
 };
 
@@ -18920,8 +19351,8 @@ window.qualAbrirModalAnexarFotos = async function(regIdOrSelb, opts) {
   if (opts.autoCamera) {
     setTimeout(() => {
       try {
-        const camInp = document.getElementById('qual-anexo-input-camera');
-        if (camInp) camInp.click();
+        if (typeof qualAbrirCameraContinua === 'function') qualAbrirCameraContinua('anexo');
+        else { const camInp = document.getElementById('qual-anexo-input-camera'); if (camInp) camInp.click(); }
       } catch (e) {}
     }, 80);
   }
@@ -19279,11 +19710,15 @@ window._qualRenderRegFotosPanel = function() {
           : (fa.length > 0
               ? `<button type="button" onclick="qualAbrirModalFotos('${r._id}')" style="background:rgba(59,130,246,0.18);border:1px solid rgba(59,130,246,0.5);border-radius:6px;color:#60a5fa;font-size:11px;font-weight:700;padding:3px 9px;cursor:pointer">📷 ${fa.length} foto(s)</button>`
               : `<span style="color:var(--muted);font-size:11px">Sem fotos</span>`);
+        const pendLocal = (!up && window._qualUploadsPendentes) ? window._qualUploadsPendentes[r._id] : 0;
+        const statusFotosFinal = pendLocal
+          ? `${statusFotos}<button type="button" onclick="qualReenviarPendentes('${r._id}')" title="Estas fotos estão salvas neste aparelho e ainda não chegaram ao Drive" style="margin-left:6px;background:rgba(239,68,68,0.18);border:1px solid rgba(239,68,68,0.55);border-radius:6px;color:#fca5a5;font-size:11px;font-weight:700;padding:3px 8px;cursor:pointer">⚠️ ${pendLocal} pendente(s) · Reenviar</button>`
+          : statusFotos;
         return `<tr style="border-bottom:1px solid var(--border);transition:background .1s" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">
           <td style="padding:10px 14px;font-family:var(--mono);font-weight:800;font-size:13px;color:#38bdf8">${esc(r.selb || '—')}</td>
           <td style="padding:10px 14px;color:var(--text);max-width:260px">${esc(r.equipamento || '—')}</td>
           <td style="padding:10px 14px;color:var(--muted);font-family:var(--mono);white-space:nowrap">${esc(r.data || '—')} ${esc(r.hora || '')}</td>
-          <td style="padding:10px 14px;text-align:center">${statusFotos}</td>
+          <td style="padding:10px 14px;text-align:center">${statusFotosFinal}</td>
           <td style="padding:10px 14px;text-align:right;white-space:nowrap">
             <button type="button" onclick="qualAbrirModalAnexarFotos('${r._id}', { autoCamera: true })" style="background:rgba(16,185,129,0.16);border:1px solid rgba(16,185,129,0.5);border-radius:7px;color:#34d399;font-size:11.5px;font-weight:700;padding:5px 11px;cursor:pointer">📸 Tirar / Anexar Foto</button>
           </td>

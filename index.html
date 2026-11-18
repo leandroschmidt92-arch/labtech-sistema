@@ -562,7 +562,7 @@ body.ro-visu-fluxolab #fluxolab-tab-complexas-panel button {
       <code style="background:var(--bg3);padding:4px 10px;border-radius:6px;font-size:11px;display:inline-block;margin-top:6px">".read": true, ".write": true</code>
     </div>
     <button onclick="retryWithUrl()" style="margin-top:14px;width:100%;background:var(--accent);color:#fff;border:none;border-radius:9px;font-family:var(--font);font-size:13px;font-weight:600;padding:11px;cursor:pointer">Tentar novamente</button>
-    <button onclick="location.reload()" style="margin-top:8px;width:100%;background:none;border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;color:var(--muted);padding:9px;cursor:pointer">Recarregar página</button>
+    <button onclick="window.qualRecarregarSeguro ? qualRecarregarSeguro() : location.reload()" style="margin-top:8px;width:100%;background:none;border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;color:var(--muted);padding:9px;cursor:pointer">Recarregar página</button>
   </div>
 </div>
 <style>@keyframes spin{to{transform:rotate(360deg)}}
@@ -3487,7 +3487,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
               <!-- Input para Câmera Direta -->
               <input type="file" id="qual-reg-fotos-camera" accept="image/*" capture="environment" style="display:none" onchange="qualOnFotosSelecionadas(event)">
-              <button type="button" onclick="document.getElementById('qual-reg-fotos-camera').click()" class="btn" style="background:linear-gradient(135deg, rgba(16,185,129,0.22), rgba(5,150,105,0.15));border:1px solid rgba(16,185,129,0.5);color:#6ee7b7;font-size:12px;font-weight:700;padding:8px 14px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:6px">
+              <button type="button" onclick="qualAbrirCameraContinua('registro')" class="btn" style="background:linear-gradient(135deg, rgba(16,185,129,0.22), rgba(5,150,105,0.15));border:1px solid rgba(16,185,129,0.5);color:#6ee7b7;font-size:12px;font-weight:700;padding:8px 14px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:6px">
                 <span>📸</span> <span>Tirar Foto (Câmera)</span>
               </button>
 
@@ -5056,7 +5056,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
         <!-- Botões de seleção -->
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <input type="file" id="qual-anexo-input-camera" accept="image/*" capture="environment" style="display:none" onchange="qualOnFotosAnexoSelecionadas(event)">
-          <button type="button" onclick="document.getElementById('qual-anexo-input-camera').click()" class="btn" style="background:linear-gradient(135deg, rgba(16,185,129,0.22), rgba(5,150,105,0.15));border:1px solid rgba(16,185,129,0.5);color:#6ee7b7;font-size:12px;font-weight:700;padding:8px 14px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:6px">
+          <button type="button" onclick="qualAbrirCameraContinua('anexo')" class="btn" style="background:linear-gradient(135deg, rgba(16,185,129,0.22), rgba(5,150,105,0.15));border:1px solid rgba(16,185,129,0.5);color:#6ee7b7;font-size:12px;font-weight:700;padding:8px 14px;border-radius:8px;cursor:pointer;display:inline-flex;align-items:center;gap:6px">
             <span>📸</span> <span>Tirar Foto (Câmera)</span>
           </button>
 
@@ -5411,7 +5411,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <p style="font-size:15px;color:var(--muted);line-height:1.5;margin-bottom:28px">
         Bom dia! Para garantir o funcionamento correto do sistema e evitar travamentos da sessão anterior, você precisa atualizar a página agora.
       </p>
-      <button class="btn bp" style="width:100%;padding:14px;font-size:16px;font-weight:600" onclick="location.reload(true)">Atualizar Página</button>
+      <button class="btn bp" style="width:100%;padding:14px;font-size:16px;font-weight:600" onclick="window.qualRecarregarSeguro ? qualRecarregarSeguro() : location.reload(true)">Atualizar Página</button>
     </div>
   </div>
 
