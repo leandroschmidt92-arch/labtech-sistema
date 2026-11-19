@@ -18782,8 +18782,10 @@ async function _qualMesclarFotosNoRegistroImpl(regId, fotosNovas, pastaUrl, aind
   regAtual.pasta_drive = regAtual.pasta_drive || pastaUrl || '';
   if (aindaEnviando) {
     regAtual.fotos_enviando = true;
+    regAtual.fotos_enviando_ts = Date.now();
   } else {
     delete regAtual.fotos_enviando;
+    delete regAtual.fotos_enviando_ts;
     delete regAtual.fotos_enviadas;
     delete regAtual.fotos_total;
   }
@@ -18969,6 +18971,7 @@ window._qualRetomarOutbox = async function(motivo) {
         window._qualUploadsPendentes[regId] = n; // marca como pendente para a UI desde já
       }
     });
+    if (typeof renderQualRegistros === 'function') renderQualRegistros();
     if (motivo === 'boot') {
       _qualNotificar('📤 Retomando envio de ' + all.length + ' foto(s) que não tinham terminado de subir...', 'ok');
     }
@@ -18985,6 +18988,33 @@ window._qualRetomarOutbox = async function(motivo) {
 window.qualReenviarPendentes = function(regId) {
   _qualNotificar('📤 Reenviando fotos pendentes...', 'ok');
   return _qualProcessarOutboxReg(regId);
+};
+
+// Selo de envio na tabela: normal (enviando), pendente neste aparelho, ou travado
+window._qualBadgeEnvioParado = function(r) {
+  const id = r._id;
+  const pend = (window._qualUploadsPendentes && window._qualUploadsPendentes[id]) || 0;
+  const ref = r.fotos_enviando_ts || r.ts || 0;
+  const velho = ref && (Date.now() - ref > 10 * 60 * 1000);
+  const base = 'margin-left:6px;border-radius:6px;font-size:11px;font-weight:700;padding:2px 8px;display:inline-flex;align-items:center;gap:4px;cursor:pointer;';
+  if (pend) {
+    return '<button type="button" onclick="qualReenviarPendentes(\'' + id + '\')" title="As fotos estão salvas neste aparelho. Clique para tentar enviar de novo." style="' + base + 'background:rgba(239,68,68,0.18);border:1px solid rgba(239,68,68,0.55);color:#fca5a5">⚠️ ' + pend + ' foto(s) pendente(s) · Reenviar</button>';
+  }
+  if (velho) {
+    return '<button type="button" onclick="qualResolverEnvioTravado(\'' + id + '\')" title="O envio não terminou. Clique para resolver." style="' + base + 'background:rgba(239,68,68,0.18);border:1px solid rgba(239,68,68,0.55);color:#fca5a5">⚠️ Envio não concluído · Resolver</button>';
+  }
+  return '<span style="' + base.replace('cursor:pointer;', '') + 'background:rgba(245,158,11,0.14);border:1px solid rgba(245,158,11,0.4);color:#fbbf24">⏳ Enviando fotos...</span>';
+};
+
+// Resolve um "Enviando fotos..." que ficou preso
+window.qualResolverEnvioTravado = async function(regId) {
+  const jobs = await _qualOutboxPorReg(regId);
+  if (jobs.length) { return window.qualReenviarPendentes(regId); }
+  const ok = confirm('As fotos deste registro não terminaram de ser enviadas e NÃO estão salvas neste aparelho (podem ter sido tiradas em outro celular/computador, ou foram perdidas antes da correção).\n\nOK = limpar o aviso e tirar/anexar as fotos novamente.\nCancelar = manter como está.');
+  if (!ok) return;
+  try { await _qualMesclarFotosNoRegistro(regId, [], '', false); } catch (e) { console.warn('[Qualidade] Erro ao limpar aviso de envio:', e); }
+  if (typeof renderQualRegistros === 'function') renderQualRegistros();
+  if (typeof qualAbrirModalAnexarFotos === 'function') qualAbrirModalAnexarFotos(regId, { autoCamera: true });
 };
 
 if (!window._qualOutboxTimersRegistrados) {
@@ -20047,6 +20077,7 @@ async function salvarQualRegistro(){
     registro.pasta_drive = '';
     if (fotosParaEnviar.length > 0) {
       registro.fotos_enviando = true;
+      registro.fotos_enviando_ts = Date.now();
       registro.fotos_total = fotosParaEnviar.length;
     }
 
@@ -20694,7 +20725,7 @@ function renderQualRegistros(){
     return `
     <tr data-selb="${r.selb || ''}" style="${chamado ? 'border-left:3px solid #f5a623;background:linear-gradient(90deg,rgba(245,166,35,0.18) 0%,rgba(245,166,35,0.04) 100%);box-shadow:inset 0 0 0 1px rgba(245,166,35,0.25)' : (r.etiqueta_impressa ? 'border-left:3px solid #4ade80;background:linear-gradient(90deg,rgba(74,222,128,0.22) 0%,rgba(74,222,128,0.08) 100%);box-shadow:inset 0 0 0 1px rgba(74,222,128,0.25)' : 'border-left:3px solid rgba(74,222,128,0.55);background:linear-gradient(90deg,rgba(74,222,128,0.04) 0%,transparent 60%)')}">
       <td style="font-family:var(--mono);font-size:12px;white-space:nowrap">${r.data || '—'}<br><span style="color:var(--muted);font-size:10px">${r.hora || ''}</span></td>
-      <td style="font-family:var(--mono);font-weight:700;color:var(--accent);white-space:nowrap">${r.selb || '—'}${r.selb ? `${(() => { const fa = r.fotos || (r.raw && r.raw.fotos) || []; const up = window._qualUploadsAtivos && window._qualUploadsAtivos[r._id]; let h = ""; if (fa.length) { h += `<button type="button" class="qual-selb-badge-foto" onclick="qualAbrirModalFotos(\'${r._id}\')" title="Visualizar ${fa.length} foto(s) anexada(s)" style="margin-left:6px;background:rgba(59,130,246,0.18);border:1px solid rgba(59,130,246,0.5);border-radius:6px;color:#60a5fa;font-size:11px;font-weight:700;padding:2px 7px;cursor:pointer;display:inline-flex;align-items:center;gap:4px">📷 ${fa.length}</button>`; } if (up) { h += `<span id="qual-upload-badge-${r._id}" title="Enviando fotos para o Google Drive em segundo plano" style="margin-left:6px;background:rgba(245,158,11,0.18);border:1px solid rgba(245,158,11,0.5);border-radius:6px;color:#fbbf24;font-size:11px;font-weight:700;padding:2px 8px;display:inline-flex;align-items:center;gap:4px">⏳ Enviando ${up.enviadas}/${up.total}...</span>`; } else if (r.fotos_enviando) { h += `<span style="margin-left:6px;background:rgba(245,158,11,0.14);border:1px solid rgba(245,158,11,0.4);border-radius:6px;color:#fbbf24;font-size:11px;font-weight:700;padding:2px 8px;display:inline-flex;align-items:center;gap:4px">⏳ Enviando fotos...</span>`; } return h; })()}<button onclick="(function(btn,val){navigator.clipboard.writeText(val).then(function(){var o=btn.textContent;btn.textContent='✓';btn.style.color='var(--accent2)';setTimeout(function(){btn.textContent=o;btn.style.color='';},1500)}).catch(function(){});})(this,'${r.selb}')" title="Copiar SELB" style="margin-left:6px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:var(--muted);font-size:10px;font-weight:600;padding:1px 5px;cursor:pointer;transition:all .15s">⧉</button><button type="button" onclick="qualAbrirModalAnexarFotos('${r._id}')" title="Anexar ou adicionar fotos a este registro" style="margin-left:6px;background:rgba(16,185,129,0.16);border:1px solid rgba(16,185,129,0.45);border-radius:6px;color:#34d399;font-size:11px;font-weight:700;padding:3px 8px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px">📷 Anexar fotos</button>` : ''}</td>
+      <td style="font-family:var(--mono);font-weight:700;color:var(--accent);white-space:nowrap">${r.selb || '—'}${r.selb ? `${(() => { const fa = r.fotos || (r.raw && r.raw.fotos) || []; const up = window._qualUploadsAtivos && window._qualUploadsAtivos[r._id]; let h = ""; if (fa.length) { h += `<button type="button" class="qual-selb-badge-foto" onclick="qualAbrirModalFotos(\'${r._id}\')" title="Visualizar ${fa.length} foto(s) anexada(s)" style="margin-left:6px;background:rgba(59,130,246,0.18);border:1px solid rgba(59,130,246,0.5);border-radius:6px;color:#60a5fa;font-size:11px;font-weight:700;padding:2px 7px;cursor:pointer;display:inline-flex;align-items:center;gap:4px">📷 ${fa.length}</button>`; } if (up) { h += `<span id="qual-upload-badge-${r._id}" title="Enviando fotos para o Google Drive em segundo plano" style="margin-left:6px;background:rgba(245,158,11,0.18);border:1px solid rgba(245,158,11,0.5);border-radius:6px;color:#fbbf24;font-size:11px;font-weight:700;padding:2px 8px;display:inline-flex;align-items:center;gap:4px">⏳ Enviando ${up.enviadas}/${up.total}...</span>`; } else if (r.fotos_enviando || (window._qualUploadsPendentes && window._qualUploadsPendentes[r._id])) { h += window._qualBadgeEnvioParado(r); } return h; })()}<button onclick="(function(btn,val){navigator.clipboard.writeText(val).then(function(){var o=btn.textContent;btn.textContent='✓';btn.style.color='var(--accent2)';setTimeout(function(){btn.textContent=o;btn.style.color='';},1500)}).catch(function(){});})(this,'${r.selb}')" title="Copiar SELB" style="margin-left:6px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:var(--muted);font-size:10px;font-weight:600;padding:1px 5px;cursor:pointer;transition:all .15s">⧉</button><button type="button" onclick="qualAbrirModalAnexarFotos('${r._id}')" title="Anexar ou adicionar fotos a este registro" style="margin-left:6px;background:rgba(16,185,129,0.16);border:1px solid rgba(16,185,129,0.45);border-radius:6px;color:#34d399;font-size:11px;font-weight:700;padding:3px 8px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px">📷 Anexar fotos</button>` : ''}</td>
       <td style="font-size:12px;color:var(--muted);max-width:240px">
         ${r.equipamento || '—'}
         ${showChkBadge ? `<br><span title="Checklist atribuído a este registro (prioridade: mais antigos do dia)" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:800;color:#22d3ee;background:rgba(34,211,238,.15);border:1px solid rgba(34,211,238,.5);border-radius:7px;padding:4px 10px;margin-top:5px">📋 Checklist</span>` : ''}
