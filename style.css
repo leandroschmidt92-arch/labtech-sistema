@@ -43,6 +43,18 @@
   --qual: #8b5cf6;
 }
 
+/* Garante fundo escuro e texto legível nas listas suspensas (<select> / <option>) */
+select option,
+select optgroup {
+  background-color: #0f131a;
+  color: #e2e8f0;
+}
+[data-theme="light"] select option,
+[data-theme="light"] select optgroup {
+  background-color: #f5f6f9;
+  color: #252d3d;
+}
+
 /* ══════════════════════════════════════════════════════
    TEMA CLARO — Paleta suave e sofisticada
    ══════════════════════════════════════════════════════ */

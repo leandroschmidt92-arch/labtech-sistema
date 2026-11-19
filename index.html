@@ -9,6 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css?v=14">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script>if(window.Chart){Chart.defaults.maintainAspectRatio=false;}</script>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
@@ -1120,11 +1121,6 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       box-shadow: var(--shadow); backdrop-filter: blur(10px); margin: 0 auto;
     ">
       <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center;">
-        <div style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(59, 130, 246, 0.1); border: 1px solid rgba(59, 130, 246, 0.3); border-radius: 10px;">
-          <span style="font-size: 10px; font-weight: 800; color: #fff; letter-spacing: 0.05em;">TOTAL</span>
-          <span id="t-total" style="font-family: var(--mono); font-size: 18px; font-weight: 800; color: var(--accent);">0</span>
-        </div>
-        <div style="height: 24px; width: 1px; background: var(--border); margin: 0 4px;"></div>
         <div id="exp-mont-pill" title="Montagem: produção atual vs. expectativa (cards ativos × meta 10)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(16, 185, 129, 0.06); border: 1px solid rgba(16, 185, 129, 0.15); border-radius: 10px;">
           <span style="font-size: 10px; font-weight: 800; color: var(--accent2); letter-spacing: 0.05em;">EXP. MT</span>
           <span style="font-family: var(--mono); font-size: 15px; font-weight: 800;"><span id="exp-mont-atual" style="color: var(--warn);">0</span><span style="color: var(--muted);">/</span><span id="exp-mont-total" style="color: var(--muted);">0</span></span>
@@ -1143,9 +1139,14 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           <span id="dash-checklists-total" style="font-family: var(--mono); font-size: 15px; font-weight: 800; color: #f59e0b;">—</span>
         </div>
         <div style="height: 24px; width: 1px; background: var(--border); margin: 0 4px;"></div>
-        <div id="dash-liberadas-pill" title="Total de equipamentos liberados pela Qualidade hoje" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(236, 72, 153, 0.06); border: 1px solid rgba(236, 72, 153, 0.15); border-radius: 10px;">
-          <span style="font-size: 10px; font-weight: 800; color: #ec4899; letter-spacing: 0.05em;">LIBERADAS NO DIA</span>
-          <span id="dash-liberadas-total" style="font-family: var(--mono); font-size: 15px; font-weight: 800; color: #ec4899;">0</span>
+        <div id="dash-liberadas-pill" title="Total de equipamentos liberados pela Qualidade hoje" style="display: flex; align-items: center; gap: 12px; padding: 7px 18px; background: linear-gradient(135deg, rgba(236, 72, 153, 0.18), rgba(236, 72, 153, 0.08)); border: 1.5px solid rgba(236, 72, 153, 0.55); border-radius: 12px; box-shadow: 0 0 18px rgba(236, 72, 153, 0.22);">
+          <span style="font-size: 11.5px; font-weight: 800; color: #f472b6; letter-spacing: 0.06em;">🚀 LIBERADAS NO DIA</span>
+          <span id="dash-liberadas-total" style="font-family: var(--mono); font-size: 22px; font-weight: 900; color: #ec4899; line-height: 1; text-shadow: 0 0 10px rgba(236, 72, 153, 0.45);">0</span>
+        </div>
+        <div id="dash-liberadas-ritmo-pill" title="Tempo médio para liberar 1 equipamento hoje (Horas líquidas trabalhadas no dia ÷ Quantidade liberada)" style="display: flex; align-items: center; gap: 8px; padding: 5px 12px; background: rgba(56, 189, 248, 0.07); border: 1px solid rgba(56, 189, 248, 0.22); border-radius: 10px;">
+          <span style="font-size: 10px; font-weight: 800; color: #38bdf8; letter-spacing: 0.05em;">⏱️ MÉDIA / LIBERADA</span>
+          <span id="dash-liberadas-ritmo" style="font-family: var(--mono); font-size: 15px; font-weight: 800; color: #38bdf8;">—</span>
+          <span id="dash-liberadas-horas" style="font-family: var(--mono); font-size: 10.5px; font-weight: 600; color: var(--muted);"></span>
         </div>
         <div id="dash-health-pill" title="Saúde Geral da Equipe (Presença)" style="display: flex; align-items: center; gap: 10px; padding: 5px 12px; background: rgba(74, 222, 128, 0.06); border: 1px solid rgba(74, 222, 128, 0.15); border-radius: 10px;">
           <span style="font-size: 10px; font-weight: 800; color: #4ade80; letter-spacing: 0.05em;">SAÚDE EQUIPE</span>
@@ -1925,44 +1926,9 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     <!-- KPI row -->
     <div id="rel-kpi" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px"></div>
 
-    <!-- Seleção de profissionais -->
-    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:20px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-        <span style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Profissionais nos gráficos</span>
-        <div style="display:flex;gap:8px">
-          <button onclick="relSelecionarTodos(true)" style="font-size:11px;color:var(--accent);background:none;border:none;cursor:pointer;font-family:var(--font)">Selecionar todos</button>
-          <span style="color:var(--border2)">|</span>
-          <button onclick="relSelecionarTodos(false)" style="font-size:11px;color:var(--muted);background:none;border:none;cursor:pointer;font-family:var(--font)">Limpar</button>
-        </div>
-      </div>
-      <div id="rel-prof-checks" style="display:flex;flex-wrap:wrap;gap:8px"></div>
-    </div>
-
-    <!-- Charts row -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
-      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
-        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:16px">Máquinas concluídas por profissional</div>
-        <canvas id="chart-prod" height="220"></canvas>
-      </div>
-      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
-        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:16px">Tendência de Produção Diária</div>
-        <canvas id="chart-trend" height="220"></canvas>
-      </div>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
-      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
-        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:16px">Comparativo: Aprovados vs Reprovados vs SCRAP</div>
-        <canvas id="chart-status" height="220"></canvas>
-      </div>
-      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px">
-          <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Produção Individual por Profissional (Meta 20)</div>
-        </div>
-        <canvas id="chart-trend-pure" height="220"></canvas>
-      </div>
-    </div>
-
-    <!-- Detail table -->
+    <!-- Tabela (esquerda) + gráficos (direita, aproveitando o espaço livre) -->
+    <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start">
+    <div style="flex:1 1 560px;min-width:0">
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
       <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px">Detalhe por profissional</div>
       <div style="overflow-x:auto">
@@ -1982,6 +1948,42 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       </table>
       </div>
     </div>
+    </div><!-- /coluna tabela -->
+    <div style="flex:1 1 440px;min-width:0">
+    <div style="font-size:13px;font-weight:700;color:var(--text);margin:0 0 10px">📊 Gráficos</div>
+    <!-- Seleção de profissionais -->
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <span style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Profissionais nos gráficos</span>
+        <div style="display:flex;gap:8px">
+          <button onclick="relSelecionarTodos(true)" style="font-size:11px;color:var(--accent);background:none;border:none;cursor:pointer;font-family:var(--font)">Selecionar todos</button>
+          <span style="color:var(--border2)">|</span>
+          <button onclick="relSelecionarTodos(false)" style="font-size:11px;color:var(--muted);background:none;border:none;cursor:pointer;font-family:var(--font)">Limpar</button>
+        </div>
+      </div>
+      <div id="rel-prof-checks" style="display:flex;flex-wrap:wrap;gap:8px"></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px">
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:14px 16px;min-width:0">
+        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Máquinas concluídas por profissional</div>
+        <div style="position:relative;height:200px"><canvas id="chart-prod" height="200"></canvas></div>
+      </div>
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:14px 16px;min-width:0">
+        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Tendência de Produção Diária</div>
+        <div style="position:relative;height:200px"><canvas id="chart-trend" height="200"></canvas></div>
+      </div>
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:14px 16px;min-width:0">
+        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Comparativo: Aprovados vs Reprovados vs SCRAP</div>
+        <div style="position:relative;height:200px"><canvas id="chart-status" height="200"></canvas></div>
+      </div>
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:14px 16px;min-width:0">
+        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px">Produção Individual por Profissional (Meta 20)</div>
+        <div style="position:relative;height:200px"><canvas id="chart-trend-pure" height="200"></canvas></div>
+      </div>
+    </div>
+    </div><!-- /coluna gráficos -->
+    </div><!-- /lado a lado -->
     </div><!-- /relview-prod -->
 
     <!-- SUB-VIEW: SCRAP -->
@@ -2070,7 +2072,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
         <div>
           <h2 style="font-size:18px;font-weight:600">Tempo Médio por Modelo<span class="info-rel-btn" onclick="mostrarInfoRelatorio('modelo')" title="Como funciona este relatório">ℹ</span></h2>
-          <p style="font-size:12px;color:var(--muted);margin-top:3px" id="modelo-period-label">Carregando todos os períodos...</p>
+          <p style="font-size:12px;color:var(--muted);margin-top:3px" id="modelo-period-label">Selecione um filtro de data abaixo para exibir o relatório.</p>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <select id="modelo-status-filter" onchange="renderModeloRel()" style="
@@ -2109,15 +2111,27 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <div id="modelo-window-tabs" style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;align-items:center">
         <button class="modelo-win-btn" data-days="30" onclick="setModeloWindow(30,this)">30 dias</button>
         <button class="modelo-win-btn" data-days="60" onclick="setModeloWindow(60,this)">60 dias</button>
-        <button class="modelo-win-btn active" data-days="90" onclick="setModeloWindow(90,this)">90 dias</button>
+        <button class="modelo-win-btn" data-days="90" onclick="setModeloWindow(90,this)">90 dias</button>
         <span style="width:1px;height:22px;background:var(--border2);margin:0 6px"></span>
         <button class="modelo-win-btn" id="btn-modelo-mes-atual" onclick="setModeloCurrentMonth(this)" title="Filtrar todos os equipamentos que passaram no mês atual">📅 Mês Atual</button>
         <div style="display:inline-flex;align-items:center;gap:6px;background:var(--bg2);border:1px solid var(--border2);border-radius:9px;padding:3px 10px" id="modelo-month-wrap">
           <span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">📅 Mês:</span>
           <input type="month" id="modelo-month-picker" onchange="setModeloMonth(this.value)" style="background:transparent;border:none;color:var(--text);font-family:var(--mono);font-size:12px;font-weight:600;outline:none;cursor:pointer;padding:3px 2px">
         </div>
+        <div style="display:inline-flex;align-items:center;gap:6px;background:var(--bg2);border:1px solid var(--border2);border-radius:9px;padding:3px 10px;flex-wrap:wrap" id="modelo-custom-date-wrap">
+          <span style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">📅 Data:</span>
+          <input type="date" id="modelo-date-from" onchange="onModeloCustomDateChange('from')" title="Data inicial" style="background:transparent;border:none;color:var(--text);font-family:var(--mono);font-size:12px;font-weight:600;outline:none;cursor:pointer;padding:3px 2px">
+          <span style="font-size:11px;color:var(--muted)">até</span>
+          <input type="date" id="modelo-date-to" onchange="onModeloCustomDateChange('to')" title="Data final" style="background:transparent;border:none;color:var(--text);font-family:var(--mono);font-size:12px;font-weight:600;outline:none;cursor:pointer;padding:3px 2px">
+        </div>
       </div>
 
+      <!-- Placeholder exibido enquanto nenhum filtro de data for selecionado -->
+      <div id="modelo-empty-placeholder" style="margin:24px auto;padding:28px 22px;max-width:560px;text-align:center;background:var(--bg2);border:1px dashed var(--border2);border-radius:12px;color:var(--muted);font-size:14px;line-height:1.6">
+        📅 Escolha um filtro de data acima (<b>30 dias</b>, <b>60 dias</b>, <b>90 dias</b>, <b>Mês Atual</b>, um <b>Mês</b> ou uma <b>Data de sua escolha</b>) para exibir o relatório.
+      </div>
+
+      <div id="modelo-results-wrap" style="display:none">
       <!-- Busca de modelo e Filtro de Ordenação (Crescente / Decrescente) -->
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:18px;flex-wrap:wrap">
         <div style="position:relative;flex:1;max-width:360px;min-width:200px">
@@ -2246,9 +2260,6 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           </div>
           <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px" id="modelo-mont-kpi"></div>
           <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:16px">
-            <canvas id="chart-modelo-mont" height="180"></canvas>
-          </div>
-          <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
             <div style="overflow-x:auto">
             <table class="rtbl">
               <thead><tr>
@@ -2258,6 +2269,9 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
               <tbody id="modelo-mont-body"></tbody>
             </table>
             </div>
+          </div>
+          <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:12px 16px">
+            <div style="position:relative;height:170px"><canvas id="chart-modelo-mont" height="170"></canvas></div>
           </div>
         </div>
 
@@ -2269,9 +2283,6 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           </div>
           <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px" id="modelo-limp-kpi"></div>
           <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:16px">
-            <canvas id="chart-modelo-limp" height="180"></canvas>
-          </div>
-          <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
             <div style="overflow-x:auto">
             <table class="rtbl">
               <thead><tr>
@@ -2281,6 +2292,9 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
               <tbody id="modelo-limp-body"></tbody>
             </table>
             </div>
+          </div>
+          <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:12px 16px">
+            <div style="position:relative;height:170px"><canvas id="chart-modelo-limp" height="170"></canvas></div>
           </div>
         </div>
 
@@ -2292,9 +2306,6 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           </div>
           <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px" id="modelo-comp-kpi"></div>
           <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:16px">
-            <canvas id="chart-modelo-comp" height="180"></canvas>
-          </div>
-          <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
             <div style="overflow-x:auto">
             <table class="rtbl">
               <thead><tr>
@@ -2304,6 +2315,9 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
               <tbody id="modelo-comp-body"></tbody>
             </table>
             </div>
+          </div>
+          <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:12px 16px">
+            <div style="position:relative;height:170px"><canvas id="chart-modelo-comp" height="170"></canvas></div>
           </div>
         </div>
       </div>
@@ -2316,9 +2330,6 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
         </div>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px" id="modelo-elet-kpi"></div>
         <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:16px">
-          <canvas id="chart-modelo-elet" height="180"></canvas>
-        </div>
-        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
           <div style="overflow-x:auto">
           <table class="rtbl">
             <thead><tr>
@@ -2329,12 +2340,16 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           </table>
           </div>
         </div>
+        <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:12px 16px">
+          <div style="position:relative;height:170px"><canvas id="chart-modelo-elet" height="170"></canvas></div>
+        </div>
       </div>
+      </div><!-- /modelo-results-wrap -->
     </div><!-- /relview-modelo -->
 
     <!-- SUB-VIEW: TEMPO POR USUÁRIO -->
     <div id="relview-usuario" style="display:none">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
         <div>
           <h2 style="font-size:18px;font-weight:600">Tempo Médio por Modelo — Por Usuário<span class="info-rel-btn" onclick="mostrarInfoRelatorio('usuario')" title="Como funciona este relatório">ℹ</span></h2>
           <p style="font-size:12px;color:var(--muted);margin-top:3px" id="usuario-period-label">Carregando...</p>
@@ -2355,59 +2370,96 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
         </div>
       </div>
 
-      <!-- Filtro setor -->
-      <div class="stabs" id="usuario-tabs" style="margin-bottom:12px">
-        <button class="stab a-all" onclick="setUsuarioFilter('',this)">Todos</button>
-        <button class="stab" onclick="setUsuarioFilter('MONTAGEM',this)">Montagem</button>
-        <button class="stab" onclick="setUsuarioFilter('LIMPEZA',this)">Limpeza</button>
-        <button class="stab" onclick="setUsuarioFilter('COMPLEXA',this)">Complexa</button>
-        <button class="stab" onclick="setUsuarioFilter('ELETRÔNICA',this)">Eletrônica</button>
-      </div>
-
-      <!-- Busca de profissional ou modelo -->
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:18px">
-        <div style="position:relative;flex:1;max-width:420px">
-          <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:14px;pointer-events:none">🔍</span>
-          <input id="usuario-search" class="sinp" placeholder="BUSCAR PROFISSIONAL OU MODELO..."
-            oninput="renderUsuarioRel()"
-            style="width:100%;padding-left:34px;text-transform:uppercase">
+      <!-- Filtro setor + Busca de profissional ou modelo na mesma barra -->
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+        <div class="stabs" id="usuario-tabs" style="margin:0">
+          <button class="stab a-all" onclick="setUsuarioFilter('',this)">Todos</button>
+          <button class="stab" onclick="setUsuarioFilter('MONTAGEM',this)">Montagem</button>
+          <button class="stab" onclick="setUsuarioFilter('LIMPEZA',this)">Limpeza</button>
+          <button class="stab" onclick="setUsuarioFilter('COMPLEXA',this)">Complexa</button>
+          <button class="stab" onclick="setUsuarioFilter('ELETRÔNICA',this)">Eletrônica</button>
         </div>
-        <button onclick="document.getElementById('usuario-search').value='';renderUsuarioRel()"
-          style="background:none;border:1px solid var(--border2);border-radius:9px;color:var(--muted);
-                 font-family:var(--font);font-size:12px;padding:7px 14px;cursor:pointer;white-space:nowrap;transition:all .15s"
-          onmouseover="this.style.borderColor='var(--danger)';this.style.color='var(--danger)'"
-          onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--muted)'">
-          ✕ Limpar
-        </button>
+
+        <div style="display:flex;align-items:center;gap:8px;flex:1;max-width:440px;min-width:240px">
+          <div style="position:relative;flex:1">
+            <span style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:14px;pointer-events:none">🔍</span>
+            <input id="usuario-search" class="sinp" placeholder="BUSCAR PROFISSIONAL OU MODELO..."
+              oninput="renderUsuarioRel()"
+              style="width:100%;padding-left:34px;text-transform:uppercase">
+          </div>
+          <button onclick="document.getElementById('usuario-search').value='';renderUsuarioRel()"
+            style="background:none;border:1px solid var(--border2);border-radius:9px;color:var(--muted);
+                   font-family:var(--font);font-size:12px;padding:7px 14px;cursor:pointer;white-space:nowrap;transition:all .15s"
+            onmouseover="this.style.borderColor='var(--danger)';this.style.color='var(--danger)'"
+            onmouseout="this.style.borderColor='var(--border2)';this.style.color='var(--muted)'">
+            ✕ Limpar
+          </button>
+        </div>
       </div>
 
       <div id="usuario-loading" style="display:none;text-align:center;padding:20px;color:var(--muted);font-size:13px">Carregando...</div>
 
       <!-- KPI geral -->
-      <div id="usuario-kpi" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px"></div>
+      <div id="usuario-kpi" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:16px"></div>
 
-      <!-- Seletor de usuário -->
-      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-bottom:20px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-          <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Selecionar profissional</div>
-          <div id="usuario-sel-nome" style="font-size:12px;font-weight:600;color:var(--purple);display:none"></div>
+      <!-- Seletor de profissionais (1 ou 2 para comparativo lado a lado) -->
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:16px 18px;margin-bottom:18px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+          <div>
+            <div style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Selecionar Profissionais (1 ou 2 para Comparativo Lado a Lado)</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:2px">Clique nos cards abaixo ou escolha nas listas ao lado para comparar os tempos e diferenças por modelo.</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <div style="display:inline-flex;align-items:center;gap:6px;background:var(--bg3);border:1px solid rgba(167,139,250,.55);border-radius:9px;padding:4px 10px">
+              <span style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:#a78bfa;color:#000;font-size:10px;font-weight:800">1º</span>
+              <select id="usuario-sel-1" onchange="onUsuarioSelectDropdown(0,this.value)" style="background:var(--bg3);border:none;color:var(--text);font-family:var(--font);font-size:12px;font-weight:600;outline:none;cursor:pointer;min-width:140px">
+                <option value="">Selecionar 1º profissional...</option>
+              </select>
+            </div>
+            <span style="font-size:11px;font-weight:800;color:var(--muted)">VS</span>
+            <div style="display:inline-flex;align-items:center;gap:6px;background:var(--bg3);border:1px solid rgba(56,189,248,.55);border-radius:9px;padding:4px 10px">
+              <span style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:#38bdf8;color:#000;font-size:10px;font-weight:800">2º</span>
+              <select id="usuario-sel-2" onchange="onUsuarioSelectDropdown(1,this.value)" style="background:var(--bg3);border:none;color:var(--text);font-family:var(--font);font-size:12px;font-weight:600;outline:none;cursor:pointer;min-width:140px">
+                <option value="">+ Comparar com 2º profissional...</option>
+              </select>
+            </div>
+            <button type="button" id="usuario-btn-swap" onclick="usuarioInverterComparacao()" title="Inverter 1º e 2º profissional" style="display:none;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:var(--font);font-size:11px;font-weight:600;padding:6px 10px;cursor:pointer">⇄ Inverter</button>
+            <button type="button" id="usuario-btn-clear-sel" onclick="usuarioLimparSelecao()" title="Limpar seleção de profissionais" style="display:none;background:rgba(242,87,87,.12);border:1px solid rgba(242,87,87,.35);border-radius:8px;color:var(--danger);font-family:var(--font);font-size:11px;font-weight:600;padding:6px 10px;cursor:pointer">✕ Limpar</button>
+          </div>
         </div>
-        <div id="usuario-chips" style="display:flex;flex-wrap:wrap;gap:8px"></div>
+        <div id="usuario-sel-nome" style="display:none"></div>
+        <div id="usuario-chips" data-no-mtb="1" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(195px,1fr));gap:8px;max-height:225px;overflow-y:auto;padding:2px"></div>
       </div>
 
-      <!-- Gráfico comparativo -->
-      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:20px">
-        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Tempo médio vs. média geral do modelo (minutos)</div>
-        <div style="font-size:11px;color:var(--muted);margin-bottom:14px">Barra azul = usuário selecionado &nbsp;|&nbsp; Linha laranja = média geral</div>
-        <canvas id="chart-usuario" height="200"></canvas>
-      </div>
+      <!-- Resumo comparativo dos profissionais selecionados -->
+      <div id="usuario-comp-summary" style="display:none;margin-bottom:18px"></div>
 
-      <!-- Tabela detalhada -->
-      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
-        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:14px">Detalhe por modelo</div>
+      <!-- Tabela detalhada / comparativa -->
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:18px 20px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+          <div>
+            <div id="usuario-table-title" style="font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Detalhe por modelo</div>
+            <div id="usuario-table-sub" style="font-size:11px;color:var(--muted);margin-top:2px"></div>
+          </div>
+          <div id="usuario-comp-controls" style="display:none;align-items:center;gap:8px;flex-wrap:wrap">
+            <div style="display:inline-flex;background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:2px;gap:2px">
+              <button type="button" id="btn-usu-mode-all" onclick="setUsuarioCommonOnly(false)" style="border:none;border-radius:6px;padding:4px 10px;font-family:var(--font);font-size:11px;font-weight:600;cursor:pointer;background:var(--accent);color:#fff">Todos os modelos</button>
+              <button type="button" id="btn-usu-mode-common" onclick="setUsuarioCommonOnly(true)" style="border:none;border-radius:6px;padding:4px 10px;font-family:var(--font);font-size:11px;font-weight:600;cursor:pointer;background:transparent;color:var(--muted)">⚡ Apenas em comum</button>
+            </div>
+            <select id="usuario-comp-sort" onchange="setUsuarioCompSort(this.value)" style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:var(--font);font-size:11px;font-weight:600;padding:5px 10px;outline:none;cursor:pointer">
+              <option value="qtd">Ordenar: Maior Volume (Qtd)</option>
+              <option value="diffMaq">Ordenar: Maior Diferença em Máquinas/Dia</option>
+              <option value="diffDesc">Ordenar: Maior Diferença de Tempo</option>
+              <option value="diffAsc">Ordenar: Menor Diferença de Tempo</option>
+              <option value="avg1">Ordenar: Tempo Médio (1º Prof.)</option>
+              <option value="avg2">Ordenar: Tempo Médio (2º Prof.)</option>
+              <option value="nome">Ordenar: Modelo (A–Z)</option>
+            </select>
+          </div>
+        </div>
         <div style="overflow-x:auto">
         <table class="rtbl" id="usuario-table">
-          <thead><tr>
+          <thead id="usuario-thead"><tr>
             <th>Modelo / Equipamento</th>
             <th style="text-align:right">Qtd</th>
             <th style="text-align:right">Mín</th>
@@ -2419,6 +2471,13 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
           <tbody id="usuario-body"></tbody>
         </table>
         </div>
+      </div>
+
+      <!-- Gráfico comparativo (no final, compacto) -->
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:14px 16px;margin-top:18px">
+        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px" id="usuario-chart-title">Tempo médio vs. média geral do modelo</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:12px" id="usuario-chart-sub">Barra roxa = 1º profissional &nbsp;|&nbsp; Barra azul = 2º profissional &nbsp;|&nbsp; Linha laranja = média geral</div>
+        <div style="position:relative;height:220px"><canvas id="chart-usuario" height="220"></canvas></div>
       </div>
     </div><!-- /relview-usuario -->
 
@@ -5097,7 +5156,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="supabase-compat-shim.js?v=4"></script>
-<script src="app.js?v=99"></script>
+<script src="app.js?v=106"></script>
 <script src="planejamento.js?v=16"></script>
 <script src="pendencias.js?v=16"></script>
 
@@ -6191,7 +6250,7 @@ function pedPrintLabels() {
 
   function enhance(){
     var mobile = isMobile();
-    var divs = document.querySelectorAll('div:not([data-mtb])');
+    var divs = document.querySelectorAll('div:not([data-mtb]):not([data-no-mtb])');
     for (var i = 0; i < divs.length; i++) {
       var div = divs[i];
       var kids = div.children;
@@ -6203,6 +6262,7 @@ function pedPrintLabels() {
       if (!allButtons) continue;
       var cs = window.getComputedStyle(div);
       if (cs.display !== 'flex') continue;
+      div.setAttribute('data-mtb-wrap', div.style.flexWrap || '');
       div.setAttribute('data-mtb', '1');
     }
 
@@ -6222,7 +6282,7 @@ function pedPrintLabels() {
       } else {
         bar.style.overflowX = '';
         bar.style.overflowY = '';
-        bar.style.flexWrap = '';
+        bar.style.flexWrap = bar.getAttribute('data-mtb-wrap') || '';
         bar.style.webkitOverflowScrolling = '';
         for (var b2 = 0; b2 < bar.children.length; b2++) {
           bar.children[b2].style.flexShrink = '';

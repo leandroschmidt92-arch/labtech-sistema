@@ -3371,7 +3371,7 @@ function setView(v,btn){
     _relHistoryCache = null;
     window._currentRelSubTab = relSubTab;
     setTimeout(()=>{
-      if(!window._relFilterChosen && relSubTab !== 'pedido' && relSubTab !== 'saude-equipe'){
+      if(!window._relFilterChosen && relSubTab !== 'pedido' && relSubTab !== 'saude-equipe' && relSubTab !== 'modelo'){
         _relShowPlaceholder();
         return;
       }
@@ -5546,6 +5546,7 @@ function updateSummary(){
   // o badge já foi preenchido pela query COUNT leve no login e não deve ser zerado.
   const elLib = document.getElementById('dash-liberadas-total');
   if(elLib && window._qualListenerStarted) elLib.textContent = _qualLiberadosHojeCount();
+  if(typeof _atualizarRitmoLiberadasDashboard === 'function') _atualizarRitmoLiberadasDashboard();
 
   // ── Expectativa de Produção (por setor, sempre visível — MONTAGEM, LIMPEZA e COMPLEXA) ──
   // Cada operador ativo tem meta diária (8 na Montagem/Limpeza, 1 na Complexa),
@@ -5579,7 +5580,7 @@ function updateSummary(){
 
   // Atualiza Saúde da Equipe do dashboard (se já carregada)
   if (typeof window._dashSaudeEquipePct !== 'undefined') {
-    _dashPaintSaudeEquipe(window._dashSaudeEquipePct);
+    _dashPaintSaudeEquipe(window._dashSaudeEquipePct, window._dashSaudeEquipeActive, window._dashSaudeEquipeTotal);
   }
 }
 
@@ -5598,6 +5599,134 @@ function _qualLiberadosHojeCount() {
   return Object.values(_qualRegistros || {}).filter(r => r.data === hojeStr).length;
 }
 
+// ── Contador de Ritmo de Máquinas Liberadas no Dia ─────────────────────────
+// Calcula o total de horas líquidas trabalhadas no expediente do dia (07:30 às 17:30,
+// descontando intervalos de café e almoço) e divide pela quantidade de máquinas
+// liberadas no dia para mostrar o tempo médio necessário para ter 1 equipamento liberado.
+function _calcHorasTrabalhadasExpedienteDiaSecs(targetDateStr) {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  const hojeStr = `${dd}/${mm}/${yyyy}`;
+
+  const todayStart = new Date(yyyy, now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  let baseDate = todayStart;
+  let isToday = true;
+  if (targetDateStr && targetDateStr !== hojeStr && /^\d{2}\/\d{2}\/\d{4}$/.test(targetDateStr)) {
+    const [dPart, mPart, yPart] = targetDateStr.split('/').map(Number);
+    baseDate = new Date(yPart, mPart - 1, dPart, 0, 0, 0, 0);
+    isToday = (baseDate.getTime() === todayStart.getTime());
+  }
+
+  const baseMs = baseDate.getTime();
+  const wsConf = (typeof SCHEDULE !== 'undefined' && SCHEDULE.work) ? SCHEDULE.work.start : [7, 30];
+  const weConf = (typeof SCHEDULE !== 'undefined' && SCHEDULE.work) ? SCHEDULE.work.end   : [17, 30];
+  const breaks = (typeof SCHEDULE !== 'undefined' && Array.isArray(SCHEDULE.breaks)) ? SCHEDULE.breaks : [
+    { start: [9, 30],  end: [9, 45]  },
+    { start: [13, 0],  end: [14, 12] },
+    { start: [16, 0],  end: [16, 15] }
+  ];
+
+  const wsMs = baseMs + (wsConf[0] * 3600 + wsConf[1] * 60) * 1000;
+  const weMs = baseMs + (weConf[0] * 3600 + weConf[1] * 60) * 1000;
+
+  let endRefMs;
+  if (!isToday) {
+    endRefMs = baseMs > todayStart.getTime() ? wsMs : weMs;
+  } else {
+    endRefMs = Math.min(Math.max(now.getTime(), wsMs), weMs);
+  }
+
+  if (endRefMs <= wsMs) return 0;
+
+  let breakMs = 0;
+  for (const b of breaks) {
+    const bs = baseMs + (b.start[0] * 3600 + b.start[1] * 60) * 1000;
+    const be = baseMs + (b.end[0]   * 3600 + b.end[1]   * 60) * 1000;
+    const s  = Math.max(wsMs, bs);
+    const e  = Math.min(endRefMs, be);
+    if (e > s) breakMs += (e - s);
+  }
+  return Math.max(0, Math.floor((endRefMs - wsMs - breakMs) / 1000));
+}
+
+function _fmtHorasTrabCurto(secs) {
+  const s = Math.max(0, Math.round(secs || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${String(h).padStart(2, '0')}h ${String(m).padStart(2, '0')}m`;
+}
+
+function _fmtTempoMedioLiberada(secs) {
+  const s = Math.max(0, Math.round(secs || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m ${String(sec).padStart(2, '0')}s`;
+  return `${String(m).padStart(2, '0')}m ${String(sec).padStart(2, '0')}s`;
+}
+
+function _atualizarRitmoLiberadasDashboard(qtdOverride) {
+  const elLib   = document.getElementById('dash-liberadas-total');
+  const elRitmo = document.getElementById('dash-liberadas-ritmo');
+  const elHoras = document.getElementById('dash-liberadas-horas');
+  const elPill  = document.getElementById('dash-liberadas-ritmo-pill');
+  if (!elRitmo) return;
+
+  let qtd = (typeof qtdOverride === 'number' && !isNaN(qtdOverride))
+    ? qtdOverride
+    : (window._qualListenerStarted ? _qualLiberadosHojeCount() : ( _dashLibCount != null ? _dashLibCount : (Number(elLib?.textContent) || 0) ));
+
+  const trabSecs  = _calcHorasTrabalhadasExpedienteDiaSecs();
+  const mediaSecs = (qtd > 0 && trabSecs > 0) ? Math.round(trabSecs / qtd) : 0;
+  const maqHora   = (qtd > 0 && trabSecs > 0) ? (qtd / (trabSecs / 3600)).toFixed(1).replace('.', ',') : '0,0';
+  const horasTxt  = _fmtHorasTrabCurto(trabSecs);
+
+  elRitmo.textContent = mediaSecs > 0 ? _fmtTempoMedioLiberada(mediaSecs) : '—';
+  if (elHoras) elHoras.textContent = trabSecs > 0 ? `(${horasTxt})` : '';
+  if (elPill) {
+    elPill.title = mediaSecs > 0
+      ? `Tempo médio por máquina liberada hoje: ${_fmtTempoMedioLiberada(mediaSecs)} (${fmt(mediaSecs)})\nHoras líquidas trabalhadas hoje: ${horasTxt} (${fmt(trabSecs)})\nEquipamentos liberados hoje: ${qtd}\nRitmo médio: ${maqHora} máq./hora`
+      : `Horas líquidas trabalhadas hoje: ${horasTxt}\nEquipamentos liberados hoje: ${qtd}`;
+  }
+}
+
+function _atualizarRitmoLiberadasQualidade(qtdDia, targetDateStr) {
+  const elRitmo = document.getElementById('qual-stats-ritmo-liberados');
+  const elSub   = document.getElementById('qual-stats-ritmo-sub');
+  const elCard  = document.getElementById('qual-card-ritmo-liberados');
+  if (!elRitmo) return;
+
+  if (typeof qtdDia !== 'number' || isNaN(qtdDia)) {
+    qtdDia = Number(document.getElementById('qual-stats-liberados')?.textContent) || 0;
+  }
+  if (!targetDateStr) {
+    const df = document.getElementById('qual-reg-date-filter');
+    if (df && df.value) {
+      const [yyyy, mm, dd] = df.value.split('-');
+      targetDateStr = `${dd}/${mm}/${yyyy}`;
+    }
+  }
+
+  const trabSecs  = _calcHorasTrabalhadasExpedienteDiaSecs(targetDateStr);
+  const mediaSecs = (qtdDia > 0 && trabSecs > 0) ? Math.round(trabSecs / qtdDia) : 0;
+  const maqHora   = (qtdDia > 0 && trabSecs > 0) ? (qtdDia / (trabSecs / 3600)).toFixed(1).replace('.', ',') : '0,0';
+  const horasTxt  = _fmtHorasTrabCurto(trabSecs);
+
+  elRitmo.textContent = mediaSecs > 0 ? _fmtTempoMedioLiberada(mediaSecs) : '—';
+  if (elSub) {
+    elSub.textContent = trabSecs > 0
+      ? `${horasTxt} trab. · ${maqHora} máq./h`
+      : 'Expediente não iniciado';
+  }
+  if (elCard) {
+    elCard.title = mediaSecs > 0
+      ? `Tempo médio para ter 1 equipamento liberado no dia: ${_fmtTempoMedioLiberada(mediaSecs)} (${fmt(mediaSecs)})\nCálculo: ${horasTxt} líquidas trabalhadas ÷ ${qtdDia} equipamento(s) liberado(s)\nCadência média: ${maqHora} equipamentos/hora`
+      : `Horas líquidas trabalhadas no dia: ${horasTxt}\nEquipamentos liberados: ${qtdDia}`;
+  }
+}
+
 // ── Badge "Liberadas no Dia" do Dashboard — canal realtime LEVE ─────────
 // Para quem NAO tem o listener completo de Qualidade (_qualListenerStarted):
 //  • 1 COUNT (HEAD) no login + a cada 60 min (correcao de deriva) + ao voltar do background
@@ -5608,6 +5737,7 @@ function _dashLibHojeStr(){ const d = new Date(); return d.getFullYear() + '-' +
 function _dashLibRender(){
   const el = document.getElementById('dash-liberadas-total');
   if (el && _dashLibCount != null) el.textContent = _dashLibCount;
+  if (typeof _atualizarRitmoLiberadasDashboard === 'function') _atualizarRitmoLiberadasDashboard(_dashLibCount);
 }
 async function _dashLibRecount(){
   try {
@@ -5737,11 +5867,16 @@ function _localISODate(d) {
 }
 
 // Pinta o badge "SAÚDE EQUIPE" do topo do Dashboard (mesmas faixas de cor do painel Admin)
-function _dashPaintSaudeEquipe(pct) {
+function _dashPaintSaudeEquipe(pct, activeCount, totalCount) {
   window._dashSaudeEquipePct = pct;
+  if (typeof activeCount === 'number') window._dashSaudeEquipeActive = activeCount;
+  if (typeof totalCount === 'number')  window._dashSaudeEquipeTotal  = totalCount;
   const el = document.getElementById('dash-health-total');
   if (!el) return;
-  el.textContent = pct + '%';
+  const act = window._dashSaudeEquipeActive;
+  const tot = window._dashSaudeEquipeTotal;
+  const countStr = (typeof act === 'number' && typeof tot === 'number') ? `${act}/${tot} · ` : '';
+  el.textContent = `${countStr}${pct}%`;
   el.style.color = pct < 50 ? '#f25757' : pct < 80 ? '#f5a623' : '#4ade80';
 }
 
@@ -5801,7 +5936,7 @@ async function fetchDashboardSaudeEquipe(force) {
 
     if (typeof seComputePostosDaySummary === 'function') {
       const summary = seComputePostosDaySummary(_ci || [], manualPresencas);
-      _dashPaintSaudeEquipe(summary.overallPct);
+      _dashPaintSaudeEquipe(summary.overallPct, summary.healthActive, summary.healthTotal);
     }
   } catch (e) {
     console.warn('Erro ao buscar saude da equipe pro dashboard:', e);
@@ -5828,6 +5963,20 @@ function _consultaIsSelbQuery(q){
   // Apenas considera busca global de SELB se for alfanumérico e tiver entre 3 e 6 caracteres
   // Isso evita que nomes (ex: "GUSTAVO", "EDUARDO") disparem a busca global ignorando a data
   return s.length >= 3 && s.length <= 6 && /^[A-Z0-9_-]+$/.test(s);
+}
+
+// Consulta curta (3-6 chars) pode ser SELB *ou* nome (ex.: "JOELMA", "ANA", "LUCAS").
+// Junta o resultado global por SELB (ignora data) com os registros do período carregado,
+// para que o nome também seja encontrado (nomes respeitam o período selecionado).
+function _consultaSelbOuNomeSrc(q){
+  const local = [].concat(_consultaRecords || [], typeof history !== 'undefined' ? history : []);
+  const glob = (_consultaSelbSearchRecs && _consultaSelbSearchQ === q) ? _consultaSelbSearchRecs : [];
+  return glob.concat(local).sort((a, b) => ((b && b.startEpoch) || 0) - ((a && a.startEpoch) || 0));
+}
+function _consultaMatchSelbOuNome(h, q, localSet){
+  if(String(h.selb || '').toUpperCase().includes(q)) return true;
+  if(!localSet || !localSet.has(h)) return false;
+  return String(h.name || '').toUpperCase().includes(q) || String(h.pin || '').includes(q);
 }
 
 // Retorna true se a query parece ser um nome ou PIN (não é SELB puro)
@@ -8490,12 +8639,8 @@ function renderConsulta(){
   const q = (document.getElementById('search-q').value||'').toUpperCase().trim();
   const selbMode = _consultaIsSelbQuery(q);
   const nomeMode = !selbMode && _consultaIsNomeQuery(q);
-  const src = (selbMode && _consultaSelbSearchRecs && _consultaSelbSearchQ === q)
-    ? _consultaSelbSearchRecs
-    : (selbMode
-        ? [].concat(_consultaRecords || [], typeof history !== 'undefined' ? history : [])
-            .filter(h => h && h.selb && String(h.selb).toUpperCase().includes(q))
-        : _consultaRecords);
+  const src = selbMode ? _consultaSelbOuNomeSrc(q) : _consultaRecords;
+  const _locSet = selbMode ? new Set([].concat(_consultaRecords || [], typeof history !== 'undefined' ? history : [])) : null;
   const tbody = document.getElementById('consulta-body');
   if(!tbody) return;
 
@@ -8531,7 +8676,7 @@ function renderConsulta(){
     // Em modo nome (texto longo ou com espaço): filtra por nome/PIN no período carregado, respeita data
     // Modo normal: filtra por qualquer campo
     const mq = selbMode
-      ? String(h.selb||'').toUpperCase().includes(q)
+      ? _consultaMatchSelbOuNome(h, q, _locSet)
       : (!q || h.selb.includes(q) || (h.name||'').toUpperCase().includes(q) || (h.pin||'').includes(q) || (h.local||'').toUpperCase().includes(q) || (h.code||'').toUpperCase().includes(q));
     const ms = !stFilter || h.status === stFilter || (stFilter === 'Máquina A' && h.status === 'Máquina A') || (stFilter === 'Retomada A.G' && h.status === 'Retomada A.G');
     return mq&&ms&&(!cFilter||h.sector===cFilter);
@@ -8541,7 +8686,7 @@ function renderConsulta(){
   if(hintEl){
     if(selbMode){
       hintEl.style.display = 'block';
-      hintEl.textContent = '🔍 Busca por SELB "' + q + '" — filtro de data ignorado' + (fl.length ? ' · ' + fl.length + ' registro(s)' : '');
+      hintEl.textContent = '🔍 Busca por SELB "' + q + '" (ignora a data) ou nome/PIN (no período selecionado)' + (fl.length ? ' · ' + fl.length + ' registro(s)' : '');
     } else if(nomeMode){
       hintEl.style.display = 'block';
       hintEl.textContent = '👤 Buscando por nome/PIN "' + q + '" — filtro de data respeitado' + (fl.length ? ' · ' + fl.length + ' registro(s)' : '');
@@ -8554,7 +8699,7 @@ function renderConsulta(){
   const colspan = 12 + extraCols;
   if(!fl.length){
     tbody.innerHTML = selbMode
-      ? `<tr><td colspan="${colspan}" class="empty">Nenhum SELB encontrado com "${q}".</td></tr>`
+      ? `<tr><td colspan="${colspan}" class="empty">Nenhum SELB ou nome encontrado com "${q}" (nomes são buscados só no período selecionado).</td></tr>`
       : `<tr><td colspan="${colspan}" class="empty">Nenhum registro encontrado.</td></tr>`;
     return;
   }
@@ -9096,13 +9241,14 @@ async function confirmarEdicaoStatus(){
 function copiarSelbs(){
   const q=(document.getElementById('search-q').value||'').toUpperCase().trim();
   const selbMode = _consultaIsSelbQuery(q);
-  const src = (selbMode && _consultaSelbSearchRecs && _consultaSelbSearchQ === q)
-    ? _consultaSelbSearchRecs
+  const src = selbMode
+    ? _consultaSelbOuNomeSrc(q)
     : ((_consultaRecords && _consultaRecords.length > 0) ? _consultaRecords : history);
+  const _locSet = selbMode ? new Set([].concat(_consultaRecords || [], typeof history !== 'undefined' ? history : [])) : null;
   const fl=src.filter(h=>{
     if(h.status==='closed_stale') return false;
     const mq = selbMode
-      ? String(h.selb||'').toUpperCase().includes(q)
+      ? _consultaMatchSelbOuNome(h, q, _locSet)
       : (!q||h.selb.includes(q)||h.name.toUpperCase().includes(q)||h.pin.includes(q)||(h.local||'').toUpperCase().includes(q)||(h.code||'').toUpperCase().includes(q));
     return mq&&(!cFilter||h.sector===cFilter);
   });
@@ -10213,7 +10359,7 @@ function renderTeamHealth(dateVal, checkinRows, prodCount, noDataAtAll, manualPr
     +'</tr>';
   }).join('');
 
-  if (dateVal === _localISODate() && !noDataAtAll && typeof _dashPaintSaudeEquipe === 'function') _dashPaintSaudeEquipe(overallPct);
+  if (dateVal === _localISODate() && !noDataAtAll && typeof _dashPaintSaudeEquipe === 'function') _dashPaintSaudeEquipe(overallPct, healthActive, healthTotal);
   var overallColor = '#4ade80';
   if(overallPct < 50) overallColor = '#f25757';
   else if(overallPct < 80) overallColor = '#f5a623';
@@ -10851,6 +10997,15 @@ function setGlobalDatePreset(preset){
   window._relFilterChosen = true;
   _relHidePlaceholder();
   _relHistoryCache = null; // limpa cache ao trocar o período
+  if(window._currentRelSubTab === 'modelo'){
+    if(preset === 'month' && typeof setModeloWindow === 'function'){
+      setModeloWindow(30, document.querySelector('#modelo-window-tabs .modelo-win-btn[data-days="30"]'));
+      return;
+    } else if(typeof setModeloCustomDates === 'function'){
+      setModeloCustomDates(from, to);
+      return;
+    }
+  }
   if(typeof setRelSubTab === 'function' && window._currentRelSubTab){
     setRelSubTab(window._currentRelSubTab);
   } else {
@@ -10886,6 +11041,11 @@ async function onGlobalDateChange(){
   _syncGlobalToLocalFilters();
   window._relFilterChosen = true;
   _relHidePlaceholder();
+  if(window._currentRelSubTab === 'modelo' && typeof setModeloCustomDates === 'function'){
+    const cur = _getGlobalDates();
+    setModeloCustomDates(cur.from, cur.to);
+    return;
+  }
   // restaura a sub-aba ativa para sair do estado de placeholder
   if(typeof setRelSubTab === 'function' && window._currentRelSubTab){
     setRelSubTab(window._currentRelSubTab);
@@ -11048,15 +11208,23 @@ async function loadRelByDate(){
 let chartProd=null, chartTempo=null, chartStatus=null;
 let scrapFilter='';
 // ════════════════════════════════════════════════════════
-// RELATÓRIO: TEMPO MÉDIO POR MODELO — POR USUÁRIO
+// RELATÓRIO: TEMPO MÉDIO POR MODELO — POR USUÁRIO (INDIVIDUAL & COMPARATIVO LADO A LADO)
 // ════════════════════════════════════════════════════════
-let _usuarioSector  = '';
-let _usuarioSelUid  = null;
-let _chartUsuario   = null;
-let _usuarioAllRecs = null; // cache de registros carregados do Supabase para o período
+let _usuarioSector     = '';
+let _usuarioSelUid     = null; // 1º profissional selecionado (mantido por compatibilidade)
+let _usuarioSelUid2    = null; // 2º profissional selecionado (para comparativo lado a lado)
+let _usuarioCommonOnly = false; // no modo 2 profissionais: filtrar apenas modelos em comum
+let _usuarioCompSort   = 'qtd'; // 'qtd' | 'diffDesc' | 'diffAsc' | 'avg1' | 'avg2' | 'nome'
+let _chartUsuario      = null;
+let _usuarioAllRecs    = null; // cache de registros carregados do Supabase para o período
 
-// Carrega registros do Supabase conforme o período selecionado
+// Carrega registros do Supabase conforme o período global selecionado (ou fallback para select legado)
 async function loadUsuarioByPeriod(){
+  const {from, to} = (typeof _getGlobalDates === 'function') ? _getGlobalDates() : {from:'', to:''};
+  if(from && to && typeof _loadUsuarioByGlobalDate === 'function'){
+    await _loadUsuarioByGlobalDate();
+    return;
+  }
   const period  = (document.getElementById('usuario-period')||{}).value || 'today';
   const loading = document.getElementById('usuario-loading');
   if(loading) loading.style.display = 'block';
@@ -11064,14 +11232,13 @@ async function loadUsuarioByPeriod(){
   const todayDk  = new Date().toDateString().replace(/ /g,'_');
   const todayISO = new Date().toISOString().slice(0,10);
 
-  // Monta lista de dateKeys conforme o período
   let dateKeys = [];
   if(period === 'today'){
     dateKeys = [todayDk];
   } else {
     const days = period === 'week' ? 6 : period === 'month' ? 29 : 364;
-    const from = new Date(); from.setDate(from.getDate() - days);
-    const fromISO = from.toISOString().slice(0,10);
+    const fromD = new Date(); fromD.setDate(fromD.getDate() - days);
+    const fromISO = fromD.toISOString().slice(0,10);
     dateKeys = dateRangeKeys(fromISO, todayISO);
   }
 
@@ -11095,7 +11262,6 @@ async function loadUsuarioByPeriod(){
 }
 
 async function onUsuarioPeriodChange(){
-  _usuarioSelUid = null; // reset seleção ao mudar período
   await loadUsuarioByPeriod();
   renderUsuarioRel();
 }
@@ -11103,11 +11269,76 @@ async function onUsuarioPeriodChange(){
 function setUsuarioFilter(sector, btn){
   _usuarioSector = sector;
   document.querySelectorAll('#usuario-tabs .stab').forEach(b => b.classList.remove('a-all','a-mont','a-limp','a-comp','a-elet'));
-  btn.classList.add('a-all');
-  _usuarioSelUid = null; // reset seleção ao trocar setor
+  if(btn) btn.classList.add(sector ? 'a-'+sc(sector) : 'a-all');
+  _usuarioSelUid  = null;
+  _usuarioSelUid2 = null;
   renderUsuarioRel();
 }
 
+function onUsuarioSelectDropdown(slot, uid){
+  const val = uid || null;
+  if(slot === 0){
+    if(val && val === _usuarioSelUid2){
+      _usuarioSelUid2 = _usuarioSelUid;
+    }
+    _usuarioSelUid = val;
+    if(!_usuarioSelUid && _usuarioSelUid2){
+      _usuarioSelUid  = _usuarioSelUid2;
+      _usuarioSelUid2 = null;
+    }
+  } else {
+    if(val && val === _usuarioSelUid){
+      return renderUsuarioRel();
+    }
+    if(!_usuarioSelUid && val){
+      _usuarioSelUid  = val;
+      _usuarioSelUid2 = null;
+    } else {
+      _usuarioSelUid2 = val;
+    }
+  }
+  renderUsuarioRel();
+}
+
+function usuarioToggleProfChip(uid){
+  if(!uid) return;
+  if(uid === _usuarioSelUid){
+    // Remove o 1º; se houver 2º, promove o 2º para 1º
+    _usuarioSelUid  = _usuarioSelUid2;
+    _usuarioSelUid2 = null;
+  } else if(uid === _usuarioSelUid2){
+    _usuarioSelUid2 = null;
+  } else if(!_usuarioSelUid){
+    _usuarioSelUid = uid;
+  } else {
+    _usuarioSelUid2 = uid;
+  }
+  renderUsuarioRel();
+}
+
+function usuarioInverterComparacao(){
+  if(!_usuarioSelUid || !_usuarioSelUid2) return;
+  const tmp = _usuarioSelUid;
+  _usuarioSelUid  = _usuarioSelUid2;
+  _usuarioSelUid2 = tmp;
+  renderUsuarioRel();
+}
+
+function usuarioLimparSelecao(){
+  _usuarioSelUid  = null;
+  _usuarioSelUid2 = null;
+  renderUsuarioRel();
+}
+
+function setUsuarioCommonOnly(flag){
+  _usuarioCommonOnly = !!flag;
+  renderUsuarioRel();
+}
+
+function setUsuarioCompSort(val){
+  _usuarioCompSort = val || 'qtd';
+  renderUsuarioRel();
+}
 
 function _usuarioGetStatusFilter(){
   const v = (document.getElementById('usuario-status-filter')||{}).value || 'ok';
@@ -11115,12 +11346,6 @@ function _usuarioGetStatusFilter(){
 }
 
 // Retorna a duração (em segundos) a usar nos cálculos de média por modelo.
-// Regras para MONTAGEM e LIMPEZA:
-//   <= 15min  → excluir (retorna 0)
-//   > 6h      → ignorar  (retorna -1)
-//   > 180min e <= 6h → contabilizar com cap de 180min (retorna 10800)
-//   demais    → valor real
-// Para outros setores, retorna o valor bruto sem restrições.
 function calcDuracaoParaMedia(h){
   const _MIN    = 15  * 60;   //  15 min
   const _CAP    = 180 * 60;   // 180 min
@@ -11143,8 +11368,6 @@ function _usuarioGetRecords(){
     if(statusF === 'all' && !['ok','rep','scrap'].includes(h.status)) return false;
     if(!h.duracao || h.duracao === '00:00:00') return false;
     if(_usuarioSector && h.sector !== _usuarioSector) return false;
-    // MONTAGEM/LIMPEZA: exclui abaixo de 15min e acima de 6h;
-    // registros entre 180min–6h são mantidos e serão capados em calcDuracaoParaMedia.
     if(h.sector === 'MONTAGEM' || h.sector === 'LIMPEZA'){
       const d = calcDuracaoParaMedia(h);
       if(d <= 0) return false;
@@ -11153,24 +11376,64 @@ function _usuarioGetRecords(){
   });
 }
 
+function _usuarioBuildModelMap(recs){
+  const m = new Map(); // modelo → [secs]
+  (recs || []).forEach(h => {
+    const modelo = (h.equipamento || h.modelo || '(sem modelo)').trim();
+    const sec    = calcDuracaoParaMedia(h);
+    if(sec <= 0) return;
+    if(!m.has(modelo)) m.set(modelo, []);
+    m.get(modelo).push(sec);
+  });
+  return m;
+}
+
+function _usuarioFmtDiffBadge(diffSec, fasterLabel){
+  const abs = Math.abs(Math.round(diffSec));
+  const sign = diffSec > 0 ? '+' : diffSec < 0 ? '-' : '';
+  const color = diffSec > 60 ? 'var(--danger)' : diffSec < -60 ? 'var(--accent2)' : 'var(--muted)';
+  const icon  = diffSec > 60 ? '▲' : diffSec < -60 ? '▼' : '≈';
+  const extra = fasterLabel ? `<div style="font-size:10px;font-weight:600;color:var(--muted);margin-top:2px">${fasterLabel}</div>` : '';
+  return `<span style="color:${color};font-weight:700">${icon} ${sign}${fmt(abs)}</span>${extra}`;
+}
+
 function renderUsuarioRel(){
   const allRecs = _usuarioGetRecords();
   const searchQ = (document.getElementById('usuario-search')?.value || '').toUpperCase().trim();
 
-  // ── Atualiza label de período ──
-  const period  = (document.getElementById('usuario-period')||{}).value || 'today';
-  const labels  = {today:'Hoje', week:'Últimos 7 dias', month:'Últimos 30 dias', all:'Todos os períodos'};
-  const lbl     = document.getElementById('usuario-period-label');
-  if(lbl) lbl.textContent = (labels[period]||'') + ' — ' + allRecs.length + ' registro(s)';
+  // ── Atualiza label de período respeitando o filtro global de datas ──
+  const lbl = document.getElementById('usuario-period-label');
+  if(lbl){
+    const gd = (typeof _getGlobalDates === 'function') ? _getGlobalDates() : {from:'', to:''};
+    if(gd.from && gd.to){
+      const pTxt = gd.from === gd.to ? _fmtDateISO(gd.from) : `${_fmtDateISO(gd.from)} → ${_fmtDateISO(gd.to)}`;
+      lbl.textContent = `${pTxt} — ${allRecs.length} registro(s)`;
+    } else {
+      const period = (document.getElementById('usuario-period')||{}).value || 'today';
+      const labels = {today:'Hoje', week:'Últimos 7 dias', month:'Últimos 30 dias', all:'Todos os períodos'};
+      lbl.textContent = (labels[period]||'') + ' — ' + allRecs.length + ' registro(s)';
+    }
+  }
 
   // ── Monta lista de profissionais com registros ──
-  const profMap = new Map(); // uid → {name, sector, recs[]}
+  const profMap = new Map(); // uid → {name, sector, recs[], secsAll[]}
   allRecs.forEach(h => {
     if(!h.uid || !h.name) return;
-    if(!profMap.has(h.uid)) profMap.set(h.uid, {name: h.name, sector: h.sector||'', recs:[]});
-    profMap.get(h.uid).recs.push(h);
+    if(!profMap.has(h.uid)) profMap.set(h.uid, {name: h.name, sector: h.sector||'', recs:[], secsAll:[]});
+    const entry = profMap.get(h.uid);
+    entry.recs.push(h);
+    const s = calcDuracaoParaMedia(h);
+    if(s > 0) entry.secsAll.push(s);
   });
-  // Filtra chips pelo nome do profissional OU por modelos que ele possui
+
+  // Limpa seleção caso o profissional selecionado não esteja no período/setor atual
+  if(_usuarioSelUid && !profMap.has(_usuarioSelUid)) _usuarioSelUid = null;
+  if(_usuarioSelUid2 && !profMap.has(_usuarioSelUid2)) _usuarioSelUid2 = null;
+  if(!_usuarioSelUid && _usuarioSelUid2){
+    _usuarioSelUid  = _usuarioSelUid2;
+    _usuarioSelUid2 = null;
+  }
+
   const profsAll = [...profMap.entries()].sort((a,b) => a[1].name.localeCompare(b[1].name));
   const profs    = searchQ
     ? profsAll.filter(([, p]) =>
@@ -11179,56 +11442,62 @@ function renderUsuarioRel(){
       )
     : profsAll;
 
-  // ── Chips de seleção de usuário ──
-  const chipsEl  = document.getElementById('usuario-chips');
-  const selNomeEl = document.getElementById('usuario-sel-nome');
+  // ── Popula selects 1º e 2º profissional e botões de ação ──
+  const sel1El = document.getElementById('usuario-sel-1');
+  const sel2El = document.getElementById('usuario-sel-2');
+  if(sel1El){
+    sel1El.innerHTML = '<option value="" style="background:#0f131a;color:#e2e8f0">Selecionar 1º profissional...</option>' +
+      profsAll.map(([uid, p]) => `<option value="${uid}" style="background:#0f131a;color:#e2e8f0" ${uid === _usuarioSelUid ? 'selected' : ''}>${esc(p.name)} (${p.recs.length} · ${p.sector})</option>`).join('');
+  }
+  if(sel2El){
+    sel2El.innerHTML = '<option value="" style="background:#0f131a;color:#e2e8f0">+ Comparar com 2º profissional...</option>' +
+      profsAll.filter(([uid]) => uid !== _usuarioSelUid)
+              .map(([uid, p]) => `<option value="${uid}" style="background:#0f131a;color:#e2e8f0" ${uid === _usuarioSelUid2 ? 'selected' : ''}>${esc(p.name)} (${p.recs.length} · ${p.sector})</option>`).join('');
+  }
+  const btnSwap  = document.getElementById('usuario-btn-swap');
+  const btnClear = document.getElementById('usuario-btn-clear-sel');
+  if(btnSwap)  btnSwap.style.display  = (_usuarioSelUid && _usuarioSelUid2) ? 'inline-flex' : 'none';
+  if(btnClear) btnClear.style.display = (_usuarioSelUid || _usuarioSelUid2) ? 'inline-flex' : 'none';
+
+  // ── Grade de cards de profissionais ──
+  const chipsEl = document.getElementById('usuario-chips');
   if(chipsEl){
     chipsEl.innerHTML = '';
     if(!profs.length){
-      chipsEl.innerHTML = '<span style="font-size:12px;color:var(--muted)">Nenhum profissional com registros no período.</span>';
-      if(selNomeEl) selNomeEl.style.display = 'none';
+      chipsEl.innerHTML = '<span style="font-size:12px;color:var(--muted);grid-column:1/-1;padding:8px">Nenhum profissional com registros no período.</span>';
     }
     profs.forEach(([uid, p]) => {
-      const active   = uid === _usuarioSelUid;
-      const secColor = p.sector==='MONTAGEM'?'var(--mont)':p.sector==='LIMPEZA'?'var(--limp)':p.sector==='ELETRÔNICA'?'var(--elet)':'var(--comp)';
-      const initials = p.name.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
-      const chip     = document.createElement('button');
+      const is1 = uid === _usuarioSelUid;
+      const is2 = uid === _usuarioSelUid2;
+      const active = is1 || is2;
+      const accentColor = is1 ? '#a78bfa' : is2 ? '#38bdf8' : 'var(--border2)';
+      const bgColor     = is1 ? 'rgba(167,139,250,.18)' : is2 ? 'rgba(56,189,248,.16)' : 'var(--bg3)';
+      const secColor    = p.sector==='MONTAGEM'?'var(--mont)':p.sector==='LIMPEZA'?'var(--limp)':p.sector==='ELETRÔNICA'?'var(--elet)':'var(--comp)';
+      const initials    = p.name.trim().split(/\s+/).map(w=>w[0]).join('').slice(0,2).toUpperCase();
+      const badgeTxt    = is1 ? '1º' : is2 ? '2º' : initials;
+      const badgeBg     = is1 ? '#a78bfa' : is2 ? '#38bdf8' : secColor;
+      const badgeFg     = (is1 || is2) ? '#000' : '#fff';
+      const avgProf     = calcAverage(p.secsAll);
+
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.title = `${p.name} — ${p.recs.length} registro(s) · Média ${fmt(avgProf)} · ${p.sector}`;
       chip.innerHTML = `
-        <span style="display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;background:${active?'var(--purple)':secColor};color:#fff;font-size:10px;font-weight:700;flex-shrink:0">${initials}</span>
-        <span style="display:flex;flex-direction:column;align-items:flex-start;gap:1px">
-          <span style="font-size:12px;font-weight:600;color:${active?'var(--purple)':'var(--text)'};line-height:1.2">${p.name}</span>
-          <span style="font-size:10px;color:${active?'rgba(167,139,250,.8)':'var(--muted)'};line-height:1.2">${p.recs.length} registro${p.recs.length!==1?'s':''} · ${p.sector}</span>
+        <span style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:${badgeBg};color:${badgeFg};font-size:10.5px;font-weight:800;flex-shrink:0">${badgeTxt}</span>
+        <span style="display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:0;flex:1">
+          <span style="font-size:12px;font-weight:700;color:${is1?'#c4b5fd':is2?'#7dd3fc':'var(--text)'};line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">${esc(p.name)}</span>
+          <span style="font-size:10px;color:var(--muted);line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">${p.recs.length} reg. · <b style="color:var(--text);font-family:var(--mono)">${fmt(avgProf)}</b> · ${p.sector}</span>
         </span>`;
-      chip.style.cssText = `display:inline-flex;align-items:center;gap:9px;padding:7px 14px 7px 8px;border-radius:12px;cursor:pointer;font-family:var(--font);border:1px solid ${active?'var(--purple)':'var(--border2)'};background:${active?'rgba(167,139,250,.15)':'var(--bg3)'};transition:all .15s;text-align:left`;
-      chip.onmouseover = () => { if(uid!==_usuarioSelUid){ chip.style.borderColor='var(--border2)'; chip.style.background='var(--bg4)'; } };
-      chip.onmouseout  = () => { if(uid!==_usuarioSelUid){ chip.style.borderColor='var(--border2)'; chip.style.background='var(--bg3)'; } };
-      chip.onclick = () => {
-        _usuarioSelUid = uid === _usuarioSelUid ? null : uid;
-        renderUsuarioRel();
-      };
+      chip.style.cssText = `display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:11px;cursor:pointer;font-family:var(--font);border:1px solid ${accentColor};background:${bgColor};transition:all .15s;text-align:left;min-width:0;width:100%`;
+      chip.onmouseover = () => { if(!active){ chip.style.borderColor='rgba(255,255,255,.28)'; chip.style.background='var(--bg4)'; } };
+      chip.onmouseout  = () => { if(!active){ chip.style.borderColor='var(--border2)'; chip.style.background='var(--bg3)'; } };
+      chip.onclick = () => usuarioToggleProfChip(uid);
       chipsEl.appendChild(chip);
     });
-
-    // Mostra nome do selecionado no header
-    if(selNomeEl){
-      if(_usuarioSelUid && profMap.has(_usuarioSelUid)){
-        selNomeEl.textContent = '→ ' + profMap.get(_usuarioSelUid).name;
-        selNomeEl.style.display = 'block';
-      } else {
-        selNomeEl.style.display = 'none';
-      }
-    }
   }
 
   // ── Média geral por modelo (todos os profissionais) ──
-  const globalModelMap = new Map(); // modelo → [secs]
-  allRecs.forEach(h => {
-    const modelo = h.equipamento || h.modelo || '(sem modelo)';
-    const sec    = calcDuracaoParaMedia(h); // cap 180min para MONTAGEM/LIMPEZA
-    if(sec <= 0) return;
-    if(!globalModelMap.has(modelo)) globalModelMap.set(modelo, []);
-    globalModelMap.get(modelo).push(sec);
-  });
+  const globalModelMap = _usuarioBuildModelMap(allRecs);
   const globalAvg = new Map(); // modelo → avg secs
   globalModelMap.forEach((arr, modelo) => {
     globalAvg.set(modelo, calcAverage(arr));
@@ -11254,65 +11523,618 @@ function renderUsuarioRel(){
       mkKpi('Média geral', fmt(avgGeral), 'var(--warn)');
   }
 
-  // ── Se nenhum usuário selecionado, limpa gráfico e tabela ──
-  const bodyEl = document.getElementById('usuario-body');
+  const theadEl    = document.getElementById('usuario-thead');
+  const bodyEl     = document.getElementById('usuario-body');
+  const sumEl      = document.getElementById('usuario-comp-summary');
+  const ctrlEl     = document.getElementById('usuario-comp-controls');
+  const tblTitleEl = document.getElementById('usuario-table-title');
+  const tblSubEl   = document.getElementById('usuario-table-sub');
+  const chTitleEl  = document.getElementById('usuario-chart-title');
+  const chSubEl    = document.getElementById('usuario-chart-sub');
+
+  // ── Caso nenhum profissional esteja selecionado ──
   if(!_usuarioSelUid || !profMap.has(_usuarioSelUid)){
-    if(bodyEl) bodyEl.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:24px">Selecione um profissional acima para ver o detalhe.</td></tr>`;
+    if(sumEl){ sumEl.style.display = 'none'; sumEl.innerHTML = ''; }
+    if(ctrlEl) ctrlEl.style.display = 'none';
+    if(tblTitleEl) tblTitleEl.textContent = 'Detalhe por modelo';
+    if(tblSubEl)   tblSubEl.textContent   = '';
+    if(theadEl){
+      theadEl.innerHTML = `<tr>
+        <th>Modelo / Equipamento</th>
+        <th style="text-align:right">Qtd</th>
+        <th style="text-align:right">Mín</th>
+        <th style="text-align:right">Médio (usuário)</th>
+        <th style="text-align:right">Máx</th>
+        <th style="text-align:right">Média geral</th>
+        <th style="text-align:right">Diferença</th>
+      </tr>`;
+    }
+    if(bodyEl) bodyEl.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:28px">Selecione <b>1 profissional</b> acima para ver o desempenho por modelo, ou <b>2 profissionais</b> para compará-los lado a lado.</td></tr>`;
     if(_chartUsuario){ _chartUsuario.destroy(); _chartUsuario = null; }
     return;
   }
 
-  const selProf = profMap.get(_usuarioSelUid);
-  const selRecs = selProf.recs;
+  const prof1 = profMap.get(_usuarioSelUid);
+  const map1  = _usuarioBuildModelMap(prof1.recs);
+  const isCompare = !!(_usuarioSelUid2 && profMap.has(_usuarioSelUid2) && _usuarioSelUid2 !== _usuarioSelUid);
 
-  // ── Agrupa registros do usuário por modelo ──
-  const userModelMap = new Map(); // modelo → [secs]
-  selRecs.forEach(h => {
-    const modelo = h.equipamento || h.modelo || '(sem modelo)';
-    const sec    = calcDuracaoParaMedia(h); // cap 180min para MONTAGEM/LIMPEZA
-    if(sec <= 0) return;
-    if(!userModelMap.has(modelo)) userModelMap.set(modelo, []);
-    userModelMap.get(modelo).push(sec);
+  // ════════════════════════════════════════════════════════════════
+  // MODO 1: APENAS 1 PROFISSIONAL SELECIONADO
+  // ════════════════════════════════════════════════════════════════
+  if(!isCompare){
+    if(ctrlEl) ctrlEl.style.display = 'none';
+    if(tblTitleEl) tblTitleEl.innerHTML = `Detalhe por modelo — <span style="color:#a78bfa">${esc(prof1.name)}</span>`;
+    if(tblSubEl)   tblSubEl.textContent = `${prof1.recs.length} registro(s) · ${map1.size} modelo(s) distinto(s) · Setor ${prof1.sector}`;
+
+    const modelEntries = [...map1.entries()]
+      .map(([modelo, arr]) => {
+        const avg  = calcAverage(arr);
+        const min  = Math.min(...arr);
+        const max  = Math.max(...arr);
+        const gAvg = globalAvg.get(modelo) || avg;
+        return {modelo, arr, avg, min, max, gAvg, diff: avg - gAvg};
+      })
+      .filter(e => !searchQ || e.modelo.toUpperCase().includes(searchQ) || prof1.name.toUpperCase().includes(searchQ))
+      .sort((a,b) => b.arr.length - a.arr.length);
+
+    // Resumo individual (1 profissional: inclui projeção em máquinas/dia de 7h e diferença em máquinas vs. média geral)
+    const JORNADA_SECS = 7 * 3600; // 7h líquidas/dia por operador (25.200s)
+    const fmtMaq = v => Number(v || 0).toFixed(1).replace('.', ',');
+    if(sumEl){
+      const avgP1  = calcAverage(prof1.secsAll);
+      // Média geral ponderada nos mesmos modelos do profissional
+      const gWeightedArr = [];
+      map1.forEach((arr, mod) => {
+        const ga = globalAvg.get(mod) || calcAverage(arr);
+        for(let i=0; i<arr.length; i++) gWeightedArr.push(ga);
+      });
+      const avgLabSame = calcAverage(gWeightedArr);
+      const diffGeral  = avgP1 - avgLabSame;
+      const faster     = modelEntries.filter(e => e.diff < -60).length;
+      const slower     = modelEntries.filter(e => e.diff > 60).length;
+      const maqDiaProf = avgP1 > 0 ? (JORNADA_SECS / avgP1) : 0;
+      const maqDiaLab  = avgLabSame > 0 ? (JORNADA_SECS / avgLabSame) : 0;
+      const diffMaqDia = maqDiaProf - maqDiaLab;
+      const diffMaqColor = diffMaqDia > 0.1 ? 'var(--accent2)' : diffMaqDia < -0.1 ? 'var(--danger)' : 'var(--muted)';
+      const diffMaqSign  = diffMaqDia >= 0 ? '+' : '';
+
+      sumEl.style.display = 'block';
+      sumEl.innerHTML = `
+        <div style="background:var(--bg2);border:1px solid rgba(167,139,250,.45);border-radius:14px;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:12px">
+            <span style="display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:50%;background:#a78bfa;color:#000;font-weight:800;font-size:13px">1º</span>
+            <div>
+              <div style="font-size:15px;font-weight:700;color:var(--text)">${esc(prof1.name)} <span class="stag stag-${sc(prof1.sector)}" style="margin-left:6px">${prof1.sector}</span></div>
+              <div style="font-size:11px;color:var(--muted);margin-top:2px">Clique em outro profissional acima para comparar os dois lado a lado.</div>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+            <div>
+              <div style="font-size:10px;color:var(--muted);text-transform:uppercase">Tempo Médio do Prof.</div>
+              <div style="font-size:18px;font-weight:700;font-family:var(--mono);color:#c4b5fd">${fmt(avgP1)}</div>
+              <div style="font-size:10.5px;color:var(--muted);font-family:var(--mono)">≈ ${fmtMaq(maqDiaProf)} máq./dia (7h)</div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--muted);text-transform:uppercase">Média Geral (mesmos modelos)</div>
+              <div style="font-size:18px;font-weight:700;font-family:var(--mono);color:var(--warn)">${fmt(avgLabSame)}</div>
+              <div style="font-size:10.5px;color:var(--muted);font-family:var(--mono)">≈ ${fmtMaq(maqDiaLab)} máq./dia (7h)</div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--muted);text-transform:uppercase">Diferença vs. Média Geral</div>
+              <div style="font-size:16px;font-family:var(--mono);margin-top:2px">${_usuarioFmtDiffBadge(diffGeral, `${faster} modelo(s) abaixo da média · ${slower} acima`)}</div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--muted);text-transform:uppercase">Dif. em Máquinas (7h/dia)</div>
+              <div style="font-size:17px;font-weight:800;font-family:var(--mono);color:${diffMaqColor};margin-top:2px">🏭 ${diffMaqSign}${fmtMaq(diffMaqDia)} máq./dia</div>
+              <div style="font-size:10px;color:var(--muted);margin-top:1px">${diffMaqSign}${Math.round(diffMaqDia * 22)} máq./mês (22d)</div>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    if(theadEl){
+      theadEl.innerHTML = `<tr>
+        <th>Modelo / Equipamento</th>
+        <th style="text-align:right">Qtd</th>
+        <th style="text-align:right">Mín</th>
+        <th style="text-align:right;color:#c4b5fd">Médio (${esc(prof1.name)})</th>
+        <th style="text-align:right">Máx</th>
+        <th style="text-align:right">Média Geral</th>
+        <th style="text-align:right">Diferença vs. Média</th>
+        <th style="text-align:right">🏭 Dif. Máquinas (7h/dia)</th>
+      </tr>`;
+    }
+
+    if(bodyEl){
+      if(!modelEntries.length){
+        bodyEl.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:24px">Nenhum registro com duração válida para ${esc(prof1.name)}.</td></tr>`;
+      } else {
+        bodyEl.innerHTML = modelEntries.map(e => {
+          const diffSec   = e.diff;
+          const diffFmt   = (diffSec >= 0 ? '+' : '-') + fmt(Math.abs(diffSec));
+          const diffColor = diffSec > 60 ? 'var(--danger)' : diffSec < -60 ? 'var(--accent2)' : 'var(--muted)';
+          const diffIcon  = diffSec > 60 ? '▲' : diffSec < -60 ? '▼' : '≈';
+          const mProf = e.avg > 0 ? (JORNADA_SECS / e.avg) : 0;
+          const mLab  = e.gAvg > 0 ? (JORNADA_SECS / e.gAvg) : 0;
+          const dMaq  = mProf - mLab;
+          const dMaqSign  = dMaq >= 0 ? '+' : '';
+          const dMaqColor = dMaq > 0.1 ? 'var(--accent2)' : dMaq < -0.1 ? 'var(--danger)' : 'var(--muted)';
+          return `<tr>
+            <td style="font-weight:600;font-family:var(--mono);font-size:12px">${esc(e.modelo)}</td>
+            <td style="text-align:right;font-family:var(--mono)">${e.arr.length}</td>
+            <td style="text-align:right;font-family:var(--mono);color:var(--accent2)">${fmt(e.min)}</td>
+            <td style="text-align:right;font-family:var(--mono);color:#c4b5fd;font-weight:700">${fmt(e.avg)}<div style="font-size:10px;color:var(--muted);font-weight:500">${fmtMaq(mProf)}/dia</div></td>
+            <td style="text-align:right;font-family:var(--mono);color:var(--danger)">${fmt(e.max)}</td>
+            <td style="text-align:right;font-family:var(--mono);color:var(--warn)">${fmt(e.gAvg)}<div style="font-size:10px;color:var(--muted);font-weight:500">${fmtMaq(mLab)}/dia</div></td>
+            <td style="text-align:right;font-family:var(--mono);font-weight:700;color:${diffColor}">${diffIcon} ${diffFmt}</td>
+            <td style="text-align:right;font-family:var(--mono);font-weight:800;color:${dMaqColor}">${dMaqSign}${fmtMaq(dMaq)} máq./dia</td>
+          </tr>`;
+        }).join('');
+      }
+    }
+
+    // Gráfico individual
+    if(chTitleEl) chTitleEl.textContent = `Tempo médio por modelo — ${prof1.name} vs. Média Geral`;
+    if(chSubEl)   chSubEl.innerHTML = `Barra roxa = ${esc(prof1.name)} &nbsp;|&nbsp; Linha laranja = Média geral do laboratório`;
+    const ctx = document.getElementById('chart-usuario');
+    if(ctx){
+      if(_chartUsuario){ _chartUsuario.destroy(); _chartUsuario = null; }
+      const top = modelEntries.slice(0, 20);
+      _chartUsuario = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: top.map(e => e.modelo.length > 28 ? e.modelo.slice(0,26)+'…' : e.modelo),
+          datasets: [
+            {
+              label: prof1.name,
+              data: top.map(e => +(e.avg/3600).toFixed(4)),
+              backgroundColor: 'rgba(167,139,250,.75)',
+              borderColor: '#a78bfa',
+              borderWidth: 1,
+              borderRadius: 4,
+            },
+            {
+              label: 'Média geral',
+              data: top.map(e => +(e.gAvg/3600).toFixed(4)),
+              type: 'line',
+              borderColor: 'var(--warn)',
+              backgroundColor: 'transparent',
+              borderWidth: 2,
+              pointRadius: 4,
+              pointBackgroundColor: 'var(--warn)',
+              tension: 0.3,
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          plugins: {
+            legend: { labels: { color: '#e8ecf4', font: { size: 11 } } },
+            tooltip: {
+              callbacks: {
+                title: items => top[items[0]?.dataIndex]?.modelo || '',
+                label: ctx2 => {
+                  const e = top[ctx2.dataIndex];
+                  const val = ctx2.datasetIndex === 0 ? e.avg : e.gAvg;
+                  return ' ' + ctx2.dataset.label + ': ' + fmt(val);
+                }
+              }
+            }
+          },
+          scales: {
+            x: { ticks: { color:'#7a83a0', font:{size:10} }, grid:{color:'rgba(255,255,255,.05)'} },
+            y: {
+              ticks: { color:'#7a83a0', font:{size:10}, callback: v => v===0 ? '0' : fmtMin(v*3600) },
+              grid: { color:'rgba(255,255,255,.05)' }
+            }
+          }
+        }
+      });
+    }
+    return;
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // MODO 2: COMPARATIVO LADO A LADO (2 PROFISSIONAIS)
+  // ════════════════════════════════════════════════════════════════
+  const JORNADA_SECS = 7 * 3600; // 7h líquidas/dia por operador (25.200s)
+  const fmtMaq = v => Number(v || 0).toFixed(1).replace('.', ',');
+  const prof2 = profMap.get(_usuarioSelUid2);
+  const map2  = _usuarioBuildModelMap(prof2.recs);
+  const n1Short = prof1.name.trim().split(/\s+/).slice(0,2).join(' ');
+  const n2Short = prof2.name.trim().split(/\s+/).slice(0,2).join(' ');
+
+  // União de todos os modelos atendidos por Prof 1 ou Prof 2
+  const unionModels = new Set([...map1.keys(), ...map2.keys()]);
+  let allCompRows = [];
+  unionModels.forEach(modelo => {
+    const arr1 = map1.get(modelo) || [];
+    const arr2 = map2.get(modelo) || [];
+    const has1 = arr1.length > 0;
+    const has2 = arr2.length > 0;
+    const avg1 = has1 ? calcAverage(arr1) : 0;
+    const min1 = has1 ? Math.min(...arr1) : 0;
+    const max1 = has1 ? Math.max(...arr1) : 0;
+    const avg2 = has2 ? calcAverage(arr2) : 0;
+    const min2 = has2 ? Math.min(...arr2) : 0;
+    const max2 = has2 ? Math.max(...arr2) : 0;
+    const gAvg = globalAvg.get(modelo) || (has1 && has2 ? Math.round((avg1 + avg2)/2) : (avg1 || avg2));
+    const inCommon = has1 && has2;
+    const diff12   = inCommon ? (avg1 - avg2) : null; // < 0 => 1º é mais rápido; > 0 => 2º é mais rápido
+    const absDiff  = inCommon ? Math.abs(diff12) : -1;
+
+    // Projeção de máquinas por dia (jornada de 7h = 25.200s) com base no tempo médio do modelo
+    const maqDia1 = (has1 && avg1 > 0) ? (JORNADA_SECS / avg1) : 0;
+    const maqDia2 = (has2 && avg2 > 0) ? (JORNADA_SECS / avg2) : 0;
+    const maqDiaG = (gAvg > 0) ? (JORNADA_SECS / gAvg) : 0;
+    const diffMaqDia   = inCommon ? Math.abs(maqDia1 - maqDia2) : -1;
+    // Diferença equivalente em máquinas sobre o volume produzido do modelo (tempo economizado ÷ tempo médio do mais rápido)
+    const fastAvg = inCommon ? Math.min(avg1, avg2) : 0;
+    const slowQtd = inCommon ? (avg1 > avg2 ? arr1.length : arr2.length) : 0;
+    const diffMaqLote = (inCommon && fastAvg > 0) ? ((slowQtd * Math.abs(diff12)) / fastAvg) : 0;
+
+    allCompRows.push({
+      modelo,
+      arr1, arr2,
+      qtd1: arr1.length, qtd2: arr2.length,
+      qtdTotal: arr1.length + arr2.length,
+      has1, has2, inCommon,
+      avg1, min1, max1,
+      avg2, min2, max2,
+      gAvg,
+      diff12,
+      absDiff,
+      maqDia1, maqDia2, maqDiaG,
+      diffMaqDia,
+      diffMaqLote,
+      slowQtd,
+      diff1G: has1 ? (avg1 - gAvg) : null,
+      diff2G: has2 ? (avg2 - gAvg) : null
+    });
   });
 
-  // Ordena por quantidade decrescente e filtra pelo termo de busca se aplicável
-  const modelEntries = [...userModelMap.entries()]
-    .map(([modelo, arr]) => {
-      const avg = calcAverage(arr);
-      const min = Math.min(...arr);
-      const max = Math.max(...arr);
-      const gAvg = globalAvg.get(modelo) || avg;
-      return {modelo, arr, avg, min, max, gAvg, diff: avg - gAvg};
-    })
-    .filter(e => !searchQ || e.modelo.toUpperCase().includes(searchQ))
-    .sort((a,b) => b.arr.length - a.arr.length);
+  // Se a caixa de busca corresponder a um modelo específico (e não apenas ao nome de um dos profissionais), filtra os modelos
+  const searchMatchesProf = searchQ && (prof1.name.toUpperCase().includes(searchQ) || prof2.name.toUpperCase().includes(searchQ));
+  if(searchQ && !searchMatchesProf){
+    allCompRows = allCompRows.filter(r => r.modelo.toUpperCase().includes(searchQ));
+  }
 
-  // ── Gráfico ──
+  const commonRows = allCompRows.filter(r => r.inCommon);
+  const totalUnionCount  = allCompRows.length;
+  const totalCommonCount = commonRows.length;
+
+  // Atualiza controles de filtro/ordenação da tabela comparativa
+  if(ctrlEl){
+    ctrlEl.style.display = 'flex';
+    const bAll = document.getElementById('btn-usu-mode-all');
+    const bCom = document.getElementById('btn-usu-mode-common');
+    if(bAll){
+      bAll.textContent = `Todos os modelos (${totalUnionCount})`;
+      bAll.style.background = !_usuarioCommonOnly ? 'var(--accent)' : 'transparent';
+      bAll.style.color      = !_usuarioCommonOnly ? '#fff' : 'var(--muted)';
+    }
+    if(bCom){
+      bCom.textContent = `⚡ Apenas em comum (${totalCommonCount})`;
+      bCom.style.background = _usuarioCommonOnly ? 'var(--accent)' : 'transparent';
+      bCom.style.color      = _usuarioCommonOnly ? '#fff' : 'var(--muted)';
+    }
+    const sortSel = document.getElementById('usuario-comp-sort');
+    if(sortSel) sortSel.value = _usuarioCompSort;
+  }
+
+  // Estatísticas comparativas para os 3 cards de resumo
+  const avgGeral1 = calcAverage(prof1.secsAll);
+  const avgGeral2 = calcAverage(prof2.secsAll);
+  const avgCommon1 = totalCommonCount > 0 ? Math.round(commonRows.reduce((s, r) => s + r.avg1, 0) / totalCommonCount) : 0;
+  const avgCommon2 = totalCommonCount > 0 ? Math.round(commonRows.reduce((s, r) => s + r.avg2, 0) / totalCommonCount) : 0;
+  const wins1 = commonRows.filter(r => r.diff12 < -60).length;
+  const wins2 = commonRows.filter(r => r.diff12 > 60).length;
+  const ties  = commonRows.filter(r => Math.abs(r.diff12) <= 60).length;
+
+  // Capacidade diária (7h = 25.200s) com base nos tempos médios
+  const maqDiaGeral1  = avgGeral1  > 0 ? (JORNADA_SECS / avgGeral1)  : 0;
+  const maqDiaGeral2  = avgGeral2  > 0 ? (JORNADA_SECS / avgGeral2)  : 0;
+  const maqDiaCommon1 = avgCommon1 > 0 ? (JORNADA_SECS / avgCommon1) : 0;
+  const maqDiaCommon2 = avgCommon2 > 0 ? (JORNADA_SECS / avgCommon2) : 0;
+
+  const baseMaq1 = totalCommonCount > 0 ? maqDiaCommon1 : maqDiaGeral1;
+  const baseMaq2 = totalCommonCount > 0 ? maqDiaCommon2 : maqDiaGeral2;
+  const diffMaqDiaResumo = Math.abs(baseMaq1 - baseMaq2);
+  const diffMaqMesResumo = Math.round(diffMaqDiaResumo * 22); // 22 dias úteis
+
+  // Diferença acumulada em máquinas nos modelos em comum (se o mais lento produzisse suas máquinas no ritmo médio do mais rápido em cada modelo)
+  let extraMaqNoVolume1 = 0; // quantas máquinas a mais o 1º faria no tempo que o 2º levou
+  let extraMaqNoVolume2 = 0; // quantas máquinas a mais o 2º faria no tempo que o 1º levou
+  commonRows.forEach(r => {
+    if(r.avg1 > 0 && r.avg2 > 0){
+      // No tempo gasto pelo 1º nas suas r.qtd1 máquinas (r.qtd1 * r.avg1), o 2º faria (r.qtd1 * r.avg1) / r.avg2 máquinas
+      extraMaqNoVolume2 += ((r.qtd1 * r.avg1) / r.avg2) - r.qtd1;
+      extraMaqNoVolume1 += ((r.qtd2 * r.avg2) / r.avg1) - r.qtd2;
+    }
+  });
+
+  const baseDiff = totalCommonCount > 0 ? (avgCommon1 - avgCommon2) : (avgGeral1 - avgGeral2);
+  const absBaseDiff = Math.abs(baseDiff);
+  let headlineDiffHtml = '';
+  let maqDiffBannerHtml = '';
+  if(absBaseDiff <= 60){
+    headlineDiffHtml = `<div style="font-size:15px;font-weight:800;color:var(--accent2)">≈ Ritmo equivalente (dif. ${fmt(absBaseDiff)})</div>`;
+    maqDiffBannerHtml = `
+      <div style="margin-top:8px;background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.3);border-radius:10px;padding:8px 12px;font-size:11.5px;color:var(--text)">
+        🏭 <b>Diferença em máquinas (7h/dia):</b> ~<b>${fmtMaq(diffMaqDiaResumo)} máq./dia</b> (${fmtMaq(baseMaq1)}/dia vs ${fmtMaq(baseMaq2)}/dia)
+      </div>`;
+  } else if(baseDiff < 0){
+    // 1º é mais rápido
+    const extraLote = Math.max(0, extraMaqNoVolume1);
+    headlineDiffHtml = `<div style="font-size:15px;font-weight:800;color:#c4b5fd">⚡ 1º ${esc(n1Short)} é <span style="font-family:var(--mono);color:var(--accent2)">${fmt(absBaseDiff)}</span> mais rápido em média</div>`;
+    maqDiffBannerHtml = `
+      <div style="margin-top:8px;background:rgba(167,139,250,.12);border:1px solid rgba(167,139,250,.38);border-radius:10px;padding:9px 12px">
+        <div style="font-size:12.5px;font-weight:800;color:var(--accent2);font-family:var(--mono)">
+          🏭 +${fmtMaq(diffMaqDiaResumo)} máquinas/dia de diferença <span style="font-weight:600;color:var(--text);font-size:11px">(${fmtMaq(baseMaq1)}/dia vs ${fmtMaq(baseMaq2)}/dia em 7h)</span>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px">
+          📅 Em 22 dias úteis: <b style="color:var(--text)">+${diffMaqMesResumo} máq./mês</b>${totalCommonCount > 0 && extraLote >= 0.5 ? ` &nbsp;·&nbsp; 📦 No tempo dos ${totalCommonCount} modelos em comum: <b style="color:#c4b5fd">+${fmtMaq(extraLote)} máq.</b>` : ''}
+        </div>
+      </div>`;
+  } else {
+    // 2º é mais rápido
+    const extraLote = Math.max(0, extraMaqNoVolume2);
+    headlineDiffHtml = `<div style="font-size:15px;font-weight:800;color:#7dd3fc">⚡ 2º ${esc(n2Short)} é <span style="font-family:var(--mono);color:var(--accent2)">${fmt(absBaseDiff)}</span> mais rápido em média</div>`;
+    maqDiffBannerHtml = `
+      <div style="margin-top:8px;background:rgba(56,189,248,.12);border:1px solid rgba(56,189,248,.38);border-radius:10px;padding:9px 12px">
+        <div style="font-size:12.5px;font-weight:800;color:var(--accent2);font-family:var(--mono)">
+          🏭 +${fmtMaq(diffMaqDiaResumo)} máquinas/dia de diferença <span style="font-weight:600;color:var(--text);font-size:11px">(${fmtMaq(baseMaq2)}/dia vs ${fmtMaq(baseMaq1)}/dia em 7h)</span>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:3px">
+          📅 Em 22 dias úteis: <b style="color:var(--text)">+${diffMaqMesResumo} máq./mês</b>${totalCommonCount > 0 && extraLote >= 0.5 ? ` &nbsp;·&nbsp; 📦 No tempo dos ${totalCommonCount} modelos em comum: <b style="color:#7dd3fc">+${fmtMaq(extraLote)} máq.</b>` : ''}
+        </div>
+      </div>`;
+  }
+
+  if(sumEl){
+    sumEl.style.display = 'block';
+    sumEl.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">
+        <!-- Card 1º Profissional -->
+        <div style="background:var(--bg2);border:1px solid rgba(167,139,250,.5);border-radius:14px;padding:15px 18px;display:flex;flex-direction:column;justify-content:space-between">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px">
+            <div style="display:flex;align-items:center;gap:10px;min-width:0">
+              <span style="display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background:#a78bfa;color:#000;font-weight:800;font-size:12px;flex-shrink:0">1º</span>
+              <div style="min-width:0">
+                <div style="font-size:14px;font-weight:700;color:#c4b5fd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(prof1.name)}</div>
+                <div style="font-size:10.5px;color:var(--muted)">${prof1.sector} · ${prof1.recs.length} máquinas · ${map1.size} modelos</div>
+              </div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;background:var(--bg3);border-radius:10px;padding:10px 12px">
+            <div>
+              <div style="font-size:10px;color:var(--muted);text-transform:uppercase">Média Geral</div>
+              <div style="font-size:17px;font-weight:700;font-family:var(--mono);color:#c4b5fd;margin-top:2px">${fmt(avgGeral1)}</div>
+              <div style="font-size:10.5px;color:var(--muted);font-family:var(--mono);margin-top:2px">🏭 <b>${fmtMaq(maqDiaGeral1)}</b> máq./dia (7h)</div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--muted);text-transform:uppercase">Nos ${totalCommonCount} em comum</div>
+              <div style="font-size:17px;font-weight:700;font-family:var(--mono);color:var(--text);margin-top:2px">${totalCommonCount > 0 ? fmt(avgCommon1) : '—'}</div>
+              <div style="font-size:10.5px;color:var(--muted);font-family:var(--mono);margin-top:2px">${totalCommonCount > 0 ? `🏭 <b>${fmtMaq(maqDiaCommon1)}</b> máq./dia (7h)` : '—'}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card Central: Comparativo Direto -->
+        <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:15px 18px;display:flex;flex-direction:column;justify-content:space-between">
+          <div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px">
+              <span style="font-size:11px;font-weight:800;color:var(--warn);text-transform:uppercase;letter-spacing:.05em">⚔️ Comparativo Direto (1º vs 2º)</span>
+              <span style="font-size:10.5px;font-family:var(--mono);color:var(--muted);background:var(--bg3);padding:2px 8px;border-radius:12px">${totalCommonCount} de ${totalUnionCount} modelo(s) em comum</span>
+            </div>
+            ${headlineDiffHtml}
+            ${maqDiffBannerHtml}
+          </div>
+          <div style="margin-top:10px;background:var(--bg3);border-radius:10px;padding:8px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:11px">
+            <span style="color:#c4b5fd;font-weight:700">1º mais rápido: <b>${wins1}</b></span>
+            <span style="color:var(--muted)">Empate (≤1m): <b>${ties}</b></span>
+            <span style="color:#7dd3fc;font-weight:700">2º mais rápido: <b>${wins2}</b></span>
+          </div>
+        </div>
+
+        <!-- Card 2º Profissional -->
+        <div style="background:var(--bg2);border:1px solid rgba(56,189,248,.5);border-radius:14px;padding:15px 18px;display:flex;flex-direction:column;justify-content:space-between">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px">
+            <div style="display:flex;align-items:center;gap:10px;min-width:0">
+              <span style="display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;background:#38bdf8;color:#000;font-weight:800;font-size:12px;flex-shrink:0">2º</span>
+              <div style="min-width:0">
+                <div style="font-size:14px;font-weight:700;color:#7dd3fc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(prof2.name)}</div>
+                <div style="font-size:10.5px;color:var(--muted)">${prof2.sector} · ${prof2.recs.length} máquinas · ${map2.size} modelos</div>
+              </div>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;background:var(--bg3);border-radius:10px;padding:10px 12px">
+            <div>
+              <div style="font-size:10px;color:var(--muted);text-transform:uppercase">Média Geral</div>
+              <div style="font-size:17px;font-weight:700;font-family:var(--mono);color:#7dd3fc;margin-top:2px">${fmt(avgGeral2)}</div>
+              <div style="font-size:10.5px;color:var(--muted);font-family:var(--mono);margin-top:2px">🏭 <b>${fmtMaq(maqDiaGeral2)}</b> máq./dia (7h)</div>
+            </div>
+            <div>
+              <div style="font-size:10px;color:var(--muted);text-transform:uppercase">Nos ${totalCommonCount} em comum</div>
+              <div style="font-size:17px;font-weight:700;font-family:var(--mono);color:var(--text);margin-top:2px">${totalCommonCount > 0 ? fmt(avgCommon2) : '—'}</div>
+              <div style="font-size:10.5px;color:var(--muted);font-family:var(--mono);margin-top:2px">${totalCommonCount > 0 ? `🏭 <b>${fmtMaq(maqDiaCommon2)}</b> máq./dia (7h)` : '—'}</div>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // Filtra e ordena linhas para a tabela
+  let displayRows = _usuarioCommonOnly ? allCompRows.filter(r => r.inCommon) : allCompRows.slice();
+  displayRows.sort((a, b) => {
+    if(_usuarioCompSort === 'nome') return a.modelo.localeCompare(b.modelo);
+    if(_usuarioCompSort === 'diffMaq'){
+      if(a.inCommon !== b.inCommon) return a.inCommon ? -1 : 1;
+      return b.diffMaqDia - a.diffMaqDia;
+    }
+    if(_usuarioCompSort === 'diffDesc'){
+      if(a.inCommon !== b.inCommon) return a.inCommon ? -1 : 1;
+      return b.absDiff - a.absDiff;
+    }
+    if(_usuarioCompSort === 'diffAsc'){
+      if(a.inCommon !== b.inCommon) return a.inCommon ? -1 : 1;
+      return a.absDiff - b.absDiff;
+    }
+    if(_usuarioCompSort === 'avg1'){
+      if(a.has1 !== b.has1) return a.has1 ? -1 : 1;
+      return b.avg1 - a.avg1;
+    }
+    if(_usuarioCompSort === 'avg2'){
+      if(a.has2 !== b.has2) return a.has2 ? -1 : 1;
+      return b.avg2 - a.avg2;
+    }
+    // default ('qtd'): prioriza modelos em comum e depois maior volume total
+    if(a.inCommon !== b.inCommon) return a.inCommon ? -1 : 1;
+    return b.qtdTotal - a.qtdTotal;
+  });
+
+  if(tblTitleEl){
+    tblTitleEl.innerHTML = `Comparativo Lado a Lado por Modelo — <span style="color:#c4b5fd">1º ${esc(prof1.name)}</span> vs <span style="color:#7dd3fc">2º ${esc(prof2.name)}</span>`;
+  }
+  if(tblSubEl){
+    tblSubEl.textContent = `Exibindo ${displayRows.length} modelo(s) · ${totalCommonCount} modelo(s) feitos por ambos no período. A diferença em máquinas considera jornada líquida de 7h/dia por operador e também o volume produzido do modelo.`;
+  }
+
+  if(theadEl){
+    theadEl.innerHTML = `
+      <tr>
+        <th rowspan="2" style="vertical-align:middle;border-right:1px solid var(--border2)">Modelo / Equipamento</th>
+        <th colspan="3" style="text-align:center;color:#c4b5fd;background:rgba(167,139,250,.08);border-bottom:1px solid rgba(167,139,250,.3);border-right:1px solid var(--border2)">1º ${esc(n1Short)}</th>
+        <th colspan="3" style="text-align:center;color:#7dd3fc;background:rgba(56,189,248,.08);border-bottom:1px solid rgba(56,189,248,.3);border-right:1px solid var(--border2)">2º ${esc(n2Short)}</th>
+        <th rowspan="2" style="text-align:center;vertical-align:middle;border-right:1px solid var(--border2);min-width:165px">⚡ Diferença de Tempo<br><span style="font-size:9px;color:var(--muted);font-weight:500">(1º vs 2º)</span></th>
+        <th rowspan="2" style="text-align:center;vertical-align:middle;border-right:1px solid var(--border2);min-width:175px" title="Quantas máquinas de diferença esse tempo médio representa em um dia de 7h e sobre o lote produzido do modelo">🏭 Diferença em Máquinas<br><span style="font-size:9px;color:var(--muted);font-weight:500">Por Dia (7h) &amp; No Lote</span></th>
+        <th rowspan="2" style="text-align:right;vertical-align:middle">Média Geral<br><span style="font-size:9px;color:var(--muted);font-weight:500">Dif. 1º | 2º</span></th>
+      </tr>
+      <tr>
+        <th style="text-align:center;font-size:10px;background:rgba(167,139,250,.04)">Qtd</th>
+        <th style="text-align:center;font-size:10px;background:rgba(167,139,250,.04)">Mín / Máx</th>
+        <th style="text-align:center;font-size:10px;color:#c4b5fd;background:rgba(167,139,250,.1);border-right:1px solid var(--border2)">Tempo Médio · Máq/dia</th>
+        <th style="text-align:center;font-size:10px;background:rgba(56,189,248,.04)">Qtd</th>
+        <th style="text-align:center;font-size:10px;background:rgba(56,189,248,.04)">Mín / Máx</th>
+        <th style="text-align:center;font-size:10px;color:#7dd3fc;background:rgba(56,189,248,.1);border-right:1px solid var(--border2)">Tempo Médio · Máq/dia</th>
+      </tr>`;
+  }
+
+  if(bodyEl){
+    if(!displayRows.length){
+      bodyEl.innerHTML = `<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:26px">${_usuarioCommonOnly ? 'Nenhum modelo em comum entre os 2 profissionais neste período. Clique em "Todos os modelos" para ver os demais.' : 'Nenhum registro encontrado.'}</td></tr>`;
+    } else {
+      bodyEl.innerHTML = displayRows.map(r => {
+        const win1 = r.inCommon && r.diff12 < -60;
+        const win2 = r.inCommon && r.diff12 > 60;
+
+        // Célula de Diferença de Tempo (1º vs 2º)
+        let diffCell = '<span style="color:var(--muted);font-size:11px">Só 1 profissional fez</span>';
+        // Célula de Diferença em Máquinas (por dia de 7h + no lote produzido)
+        let maqDiffCell = '<span style="color:var(--muted);font-size:11px">—</span>';
+
+        if(r.inCommon){
+          const absD = Math.abs(r.diff12);
+          const pct  = r.avg2 > 0 ? Math.round((r.diff12 / r.avg2) * 100) : 0;
+          if(Math.abs(r.diff12) <= 60){
+            diffCell = `<div style="font-family:var(--mono);font-weight:700;color:var(--muted)">≈ ${fmt(absD)}</div>
+                        <div style="font-size:10px;color:var(--muted)">Tempos equivalentes</div>`;
+            maqDiffCell = `<div style="font-family:var(--mono);font-weight:700;color:var(--muted)">≈ ${fmtMaq(r.diffMaqDia)} máq./dia</div>
+                           <div style="font-size:10px;color:var(--muted)">${fmtMaq(r.maqDia1)}/d vs ${fmtMaq(r.maqDia2)}/d</div>`;
+          } else if(win1){
+            diffCell = `<div style="font-family:var(--mono);font-weight:800;color:var(--accent2)">-${fmt(absD)} (${pct}%)</div>
+                        <div style="font-size:10px;font-weight:700;color:#c4b5fd">⚡ 1º ${esc(n1Short)} mais rápido</div>`;
+            maqDiffCell = `<div style="font-family:var(--mono);font-weight:800;color:var(--accent2)">+${fmtMaq(r.diffMaqDia)} máq./dia <span style="font-size:10px;font-weight:600;color:#c4b5fd">(1º)</span></div>
+                           <div style="font-size:10px;color:var(--muted);font-family:var(--mono)">${fmtMaq(r.maqDia1)}/d vs ${fmtMaq(r.maqDia2)}/d${r.diffMaqLote >= 0.3 ? ` · <b style="color:var(--text)">+${fmtMaq(r.diffMaqLote)} máq.</b> em ${r.slowQtd}` : ''}</div>`;
+          } else {
+            diffCell = `<div style="font-family:var(--mono);font-weight:800;color:#38bdf8">+${fmt(absD)} (+${Math.abs(pct)}%)</div>
+                        <div style="font-size:10px;font-weight:700;color:#7dd3fc">⚡ 2º ${esc(n2Short)} mais rápido</div>`;
+            maqDiffCell = `<div style="font-family:var(--mono);font-weight:800;color:#38bdf8">+${fmtMaq(r.diffMaqDia)} máq./dia <span style="font-size:10px;font-weight:600;color:#7dd3fc">(2º)</span></div>
+                           <div style="font-size:10px;color:var(--muted);font-family:var(--mono)">${fmtMaq(r.maqDia2)}/d vs ${fmtMaq(r.maqDia1)}/d${r.diffMaqLote >= 0.3 ? ` · <b style="color:var(--text)">+${fmtMaq(r.diffMaqLote)} máq.</b> em ${r.slowQtd}` : ''}</div>`;
+          }
+        }
+
+        const fmtVsG = (d) => {
+          if(d === null) return '<span style="color:var(--muted)">—</span>';
+          const col = d > 60 ? 'var(--danger)' : d < -60 ? 'var(--accent2)' : 'var(--muted)';
+          const sgn = d >= 0 ? '+' : '-';
+          return `<span style="color:${col}">${sgn}${fmt(Math.abs(d))}</span>`;
+        };
+
+        return `<tr>
+          <td style="font-weight:600;font-family:var(--mono);font-size:12px;border-right:1px solid var(--border2)">
+            ${esc(r.modelo)}
+            ${r.inCommon ? '<span style="margin-left:6px;font-size:9.5px;padding:1px 6px;border-radius:8px;background:rgba(61,214,140,.12);color:var(--accent2);font-family:var(--font);font-weight:700">EM COMUM</span>' : ''}
+          </td>
+
+          <!-- 1º Profissional -->
+          <td style="text-align:center;font-family:var(--mono);color:${r.has1?'var(--text)':'var(--muted)'}">${r.has1 ? r.qtd1 : '—'}</td>
+          <td style="text-align:center;font-family:var(--mono);font-size:11px;color:var(--muted)">${r.has1 ? `${fmt(r.min1)} / ${fmt(r.max1)}` : '—'}</td>
+          <td style="text-align:center;font-family:var(--mono);font-weight:800;color:${r.has1 ? (win1 ? 'var(--accent2)' : '#c4b5fd') : 'var(--muted)'};background:rgba(167,139,250,.05);border-right:1px solid var(--border2)">
+            ${r.has1 ? `<div>${fmt(r.avg1)}${win1 ? ' ⚡' : ''}</div><div style="font-size:10px;color:var(--muted);font-weight:600">${fmtMaq(r.maqDia1)} máq./dia</div>` : '—'}
+          </td>
+
+          <!-- 2º Profissional -->
+          <td style="text-align:center;font-family:var(--mono);color:${r.has2?'var(--text)':'var(--muted)'}">${r.has2 ? r.qtd2 : '—'}</td>
+          <td style="text-align:center;font-family:var(--mono);font-size:11px;color:var(--muted)">${r.has2 ? `${fmt(r.min2)} / ${fmt(r.max2)}` : '—'}</td>
+          <td style="text-align:center;font-family:var(--mono);font-weight:800;color:${r.has2 ? (win2 ? 'var(--accent2)' : '#7dd3fc') : 'var(--muted)'};background:rgba(56,189,248,.05);border-right:1px solid var(--border2)">
+            ${r.has2 ? `<div>${fmt(r.avg2)}${win2 ? ' ⚡' : ''}</div><div style="font-size:10px;color:var(--muted);font-weight:600">${fmtMaq(r.maqDia2)} máq./dia</div>` : '—'}
+          </td>
+
+          <!-- Diferença de Tempo 1º vs 2º -->
+          <td style="text-align:center;border-right:1px solid var(--border2)">${diffCell}</td>
+
+          <!-- Diferença em Máquinas (7h/dia + lote) -->
+          <td style="text-align:center;background:rgba(16,185,129,.04);border-right:1px solid var(--border2)">${maqDiffCell}</td>
+
+          <!-- Média Geral + dif de cada um -->
+          <td style="text-align:right;font-family:var(--mono)">
+            <div style="color:var(--warn);font-weight:700">${fmt(r.gAvg)} <span style="font-size:10px;color:var(--muted);font-weight:500">(${fmtMaq(r.maqDiaG)}/d)</span></div>
+            <div style="font-size:10px;margin-top:2px">1º ${fmtVsG(r.diff1G)} &nbsp;|&nbsp; 2º ${fmtVsG(r.diff2G)}</div>
+          </td>
+        </tr>`;
+      }).join('');
+    }
+  }
+
+  // ── Gráfico Comparativo Lado a Lado ──
+  if(chTitleEl) chTitleEl.textContent = `Comparativo de Tempo Médio por Modelo — ${prof1.name} vs. ${prof2.name}`;
+  if(chSubEl)   chSubEl.innerHTML = `Barra roxa = 1º ${esc(prof1.name)} &nbsp;|&nbsp; Barra azul = 2º ${esc(prof2.name)} &nbsp;|&nbsp; Linha laranja = Média geral`;
+
   const ctx = document.getElementById('chart-usuario');
   if(ctx){
     if(_chartUsuario){ _chartUsuario.destroy(); _chartUsuario = null; }
-    const top = modelEntries.slice(0, 20); // max 20 modelos
+    // Prioriza os modelos da tabela atual (até 18 modelos para leitura limpa)
+    const chartRows = (displayRows.length ? displayRows : allCompRows).slice(0, 18);
     _chartUsuario = new Chart(ctx, {
       type: 'bar',
       data: {
-        labels: top.map(e => e.modelo),
+        labels: chartRows.map(r => r.modelo.length > 26 ? r.modelo.slice(0,24)+'…' : r.modelo),
         datasets: [
           {
-            label: selProf.name,
-            data: top.map(e => +(e.avg/3600).toFixed(4)),
-            backgroundColor: 'rgba(167,139,250,.7)',
-            borderColor: 'var(--purple)',
+            label: `1º ${prof1.name}`,
+            data: chartRows.map(r => r.has1 ? +(r.avg1/3600).toFixed(4) : null),
+            backgroundColor: 'rgba(167,139,250,.78)',
+            borderColor: '#a78bfa',
+            borderWidth: 1,
+            borderRadius: 4,
+          },
+          {
+            label: `2º ${prof2.name}`,
+            data: chartRows.map(r => r.has2 ? +(r.avg2/3600).toFixed(4) : null),
+            backgroundColor: 'rgba(56,189,248,.78)',
+            borderColor: '#38bdf8',
             borderWidth: 1,
             borderRadius: 4,
           },
           {
             label: 'Média geral',
-            data: top.map(e => +(e.gAvg/3600).toFixed(4)),
+            data: chartRows.map(r => +(r.gAvg/3600).toFixed(4)),
             type: 'line',
             borderColor: 'var(--warn)',
             backgroundColor: 'transparent',
             borderWidth: 2,
-            pointRadius: 4,
+            pointRadius: 3,
             pointBackgroundColor: 'var(--warn)',
             tension: 0.3,
           }
@@ -11320,15 +12142,25 @@ function renderUsuarioRel(){
       },
       options: {
         responsive: true,
+        interaction: { mode: 'index', intersect: false },
         plugins: {
           legend: { labels: { color: '#e8ecf4', font: { size: 11 } } },
           tooltip: {
             callbacks: {
+              title: items => chartRows[items[0]?.dataIndex]?.modelo || '',
               label: ctx2 => {
-                const idx = ctx2.dataIndex;
-                const e   = top[idx];
-                const val = ctx2.datasetIndex === 0 ? e.avg : e.gAvg;
-                return ' ' + ctx2.dataset.label + ': ' + fmtMin(val);
+                const r = chartRows[ctx2.dataIndex];
+                if(!r) return '';
+                if(ctx2.datasetIndex === 0) return ` 1º ${prof1.name}: ${r.has1 ? fmt(r.avg1) + ' ('+r.qtd1+' máq.)' : '—'}`;
+                if(ctx2.datasetIndex === 1) return ` 2º ${prof2.name}: ${r.has2 ? fmt(r.avg2) + ' ('+r.qtd2+' máq.)' : '—'}`;
+                return ` Média geral: ${fmt(r.gAvg)}`;
+              },
+              afterBody: items => {
+                const r = chartRows[items[0]?.dataIndex];
+                if(!r || !r.inCommon) return [];
+                const absD = fmt(Math.abs(r.diff12));
+                if(Math.abs(r.diff12) <= 60) return [`Diferença: ≈ ${absD} (equivalente)`];
+                return [r.diff12 < 0 ? `⚡ 1º ${n1Short} foi ${absD} mais rápido` : `⚡ 2º ${n2Short} foi ${absD} mais rápido`];
               }
             }
           }
@@ -11336,37 +12168,12 @@ function renderUsuarioRel(){
         scales: {
           x: { ticks: { color:'#7a83a0', font:{size:10} }, grid:{color:'rgba(255,255,255,.05)'} },
           y: {
-            ticks: { color:'#7a83a0', font:{size:10},
-              callback: v => v===0 ? '0' : fmtMin(v*3600)
-            },
+            ticks: { color:'#7a83a0', font:{size:10}, callback: v => v===0 ? '0' : fmtMin(v*3600) },
             grid: { color:'rgba(255,255,255,.05)' }
           }
         }
       }
     });
-  }
-
-  // ── Tabela ──
-  if(bodyEl){
-    if(!modelEntries.length){
-      bodyEl.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--muted);padding:24px">Nenhum registro com duração válida para ${selProf.name}.</td></tr>`;
-      return;
-    }
-    bodyEl.innerHTML = modelEntries.map(e => {
-      const diffSec  = e.diff;
-      const diffFmt  = (diffSec >= 0 ? '+' : '') + fmt(Math.abs(diffSec));
-      const diffColor = diffSec > 60 ? 'var(--danger)' : diffSec < -60 ? 'var(--accent2)' : 'var(--muted)';
-      const diffIcon  = diffSec > 60 ? '▲' : diffSec < -60 ? '▼' : '≈';
-      return `<tr>
-        <td style="font-weight:600;font-family:var(--mono);font-size:12px">${e.modelo}</td>
-        <td style="text-align:right">${e.arr.length}</td>
-        <td style="text-align:right;font-family:var(--mono);color:var(--accent2)">${fmt(e.min)}</td>
-        <td style="text-align:right;font-family:var(--mono);color:var(--purple);font-weight:700">${fmt(e.avg)}</td>
-        <td style="text-align:right;font-family:var(--mono);color:var(--danger)">${fmt(e.max)}</td>
-        <td style="text-align:right;font-family:var(--mono);color:var(--warn)">${fmt(e.gAvg)}</td>
-        <td style="text-align:right;font-family:var(--mono);font-weight:700;color:${diffColor}">${diffIcon} ${diffFmt}</td>
-      </tr>`;
-    }).join('');
   }
 }
 
@@ -11450,7 +12257,7 @@ function setRelSubTab(tab){
   initGlobalDateFilter();
 
   // Bloqueia exibição até o usuário escolher um filtro (data/preset)
-  if(!window._relFilterChosen && tab !== 'pedido' && tab !== 'saude-equipe'){
+  if(!window._relFilterChosen && tab !== 'pedido' && tab !== 'saude-equipe' && tab !== 'modelo'){
     _relShowPlaceholder();
     return;
   }
@@ -12867,9 +13674,12 @@ function renderScrapRel(){
 // ════ TEMPO POR MODELO — todos os períodos e por Mês (Lado a Lado) ════
 let modeloFilter = '';
 // Janela de tempo (em dias) usada pelo relatório Tempo Médio por Modelo.
-// Valores válidos: 30, 60, 90. Default = 90. Quando _modeloMonthFilter está preenchido ('YYYY-MM'), filtra pelo mês.
+// Só exibe o relatório após o usuário escolher um filtro (30/60/90 dias, Mês Atual, Mês ou Data personalizada).
+let _modeloFilterChosen = false;
 let _modeloWindowDays = 90;
 let _modeloMonthFilter = ''; // ex: '2026-11'
+let _modeloCustomFrom  = ''; // ex: '2026-11-05'
+let _modeloCustomTo    = ''; // ex: '2026-11-19'
 const _modeloLoadedMonths = new Set();
 
 function _formatMonthPtBr(yyyyMm){
@@ -12887,12 +13697,31 @@ function _getModeloRecDateMs(h){
 }
 
 function _getModeloActiveRange(){
+  if(_modeloCustomFrom && _modeloCustomTo && /^\d{4}-\d{2}-\d{2}$/.test(_modeloCustomFrom) && /^\d{4}-\d{2}-\d{2}$/.test(_modeloCustomTo)){
+    const [y1, m1, d1] = _modeloCustomFrom.split('-').map(Number);
+    const [y2, m2, d2] = _modeloCustomTo.split('-').map(Number);
+    const startMs = new Date(y1, m1 - 1, d1, 0, 0, 0, 0).getTime();
+    const endMs   = new Date(y2, m2 - 1, d2, 23, 59, 59, 999).getTime();
+    const fStr = _fmtDateISO(_modeloCustomFrom);
+    const tStr = _fmtDateISO(_modeloCustomTo);
+    const lbl  = _modeloCustomFrom === _modeloCustomTo ? fStr : `${fStr} → ${tStr}`;
+    return {
+      isCustom: true,
+      isMonth: false,
+      monthKey: '',
+      startMs,
+      endMs,
+      label: `Período ${lbl}`,
+      shortBadge: `📅 ${lbl}`
+    };
+  }
   if(_modeloMonthFilter && /^\d{4}-\d{2}$/.test(_modeloMonthFilter)){
     const [yy, mm] = _modeloMonthFilter.split('-').map(Number);
     const startMs = new Date(yy, mm - 1, 1, 0, 0, 0, 0).getTime();
     const endMs   = new Date(yy, mm, 0, 23, 59, 59, 999).getTime();
     const mLabel  = _formatMonthPtBr(_modeloMonthFilter);
     return {
+      isCustom: false,
       isMonth: true,
       monthKey: _modeloMonthFilter,
       startMs,
@@ -12903,6 +13732,7 @@ function _getModeloActiveRange(){
   }
   const winDays = (typeof _modeloWindowDays === 'number' && _modeloWindowDays > 0) ? _modeloWindowDays : 90;
   return {
+    isCustom: false,
     isMonth: false,
     monthKey: '',
     startMs: Date.now() - winDays * 24 * 60 * 60 * 1000,
@@ -12912,9 +13742,22 @@ function _getModeloActiveRange(){
   };
 }
 
+function _clearModeloCustomDateInputs(){
+  _modeloCustomFrom = '';
+  _modeloCustomTo   = '';
+  const df = document.getElementById('modelo-date-from');
+  const dt = document.getElementById('modelo-date-to');
+  const dw = document.getElementById('modelo-custom-date-wrap');
+  if(df) df.value = '';
+  if(dt) dt.value = '';
+  if(dw) dw.style.borderColor = 'var(--border2)';
+}
+
 function setModeloWindow(days, btn){
+  _modeloFilterChosen = true;
   _modeloWindowDays = days;
   _modeloMonthFilter = '';
+  _clearModeloCustomDateInputs();
   document.querySelectorAll('#modelo-window-tabs .modelo-win-btn').forEach(b => b.classList.remove('active'));
   if(btn) btn.classList.add('active');
   const wrap = document.getElementById('modelo-month-wrap');
@@ -12934,11 +13777,17 @@ function setModeloCurrentMonth(btn){
 
 function setModeloMonth(yyyyMm, btn){
   if(!yyyyMm){
-    const btn90 = document.querySelector('#modelo-window-tabs .modelo-win-btn[data-days="90"]');
-    setModeloWindow(90, btn90);
+    _modeloMonthFilter = '';
+    const wrap = document.getElementById('modelo-month-wrap');
+    if(wrap) wrap.style.borderColor = 'var(--border2)';
+    document.querySelectorAll('#modelo-window-tabs .modelo-win-btn').forEach(b => b.classList.remove('active'));
+    _modeloFilterChosen = false;
+    if(typeof renderModeloRel === 'function') renderModeloRel();
     return;
   }
+  _modeloFilterChosen = true;
   _modeloMonthFilter = yyyyMm;
+  _clearModeloCustomDateInputs();
   document.querySelectorAll('#modelo-window-tabs .modelo-win-btn').forEach(b => b.classList.remove('active'));
   const now = new Date();
   const curYyyyMm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -12950,6 +13799,61 @@ function setModeloMonth(yyyyMm, btn){
   const picker = document.getElementById('modelo-month-picker');
   if(picker && picker.value !== yyyyMm) picker.value = yyyyMm;
   if(typeof renderModeloRel === 'function') renderModeloRel();
+}
+
+function onModeloCustomDateChange(which){
+  const df = document.getElementById('modelo-date-from');
+  const dt = document.getElementById('modelo-date-to');
+  let fromVal = df ? df.value : '';
+  let toVal   = dt ? dt.value : '';
+  if(!fromVal && !toVal){
+    _clearModeloCustomDateInputs();
+    _modeloFilterChosen = false;
+    if(typeof renderModeloRel === 'function') renderModeloRel();
+    return;
+  }
+  if(fromVal && !toVal){ toVal = fromVal; if(dt) dt.value = toVal; }
+  if(toVal && !fromVal){ fromVal = toVal; if(df) df.value = fromVal; }
+  if(fromVal > toVal){
+    if(which === 'from'){ toVal = fromVal; if(dt) dt.value = toVal; }
+    else { fromVal = toVal; if(df) df.value = fromVal; }
+  }
+  setModeloCustomDates(fromVal, toVal);
+}
+
+function setModeloCustomDates(fromIso, toIso){
+  if(!fromIso || !toIso) return;
+  _modeloFilterChosen = true;
+  _modeloCustomFrom = fromIso <= toIso ? fromIso : toIso;
+  _modeloCustomTo   = fromIso <= toIso ? toIso   : fromIso;
+  _modeloMonthFilter = '';
+  document.querySelectorAll('#modelo-window-tabs .modelo-win-btn').forEach(b => b.classList.remove('active'));
+  const wrap = document.getElementById('modelo-month-wrap');
+  if(wrap) wrap.style.borderColor = 'var(--border2)';
+  const picker = document.getElementById('modelo-month-picker');
+  if(picker) picker.value = '';
+  const df = document.getElementById('modelo-date-from');
+  const dt = document.getElementById('modelo-date-to');
+  const dw = document.getElementById('modelo-custom-date-wrap');
+  if(df && df.value !== _modeloCustomFrom) df.value = _modeloCustomFrom;
+  if(dt && dt.value !== _modeloCustomTo)   dt.value = _modeloCustomTo;
+  if(dw) dw.style.borderColor = 'var(--accent)';
+  if(typeof renderModeloRel === 'function') renderModeloRel();
+}
+
+async function loadModeloCustomRangeIfNeeded(startMs, endMs){
+  if(!startMs || !endMs) return;
+  // Se todo o intervalo está dentro dos últimos 90 dias já carregados por loadModeloAllPeriods, não precisa buscar meses extras
+  const cutoff90 = Date.now() - 89 * 86400000;
+  if(startMs >= cutoff90) return;
+  const dCur = new Date(startMs);
+  dCur.setDate(1);
+  const dEnd = new Date(endMs);
+  while(dCur <= dEnd){
+    const ym = `${dCur.getFullYear()}-${String(dCur.getMonth() + 1).padStart(2, '0')}`;
+    await loadModeloMonthIfNeeded(ym);
+    dCur.setMonth(dCur.getMonth() + 1);
+  }
 }
 
 async function loadModeloMonthIfNeeded(yyyyMm){
@@ -13447,6 +14351,18 @@ function _atualizarPainelExcluidos(){
 }
 
 async function renderModeloRel(){
+  const phEl   = document.getElementById('modelo-empty-placeholder');
+  const wrapEl = document.getElementById('modelo-results-wrap');
+  if(!_modeloFilterChosen){
+    if(phEl) phEl.style.display = 'block';
+    if(wrapEl) wrapEl.style.display = 'none';
+    const lbl0 = document.getElementById('modelo-period-label');
+    if(lbl0) lbl0.textContent = 'Selecione um filtro de data abaixo para exibir o relatório.';
+    return;
+  }
+  if(phEl) phEl.style.display = 'none';
+  if(wrapEl) wrapEl.style.display = 'block';
+
   if(_modeloAllRecs.length === 0) await loadModeloAllPeriods();
   if(_modeloMonthFilter) await loadModeloMonthIfNeeded(_modeloMonthFilter);
 
@@ -13455,6 +14371,7 @@ async function renderModeloRel(){
   const statusOk  = statusSel === 'ok' ? ['ok'] : ['ok','rep','scrap'];
 
   const range = _getModeloActiveRange();
+  if(range.isCustom) await loadModeloCustomRangeIfNeeded(range.startMs, range.endMs);
   const recs = _modeloAllRecs.filter(h => {
     if(!statusOk.includes(h.status)) return false;
     if(h.sector !== 'MONTAGEM' && h.sector !== 'LIMPEZA' && h.sector !== 'COMPLEXA' && h.sector !== 'ELETRÔNICA') return false;
@@ -14687,6 +15604,7 @@ function renderRelGraficos(){
     if(h.status==='scrap') trendData[dk].scrap++;
   });
 
+  Object.keys(trendData).forEach(dk => { const t = trendData[dk]; if(!(t.ok + t.rep + t.scrap)) delete trendData[dk]; });
   const trendSorted = Object.keys(trendData).sort((a,b) => new Date(a.replace(/_/g,' ')) - new Date(b.replace(/_/g,' ')));
   const trendLabels = trendSorted.map(dk => {
     const d = new Date(dk.replace(/_/g,' '));
@@ -14748,10 +15666,15 @@ function renderRelGraficos(){
     };
   });
 
+  // Remove do eixo os dias em branco (nenhum dos profissionais plotados tem registro aprovado)
+  const _diasComDados = trendLabels.map((_, i) => datasets.some(ds => ds.data[i] !== null && ds.data[i] !== undefined));
+  const trendLabelsPure = trendLabels.filter((_, i) => _diasComDados[i]);
+  datasets.forEach(ds => { ds.data = ds.data.filter((_, i) => _diasComDados[i]); });
+
   window.chartTrendPure = new Chart(document.getElementById('chart-trend-pure'),{
     type:'line',
     data:{
-      labels: trendLabels,
+      labels: trendLabelsPure,
       datasets: datasets
     },
     options:{
@@ -16159,6 +17082,10 @@ function liveClock(){
   scheduleCheck();
 
   if(currentUser){
+    if(_clockTick % 15 === 0){
+      if(typeof _atualizarRitmoLiberadasDashboard === 'function') _atualizarRitmoLiberadasDashboard();
+      if(typeof _atualizarRitmoLiberadasQualidade === 'function' && document.getElementById('qual-stats-ritmo-liberados')) _atualizarRitmoLiberadasQualidade();
+    }
     // Atualiza timer da tela de operador se estiver ativa
     if(currentUser && !currentUser.isAdmin && document.getElementById('view-operador').classList.contains('active')){
       opUpdateTimer(currentUser.id);
@@ -20504,10 +21431,29 @@ function renderQualRegistros(){
   // Atualiza elementos de estatísticas
   const statsLiberados = document.getElementById('qual-stats-liberados');
   if(statsLiberados) statsLiberados.textContent = totalDia;
-  // Injeta (uma única vez) o card "Aberto Chamado" ao lado do card Liberados
+
+  // Injeta (uma única vez) o card "Média / Liberada" logo ao lado do card "Liberados no Dia"
+  let statsRitmoLib = document.getElementById('qual-stats-ritmo-liberados');
+  if(!statsRitmoLib && statsLiberados){
+    const liberadosCard = statsLiberados.closest('.sum-card') || statsLiberados.parentElement;
+    if(liberadosCard && liberadosCard.parentElement){
+      const card = document.createElement('div');
+      card.className = liberadosCard.className || 'sum-card';
+      card.id = 'qual-card-ritmo-liberados';
+      card.setAttribute('style', (liberadosCard.getAttribute('style')||'') + ';border-color:rgba(56,189,248,.4);transition:all .15s');
+      card.innerHTML = `
+        <div class="slbl" style="color:#38bdf8;letter-spacing:.06em;font-size:10.5px;font-weight:700;display:flex;align-items:center;justify-content:space-between;gap:4px"><span>⏱️ MÉDIA / LIBERADA</span></div>
+        <div class="sval" id="qual-stats-ritmo-liberados" style="color:#38bdf8;font-size:22px;font-weight:800;font-family:var(--mono);margin-top:2px">—</div>
+        <div id="qual-stats-ritmo-sub" style="font-size:10px;color:var(--muted);font-family:var(--mono);margin-top:2px">00h 00m trab.</div>`;
+      liberadosCard.insertAdjacentElement('afterend', card);
+      statsRitmoLib = document.getElementById('qual-stats-ritmo-liberados');
+    }
+  }
+
+  // Injeta (uma única vez) o card "Aberto Chamado" ao lado do card Média/Liberada (ou Liberados)
   let statsChamado = document.getElementById('qual-stats-chamado');
   if(!statsChamado && statsLiberados){
-    const liberadosCard = statsLiberados.closest('.sum-card') || statsLiberados.parentElement;
+    const liberadosCard = document.getElementById('qual-card-ritmo-liberados') || statsLiberados.closest('.sum-card') || statsLiberados.parentElement;
     if(liberadosCard && liberadosCard.parentElement){
       const card = document.createElement('div');
       card.className = liberadosCard.className || 'sum-card';
@@ -20666,6 +21612,7 @@ function renderQualRegistros(){
   // "Liberados no Dia" abaixo para os dois nunca divergirem.
   const dashLibEl = document.getElementById('dash-liberadas-total');
   if(dashLibEl) dashLibEl.textContent = _qualLiberadosHojeCount();
+  if(typeof _atualizarRitmoLiberadasDashboard === 'function') _atualizarRitmoLiberadasDashboard();
 
   const baseFiltered = allValues.filter(r => {
     if(targetDateStr && r.data !== targetDateStr) return false;
@@ -20682,6 +21629,7 @@ function renderQualRegistros(){
   }).length;
 
   if(statsLiberados) statsLiberados.textContent = totalDia;
+  if(typeof _atualizarRitmoLiberadasQualidade === 'function') _atualizarRitmoLiberadasQualidade(totalDia, targetDateStr);
   if(statsChamado)   statsChamado.textContent   = totalChamados;
   if(statsConcl)     statsConcl.textContent     = totalConcluidas;
   if(statsPend)      statsPend.textContent      = totalPendentesCalc;
