@@ -1678,6 +1678,7 @@ function startRealtimeSync(){
       : _db.ref('/history/'+dk).orderByChild('uid').equalTo(currentUser.id);
     window['_hRef_'+dk.slice(0,4)] = ref; // referência ofuscada para desconectar
     _historyListener = ref.on('value', snap => {
+      window._lastDashRtEventTs = Date.now();
       if(snap.exists()){
         const allRecs = Object.entries(snap.val())
           .map(([k,v]) => ({...v, _docId:k, _dateKey:dk}))
@@ -1755,6 +1756,39 @@ function startRealtimeSync(){
         }).catch(err => console.warn('[T. Médio Modelo] Falha ao pré-carregar cache de 90 dias:', err));
       }
       if(currentUser){
+        // Sincroniza imediatamente o estado dos cards com o history recém-chegado
+        // (caso o evento de /history chegue alguns ms antes do patch de /users, o card
+        // já reflete início, aguardando peça ou conclusão sem atraso).
+        users.forEach(u => {
+          const s = getS(u.id);
+          const hActive = history.find(h => h.uid === u.id && (h.status === 'running' || h.status === 'aguardando'));
+          if (hActive) {
+            const targetSt = hActive.status === 'aguardando' ? 'aguardando' : 'running';
+            if (s.status === 'idle' || s.selb !== hActive.selb) {
+              s.status = targetSt;
+              s.selb = hActive.selb || s.selb;
+              s.startEpoch = hActive.startEpoch || s.startEpoch || Date.now();
+              if (targetSt === 'running') {
+                s._activeFrom = s._activeFrom || s.startEpoch;
+                if (!timers[u.id]) startTimer(u.id);
+              }
+            }
+          } else if ((s.status === 'running' || s.status === 'aguardando') && s.selb) {
+            // Se o SELB que estava rodando neste card acabou de ser finalizado no history de hoje, libera o card na hora
+            const hFinished = history.find(h => h.uid === u.id && h.selb === s.selb && ['ok','rep','scrap','cancelado'].includes(h.status) && (!s.startEpoch || !h.startEpoch || h.startEpoch >= s.startEpoch - 5000));
+            if (hFinished) {
+              s.status = 'idle';
+              s.selb = null;
+              s.startEpoch = null;
+              s.elapsed = 0;
+              s.pausedElapsed = 0;
+              s._activeFrom = null;
+              s._frozenElapsed = 0;
+              s._pausedAt = null;
+              s._pauseAccum = 0;
+            }
+          }
+        });
         updateSummary();
         // ── Re-renderiza cards do dashboard em tempo real ──
         // Quando qualquer operador finaliza/inicia, os contadores e cards
@@ -1803,13 +1837,12 @@ function startRealtimeSync(){
   // ligadas o dia todo + updates frequentes de status/timer dos operadores,
   // isso pesa muito na cota. Operador comum continua em Realtime (é 1 única
   // linha, atualização instantânea é barata e importante pro próprio cronômetro).
-  const _usersSubscribe = (_usersPath === '/users')
-    // Dashboard não precisa baixar toda a equipe a cada minuto. O poll ainda
-    // roda imediatamente ao voltar à aba (pollRef), mantendo a tela útil sem
-    // multiplicar requests por cada monitor/admin aberto.
-    ? (path, cb, errCb) => pollRef(_db.ref(path), 300000, cb, errCb)
-    : (path, cb, errCb) => _db.ref(path).on('value', cb, errCb);
+  // Dashboard e operadores usam .on('value') em tempo real (via shim_bus broadcast em memória,
+  // sem re-consultar o banco a cada evento). Antes, o Dashboard usava pollRef de 300000ms (5 min),
+  // o que fazia os cards dos operadores demorarem até 5 minutos para atualizar no painel/TV.
+  const _usersSubscribe = (path, cb, errCb) => _db.ref(path).on('value', cb, errCb);
   _usersListener = _usersSubscribe(_usersPath, snap => {
+    window._lastDashRtEventTs = Date.now();
     if(!snap.exists()){
       return;
     }
@@ -17107,6 +17140,27 @@ function liveClock(){
       users.filter(u=>u.active&&u.sector===activeSector).forEach(u=>{
         if(getS(u.id).status==='idle') renderCard(u.id);
       });
+    }
+
+    // ── Watchdog de painel ativo (Dashboard em TV/Monitor) ──
+    // O Realtime (shim_bus) já atualiza os cards na hora (~120ms) em memória (0 queries no banco)
+    // e o próprio shim ressincroniza se o WebSocket cair e voltar. Como segurança extra de baixo
+    // consumo, só faz 1 leitura leve se passarem 5 minutos (300s) sem absolutamente nenhum evento
+    // Realtime durante o expediente ativo.
+    if(_clockTick % 300 === 0 && !document.hidden){
+      const dashView = document.getElementById('view-dashboard');
+      const sched = (typeof getScheduleState === 'function') ? getScheduleState() : { type: 'work' };
+      if(dashView && dashView.classList.contains('active') && sched.type === 'work'){
+        const sinceLastRt = Date.now() - (window._lastDashRtEventTs || 0);
+        if(sinceLastRt >= 295000 && typeof _db !== 'undefined' && _db){
+          window._lastDashRtEventTs = Date.now();
+          _db.ref('/users').once('value').then(snap => {
+            if(!snap || !snap.exists()) return;
+            const freshUsers = Object.entries(snap.val()).map(([k,v]) => ({...v, id:k}));
+            applyUserSnapshot(freshUsers);
+          }).catch(()=>{});
+        }
+      }
     }
 
     // Re-sync periódico removido: o listener onValue do Supabase (applyUserSnapshot)

@@ -303,7 +303,7 @@ function createSupabaseCompatShim(supa) {
   // levemente atrasadas; a fonte de verdade é sempre a coluna `raw` que
   // o próprio RPC atualiza. Isso corta ~50% dos writes ao Supabase.
   const _pendingPatches = new Map(); // key: table|dateKey|id -> {merged, resolvers[], cfg, id, dateKey, scheduled}
-  const COALESCE_MS = 800;
+  const COALESCE_MS = 120;
 
   function _flushPatch(bucketKey) {
     const bucket = _pendingPatches.get(bucketKey);
@@ -404,13 +404,45 @@ function createSupabaseCompatShim(supa) {
   let _tabHiddenAt = 0;
 
   let _bus = null;
+  let _busJoined = false;
+  let _busHadDisconnect = false;
+  let _busReconnectTimer = null;
+  const _busOutbox = [];
   const _busHandlers = new Set();
 
   function _busEnsure() {
     if (_bus) return _bus;
-    _bus = supa.channel(BUS_TOPIC, { config: { broadcast: { self: false, ack: false } } })
+    _busJoined = false;
+    const ch = supa.channel(BUS_TOPIC, { config: { broadcast: { self: false, ack: false } } })
       .on('broadcast', { event: 'mut' }, (msg) => _busDispatch(msg && msg.payload))
-      .subscribe();
+      .subscribe((status) => {
+        if (ch !== _bus) return;
+        if (status === 'SUBSCRIBED') {
+          _busJoined = true;
+          while (_busOutbox.length > 0) {
+            const pendingEv = _busOutbox.shift();
+            try { _bus.send({ type: 'broadcast', event: 'mut', payload: pendingEv }); } catch (e) {}
+          }
+          if (_busHadDisconnect) {
+            _busHadDisconnect = false;
+            _staggeredResyncs(_resyncs);
+          }
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          _busJoined = false;
+          _busHadDisconnect = true;
+          if (!_paused && _busHandlers.size > 0 && !_busReconnectTimer) {
+            _busReconnectTimer = setTimeout(() => {
+              _busReconnectTimer = null;
+              if (_bus === ch) {
+                try { supa.removeChannel(ch); } catch (e) {}
+                _bus = null;
+              }
+              if (!_paused && _busHandlers.size > 0) _busEnsure();
+            }, 2000);
+          }
+        }
+      });
+    _bus = ch;
     return _bus;
   }
 
@@ -424,7 +456,15 @@ function createSupabaseCompatShim(supa) {
   function busPublish(ev) {
     _busDispatch(ev); // fan-out local (broadcast self:false não volta pra origem)
     if (USE_PG_CHANGES) return;
-    try { _busEnsure().send({ type: 'broadcast', event: 'mut', payload: ev }); }
+    try {
+      const ch = _busEnsure();
+      if (_busJoined && ch) {
+        ch.send({ type: 'broadcast', event: 'mut', payload: ev });
+      } else {
+        if (_busOutbox.length > 100) _busOutbox.shift();
+        _busOutbox.push(ev);
+      }
+    }
     catch (e) { console.warn('[shim] bus publish falhou:', e); }
   }
 
