@@ -15750,8 +15750,25 @@ const EQUIP_MANUAL_GRACE_MS = 10 * 24 * 60 * 60 * 1000; // 10 dias
 // Armazena catálogo de equipamentos, séries, skus e unitizadores no localStorage.
 // A cada F5 / reload, consulta apenas a chave 'equip_import_at' (~50 bytes).
 // Se a planilha não mudou no banco, NENHUMA tabela é baixada (economia de ~2MB/reload).
-const _EQUIP_CACHE_KEY    = 'sb_equip_cache_v1';
-const _EQUIP_CACHE_TS_KEY = 'sb_equip_cache_ts_v1';
+// v2: invalida caches antigos que ficaram truncados em 1000 registros (limite do PostgREST)
+const _EQUIP_CACHE_KEY    = 'sb_equip_cache_v2';
+const _EQUIP_CACHE_TS_KEY = 'sb_equip_cache_ts_v2';
+try { localStorage.removeItem('sb_equip_cache_v1'); localStorage.removeItem('sb_equip_cache_ts_v1'); } catch(e){}
+
+// O Supabase/PostgREST retorna no máximo 1000 linhas por consulta. Esta função busca
+// TODAS as linhas paginando com .range() (ordenado por id para paginação estável).
+async function _equipFetchAll(table, selectExpr){
+  const PAGE = 1000;
+  let all = [];
+  for(let from = 0; ; from += PAGE){
+    const { data, error } = await _supa.from(table).select(selectExpr).order('id', { ascending: true }).range(from, from + PAGE - 1);
+    if(error) throw error;
+    const rows = data || [];
+    all = all.concat(rows);
+    if(rows.length < PAGE) break;
+  }
+  return all;
+}
 
 function _equipHydrateFromLocalCache(){
   try {
@@ -15833,13 +15850,21 @@ async function loadEquipamentos(force = false){
 
   // 3. Cache inexistente, desatualizado ou force=true: baixa as 4 tabelas
   // OTIMIZAÇÃO: extrai apenas o campo necessário para diminuir o payload
-  const [r1, r2, r3, r4, rCfg] = await Promise.all([
-    _supa.from('equipamentos').select('id, nome:raw->>nome, manual:raw->>manual, criadoEm:raw->>criadoEm, slot:raw->>slot'),
-    _supa.from('equipamentos_series').select('id, serie:raw->>serie'),
-    _supa.from('equipamentos_skus').select('id, sku:raw->>sku'),
-    _supa.from('equipamentos_unitizadores').select('id, unitizador:raw->>unitizador'),
-    _supa.from('app_config').select('value').eq('key', 'equip_import_at').maybeSingle()
-  ]);
+  // Busca TODAS as linhas (paginado) — o limite padrão do Supabase é 1000 por consulta
+  let r1, r2, r3, r4, rCfg;
+  try {
+    const [d1, d2, d3, d4, cfg] = await Promise.all([
+      _equipFetchAll('equipamentos', 'id, nome:raw->>nome, manual:raw->>manual, criadoEm:raw->>criadoEm, slot:raw->>slot'),
+      _equipFetchAll('equipamentos_series', 'id, serie:raw->>serie'),
+      _equipFetchAll('equipamentos_skus', 'id, sku:raw->>sku'),
+      _equipFetchAll('equipamentos_unitizadores', 'id, unitizador:raw->>unitizador'),
+      _supa.from('app_config').select('value').eq('key', 'equip_import_at').maybeSingle()
+    ]);
+    r1 = { data: d1 }; r2 = { data: d2 }; r3 = { data: d3 }; r4 = { data: d4 }; rCfg = cfg;
+  } catch(e){
+    console.warn('[Equip] Falha ao baixar equipamentos, mantendo dados atuais:', e);
+    return;
+  }
 
   const tmpEq = {};
   const tmpManual = {};
@@ -15900,7 +15925,7 @@ let _maquinasAEquip = {}; // { 'SELB-001': 'Impressora HP 1020', ... }
 
 async function loadMaquinasAEquip(){
   try {
-    const { data } = await _supa.from('maquinas_a_equipamentos').select('id, nome:raw->>nome');
+    const data = await _equipFetchAll('maquinas_a_equipamentos', 'id, nome:raw->>nome');
     const tmp = {};
     (data || []).forEach(e => { tmp[e.id] = e.nome ? e.nome : e.id; });
     _maquinasAEquip = tmp;
@@ -16389,9 +16414,7 @@ async function importEquipFile(input){
     // Atualiza APENAS o slot alvo (Planilha 1, 2 ou 3), mantendo intactos:
     // - os equipamentos pertencentes às outras planilhas (slots != targetSlot);
     // - os SELBs cadastrados manualmente dentro do período de carência de 10 dias.
-    const { data: _eqAntesImport } = await _supa
-      .from('equipamentos')
-      .select('id, nome:raw->>nome, manual:raw->>manual, criadoEm:raw->>criadoEm, slot:raw->>slot');
+    const _eqAntesImport = await _equipFetchAll('equipamentos', 'id, nome:raw->>nome, manual:raw->>manual, criadoEm:raw->>criadoEm, slot:raw->>slot');
 
     const _idsParaApagar = [];
     (_eqAntesImport || []).forEach(e => {
