@@ -15735,6 +15735,7 @@ let equipamentos = {}; // { 'SELB-001': 'Impressora HP 1020', ... }
 let _equipSeries = {};  // { 'SELB-001': 'X2SR003422', ... }
 let _equipSkus   = {};  // { 'SELB-001': 'SKU-001', ... }
 let _equipUnitizadores = {}; // { 'SELB-001': 'GAIOLA-01', ... }
+let _equipSlots  = {};  // { 'SELB-001': 1 | 2 | 3 } — identifica de qual das 3 planilhas veio o SELB
 let editingEquipKey = null;
 
 // Cadastros manuais (feitos pelo botão "Novo Equipamento", não pela importação
@@ -15763,6 +15764,10 @@ function _equipHydrateFromLocalCache(){
       _equipSeries       = parsed.equipSeries || {};
       _equipSkus         = parsed.equipSkus || {};
       _equipUnitizadores = parsed.equipUnitizadores || {};
+      _equipSlots        = parsed.equipSlots || {};
+      Object.keys(equipamentos).forEach(k => {
+        if(!_equipManualInfo[k] && !_equipSlots[k]) _equipSlots[k] = 1;
+      });
       if(parsed.importAt) window._equipImportAt = parsed.importAt;
       return true;
     }
@@ -15781,7 +15786,8 @@ function _equipSaveToLocalCache(serverTs, importAtObj){
       equipManualInfo: _equipManualInfo,
       equipSeries: _equipSeries,
       equipSkus: _equipSkus,
-      equipUnitizadores: _equipUnitizadores
+      equipUnitizadores: _equipUnitizadores,
+      equipSlots: _equipSlots
     };
     localStorage.setItem(_EQUIP_CACHE_KEY, JSON.stringify(payload));
     localStorage.setItem(_EQUIP_CACHE_TS_KEY, String(payload.ts));
@@ -15828,7 +15834,7 @@ async function loadEquipamentos(force = false){
   // 3. Cache inexistente, desatualizado ou force=true: baixa as 4 tabelas
   // OTIMIZAÇÃO: extrai apenas o campo necessário para diminuir o payload
   const [r1, r2, r3, r4, rCfg] = await Promise.all([
-    _supa.from('equipamentos').select('id, nome:raw->>nome, manual:raw->>manual, criadoEm:raw->>criadoEm'),
+    _supa.from('equipamentos').select('id, nome:raw->>nome, manual:raw->>manual, criadoEm:raw->>criadoEm, slot:raw->>slot'),
     _supa.from('equipamentos_series').select('id, serie:raw->>serie'),
     _supa.from('equipamentos_skus').select('id, sku:raw->>sku'),
     _supa.from('equipamentos_unitizadores').select('id, unitizador:raw->>unitizador'),
@@ -15837,10 +15843,16 @@ async function loadEquipamentos(force = false){
 
   const tmpEq = {};
   const tmpManual = {};
+  const tmpSlots = {};
   (r1.data || []).forEach(e => {
     tmpEq[e.id] = e.nome ? e.nome : e.id;
     const isManual = (e.manual === 'true' || e.manual === true);
-    if(isManual) tmpManual[e.id] = parseInt(e.criadoEm, 10) || Date.now();
+    if(isManual){
+      tmpManual[e.id] = parseInt(e.criadoEm, 10) || Date.now();
+    } else {
+      const sNum = parseInt(e.slot, 10);
+      tmpSlots[e.id] = (sNum >= 1 && sNum <= 3) ? sNum : 1;
+    }
   });
 
   const tmpSeries = {};
@@ -15860,6 +15872,7 @@ async function loadEquipamentos(force = false){
 
   equipamentos       = tmpEq;
   _equipManualInfo   = tmpManual;
+  _equipSlots        = tmpSlots;
   _equipSeries       = tmpSeries;
   _equipSkus         = tmpSkus;
   _equipUnitizadores = tmpUnit;
@@ -16087,7 +16100,150 @@ function getEquipUnitizador(selbCode){
   return null;
 }
 
-// ── Import spreadsheet ────────────────────────────────────────────────────────
+// ── Helpers para suporte a até 3 planilhas de equipamentos ────────────────────
+const _EQUIP_SLOT_COLORS = {
+  1: { fg: '#4f8ef7', bg: 'rgba(79,142,247,.10)', border: 'rgba(79,142,247,.32)' },
+  2: { fg: '#22d3ee', bg: 'rgba(34,211,238,.10)', border: 'rgba(34,211,238,.32)' },
+  3: { fg: '#a78bfa', bg: 'rgba(167,139,250,.12)', border: 'rgba(167,139,250,.35)' }
+};
+
+async function _equipDeleteIdsInChunks(table, ids){
+  if(!ids || !ids.length) return;
+  const CHUNK = 200;
+  const promises = [];
+  for(let i = 0; i < ids.length; i += CHUNK){
+    const slice = ids.slice(i, i + CHUNK);
+    promises.push(_supa.from(table).delete().in('id', slice));
+  }
+  await Promise.all(promises);
+}
+
+function _equipGetSlotsMeta(){
+  const at = window._equipImportAt || {};
+  const slots = { 1: null, 2: null, 3: null };
+  if(at.slots && typeof at.slots === 'object'){
+    for(const s of [1, 2, 3]){
+      if(at.slots[s] && at.slots[s].ts){
+        slots[s] = { ...at.slots[s] };
+      }
+    }
+  } else if(at.ts && (at.count > 0 || Object.keys(equipamentos).length > 0)){
+    // Compatibilidade automática com importação única anterior → entra como Planilha 1
+    slots[1] = {
+      ts: at.ts,
+      user: at.user || 'admin',
+      count: at.count || Object.keys(equipamentos).filter(k => !_equipManualInfo[k]).length,
+      fileName: at.fileName || ''
+    };
+  }
+
+  const totalMem = Object.keys(equipamentos).length;
+  if(totalMem > 0){
+    const countsBySlot = { 1: 0, 2: 0, 3: 0 };
+    Object.keys(equipamentos).forEach(k => {
+      if(_equipManualInfo[k]) return;
+      const s = (_equipSlots[k] >= 1 && _equipSlots[k] <= 3) ? _equipSlots[k] : 1;
+      countsBySlot[s]++;
+    });
+    for(const s of [1, 2, 3]){
+      if(countsBySlot[s] > 0){
+        if(!slots[s]){
+          slots[s] = {
+            ts: at.ts || Date.now(),
+            user: at.user || 'admin',
+            count: countsBySlot[s],
+            fileName: ''
+          };
+        } else {
+          slots[s].count = countsBySlot[s];
+        }
+      } else {
+        slots[s] = null;
+      }
+    }
+  }
+  return slots;
+}
+
+function _equipBuildImportAtPayload(tsOverride, slotsOverride){
+  const slots = slotsOverride !== undefined ? slotsOverride : _equipGetSlotsMeta();
+  const ts = tsOverride || Date.now();
+  const prev = window._equipImportAt || {};
+  const payload = {
+    ts,
+    user: (typeof currentUser !== 'undefined' && currentUser && (currentUser.name || currentUser.email)) || prev.user || 'admin',
+    count: Object.keys(equipamentos).length,
+    slots
+  };
+  window._equipImportAt = payload;
+  return payload;
+}
+
+function triggerEquipSlotImport(slotNum){
+  if(!currentUser || (!currentUser.isAdmin && currentUser.sector !== 'PCP')){
+    alert('Apenas o administrador ou o setor PCP podem importar planilhas de equipamentos.');
+    return;
+  }
+  window._equipTargetSlot = Number(slotNum) || null;
+  const inp = document.getElementById('equip-file');
+  if(inp){
+    inp.value = '';
+    inp.click();
+  }
+}
+
+async function removeEquipSlot(slotNum){
+  if(!currentUser || (!currentUser.isAdmin && currentUser.sector !== 'PCP')){
+    alert('Apenas o administrador ou o setor PCP podem remover planilhas de equipamentos.');
+    return;
+  }
+  const sNum = Number(slotNum);
+  if(![1, 2, 3].includes(sNum)) return;
+  await loadEquipamentos();
+  const slots = _equipGetSlotsMeta();
+  const meta = slots[sNum];
+  const idsToRemove = Object.keys(equipamentos).filter(k => !_equipManualInfo[k] && ((_equipSlots[k] || 1) === sNum));
+  if(!idsToRemove.length && !meta){
+    alert('A Planilha ' + sNum + ' já está vazia.');
+    return;
+  }
+  const fnLabel = (meta && meta.fileName) ? ` (${meta.fileName})` : '';
+  if(!confirm(`Remover a Planilha ${sNum}${fnLabel} com ${idsToRemove.length} equipamento(s)?\n\nAs outras planilhas importadas e os cadastros manuais serão mantidos.`)) return;
+
+  showLoader(`Removendo Planilha ${sNum}...`);
+  try {
+    if(idsToRemove.length){
+      await Promise.all([
+        _equipDeleteIdsInChunks('equipamentos', idsToRemove),
+        _equipDeleteIdsInChunks('equipamentos_series', idsToRemove),
+        _equipDeleteIdsInChunks('equipamentos_skus', idsToRemove),
+        _equipDeleteIdsInChunks('equipamentos_unitizadores', idsToRemove)
+      ]);
+      idsToRemove.forEach(id => {
+        delete equipamentos[id];
+        delete _equipSlots[id];
+        delete _equipSeries[id];
+        delete _equipSkus[id];
+        delete _equipUnitizadores[id];
+      });
+    }
+    slots[sNum] = null;
+    if(window._equipSlotFilter === sNum) window._equipSlotFilter = null;
+    const nowTs = Date.now();
+    const payload = _equipBuildImportAtPayload(nowTs, slots);
+    await _supa.from('app_config').upsert({ key: 'equip_import_at', value: payload }, { onConflict: 'key' });
+    _equipSaveToLocalCache(nowTs, payload);
+    hideLoader();
+    _equipUpdateImportBadge();
+    renderEquipTable();
+    if (typeof _fluxolabRenderGrid === 'function') try { _fluxolabRenderGrid(); } catch(e) {}
+  } catch(e){
+    hideLoader();
+    showError('Erro ao remover Planilha ' + sNum + ': ' + e.message);
+  }
+}
+
+// ── Import spreadsheet (até 3 planilhas simultâneas) ──────────────────────────
 async function importEquipFile(input){
   if(!currentUser || (!currentUser.isAdmin && currentUser.sector !== 'PCP')){
     alert('Apenas o administrador ou o setor PCP podem importar a planilha de equipamentos.');
@@ -16096,8 +16252,46 @@ async function importEquipFile(input){
   }
   const file = input.files[0];
   if(!file) return;
+
+  await loadEquipamentos();
+  const currentSlots = _equipGetSlotsMeta();
+  let targetSlot = window._equipTargetSlot;
+  window._equipTargetSlot = null;
+
+  if(!targetSlot || ![1, 2, 3].includes(Number(targetSlot))){
+    if(!currentSlots[1]) targetSlot = 1;
+    else if(!currentSlots[2]) targetSlot = 2;
+    else if(!currentSlots[3]) targetSlot = 3;
+    else {
+      const desc = [1, 2, 3].map(s => {
+        const m = currentSlots[s];
+        const d = (m && m.ts) ? (new Date(m.ts).toLocaleDateString('pt-BR') + ' às ' + new Date(m.ts).toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'})) : '';
+        const fn = (m && m.fileName) ? ` (${m.fileName})` : '';
+        return `[${s}] Planilha ${s}${fn} — ${m ? m.count : 0} equip. (${d})`;
+      }).join('\n');
+      const resp = prompt(
+        'As 3 posições de planilha já estão ocupadas:\n\n' + desc +
+        '\n\nDigite o número da planilha que deseja SUBSTITUIR (1, 2 ou 3), mantendo as outras duas:',
+        '1'
+      );
+      if(!resp){
+        input.value = '';
+        return;
+      }
+      const chosen = parseInt(resp.trim(), 10);
+      if(![1, 2, 3].includes(chosen)){
+        alert('Opção inválida. Digite 1, 2 ou 3.');
+        input.value = '';
+        return;
+      }
+      targetSlot = chosen;
+    }
+  } else {
+    targetSlot = Number(targetSlot);
+  }
+
   const ext = file.name.split('.').pop().toLowerCase();
-  showLoader('Importando planilha...');
+  showLoader(`Importando Planilha ${targetSlot} (${file.name})...`);
   try {
     let rows = [];
     if(ext === 'csv'){
@@ -16105,7 +16299,12 @@ async function importEquipFile(input){
     } else {
       rows = await parseXLSX(file);
     }
-    if(!rows.length){ showError('Nenhum dado encontrado na planilha.'); return; }
+    if(!rows.length){
+      hideLoader();
+      input.value = '';
+      showError('Nenhum dado encontrado na planilha.');
+      return;
+    }
 
     const allHeaders = Object.keys(rows[0]);
 
@@ -16132,6 +16331,7 @@ async function importEquipFile(input){
 
     if(!selbColOrig || !nomeColOrig){
       hideLoader();
+      input.value = '';
       alert(
         'Colunas não encontradas automaticamente.\n\n' +
         'Colunas detectadas na planilha:\n' + allHeaders.join(', ') + '\n\n' +
@@ -16181,87 +16381,118 @@ async function importEquipFile(input){
 
     if(!count){
       hideLoader();
+      input.value = '';
       alert('Nenhuma linha válida encontrada.\nVerifique se as colunas "' + selbColOrig + '" e "' + nomeColOrig + '" têm dados.');
       return;
     }
 
-    // Replace all (fresh import from system spreadsheet) — MAS preservando
-    // os SELBs cadastrados manualmente (aba Equipamentos → "Novo Equipamento")
-    // que ainda estão dentro do período de carência de 10 dias. Eles só saem
-    // do sistema quando completam 10 dias sem terem sido oficializados pela
-    // planilha (ou imediatamente, se a própria planilha já trouxer o SELB).
-    const { data: _eqAntesImport } = await _supa.from('equipamentos').select('id, nome:raw->>nome, manual:raw->>manual, criadoEm:raw->>criadoEm');
-    const _protegidosImport = new Set();
+    // Atualiza APENAS o slot alvo (Planilha 1, 2 ou 3), mantendo intactos:
+    // - os equipamentos pertencentes às outras planilhas (slots != targetSlot);
+    // - os SELBs cadastrados manualmente dentro do período de carência de 10 dias.
+    const { data: _eqAntesImport } = await _supa
+      .from('equipamentos')
+      .select('id, nome:raw->>nome, manual:raw->>manual, criadoEm:raw->>criadoEm, slot:raw->>slot');
+
+    const _idsParaApagar = [];
     (_eqAntesImport || []).forEach(e => {
+      if(batch[e.id]) return; // será atualizado pelo upsert deste lote
       const isManual = (e.manual === 'true' || e.manual === true);
-      const criadoEm = parseInt(e.criadoEm, 10);
-      if(isManual && criadoEm && (Date.now() - criadoEm) < EQUIP_MANUAL_GRACE_MS && !batch[e.id]){
-        _protegidosImport.add(e.id);
+      if(isManual){
+        const criadoEm = parseInt(e.criadoEm, 10);
+        if(!criadoEm || (Date.now() - criadoEm) >= EQUIP_MANUAL_GRACE_MS){
+          _idsParaApagar.push(e.id);
+        }
+        return;
       }
-    });
-    if(_protegidosImport.size > 0){
-      const _idsParaApagar = (_eqAntesImport || []).map(e => e.id).filter(id => !_protegidosImport.has(id));
-      if(_idsParaApagar.length) await _supa.from('equipamentos').delete().in('id', _idsParaApagar);
-    } else {
-      await _supa.from('equipamentos').delete().neq('id', '___never___');
-    }
-    const eqRows = Object.entries(batch).map(([id, nome]) => ({ id, nome: String(nome), raw: { nome: String(nome) } }));
-    await _supa.from('equipamentos').upsert(eqRows);
-    equipamentos = {...batch};
-    // Recoloca no cache local os SELBs manuais protegidos (não vieram no batch importado)
-    _protegidosImport.forEach(id => {
-      const found = (_eqAntesImport || []).find(e => e.id === id);
-      if(found){
-        equipamentos[id] = found.nome ? found.nome : id;
-        _equipManualInfo[id] = parseInt(found.criadoEm, 10);
+      const rowSlot = (parseInt(e.slot, 10) >= 1 && parseInt(e.slot, 10) <= 3) ? parseInt(e.slot, 10) : 1;
+      if(rowSlot === targetSlot){
+        _idsParaApagar.push(e.id);
       }
-    });
-    // Qualquer SELB manual que tenha sido oficializado pela planilha (mesmo
-    // SELB) ou que já tenha estourado os 10 dias deixa de constar como manual.
-    Object.keys(_equipManualInfo).forEach(id => {
-      if(!_protegidosImport.has(id)) delete _equipManualInfo[id];
     });
 
-    // Salva séries separadamente (não apaga se não encontrou a coluna)
+    if(_idsParaApagar.length > 0){
+      await Promise.all([
+        _equipDeleteIdsInChunks('equipamentos', _idsParaApagar),
+        _equipDeleteIdsInChunks('equipamentos_series', _idsParaApagar),
+        _equipDeleteIdsInChunks('equipamentos_skus', _idsParaApagar),
+        _equipDeleteIdsInChunks('equipamentos_unitizadores', _idsParaApagar)
+      ]);
+      _idsParaApagar.forEach(id => {
+        delete equipamentos[id];
+        delete _equipSlots[id];
+        delete _equipManualInfo[id];
+        delete _equipSeries[id];
+        delete _equipSkus[id];
+        delete _equipUnitizadores[id];
+      });
+    }
+
+    const eqRows = Object.entries(batch).map(([id, nome]) => ({
+      id,
+      nome: String(nome),
+      raw: { nome: String(nome), slot: targetSlot }
+    }));
+    await _supa.from('equipamentos').upsert(eqRows);
+
+    Object.entries(batch).forEach(([id, nome]) => {
+      equipamentos[id] = nome;
+      _equipSlots[id] = targetSlot;
+      delete _equipManualInfo[id];
+    });
+
+    // Salva séries do lote (preservando as séries das outras planilhas)
     if(Object.keys(seriesBatch).length > 0){
-      await _supa.from('equipamentos_series').delete().neq('id', '___never___');
       const srRows = Object.entries(seriesBatch).map(([id, v]) => ({ id, raw: typeof v === 'object' ? v : { serie: v } }));
       await _supa.from('equipamentos_series').upsert(srRows);
-      _equipSeries = {...seriesBatch};
+      Object.assign(_equipSeries, seriesBatch);
     }
 
-    // Salva skus separadamente (não apaga se não encontrou a coluna)
+    // Salva skus do lote (preservando os skus das outras planilhas)
     if(Object.keys(skusBatch).length > 0){
-      await _supa.from('equipamentos_skus').delete().neq('id', '___never___');
       const skRows = Object.entries(skusBatch).map(([id, v]) => ({ id, raw: typeof v === 'object' ? v : { sku: v } }));
       await _supa.from('equipamentos_skus').upsert(skRows);
-      _equipSkus = {...skusBatch};
+      Object.assign(_equipSkus, skusBatch);
     }
 
-    // Salva unitizadores separadamente
+    // Salva unitizadores do lote (preservando os unitizadores das outras planilhas)
     if(Object.keys(unitizadoresBatch).length > 0){
-      await _supa.from('equipamentos_unitizadores').delete().neq('id', '___never___');
       const unRows = Object.entries(unitizadoresBatch).map(([id, v]) => ({ id, raw: typeof v === 'object' ? v : { unitizador: v } }));
       await _supa.from('equipamentos_unitizadores').upsert(unRows);
-      _equipUnitizadores = {...unitizadoresBatch};
+      Object.assign(_equipUnitizadores, unitizadoresBatch);
     }
 
     hideLoader();
     input.value = '';
-    // Salva timestamp da importação no app_config (visível para todos)
-    const _equipImportAt = { ts: Date.now(), user: (currentUser && (currentUser.name || currentUser.email)) || 'admin', count };
+
+    const nowTs = Date.now();
+    const userName = (currentUser && (currentUser.name || currentUser.email)) || 'admin';
+    const updatedSlots = _equipGetSlotsMeta();
+    updatedSlots[targetSlot] = {
+      ts: nowTs,
+      user: userName,
+      count: Object.keys(equipamentos).filter(k => !_equipManualInfo[k] && (_equipSlots[k] || 1) === targetSlot).length,
+      fileName: file.name || `Planilha ${targetSlot}`
+    };
+    const _equipImportAt = _equipBuildImportAtPayload(nowTs, updatedSlots);
     await _supa.from('app_config').upsert({ key: 'equip_import_at', value: _equipImportAt }, { onConflict: 'key' });
-    window._equipImportAt = _equipImportAt;
     _equipSaveToLocalCache(_equipImportAt.ts, _equipImportAt);
     _equipUpdateImportBadge();
     renderEquipTable();
+
+    const activeSlotsCount = [1, 2, 3].filter(s => updatedSlots[s]).length;
     const serieMsg = serieColOrig ? '\nColuna Série (Atributos): "' + serieColOrig + '" — ' + Object.keys(seriesBatch).length + ' séries importadas' : '\n⚠️ Coluna de série (Atributos) não encontrada';
     const skuMsg = skuColOrig ? '\nCódigo do Produto Externo: "' + skuColOrig + '" — ' + Object.keys(skusBatch).length + ' códigos importados' : '\n⚠️ Coluna Código do Produto Externo não encontrada';
     const unitMsg = unitizadorColOrig ? '\nColuna Unitizador: "' + unitizadorColOrig + '" — ' + Object.keys(unitizadoresBatch).length + ' unitizadores importados' : '\n⚠️ Coluna Unitizador não encontrada';
-    alert('✅ ' + count + ' equipamentos importados!\n\nColuna SELB: "' + selbColOrig + '"\nColuna Modelo: "' + nomeColOrig + '"' + serieMsg + skuMsg + unitMsg);
+    alert(
+      `✅ Planilha ${targetSlot} ("${file.name}") importada com ${count} equipamentos!\n` +
+      `📊 Total acumulado no sistema (${activeSlotsCount}/3 planilhas): ${Object.keys(equipamentos).length} equipamentos.\n\n` +
+      'Coluna SELB: "' + selbColOrig + '"\nColuna Modelo: "' + nomeColOrig + '"' + serieMsg + skuMsg + unitMsg
+    );
     // Re-renderiza bolsões do FluxoLAB para atualizar badges ⚠️ de SELBs não reconhecidos
     if (typeof _fluxolabRenderGrid === 'function') try { _fluxolabRenderGrid(); } catch(e) {}
   } catch(e){
+    hideLoader();
+    input.value = '';
     showError('Erro ao importar: ' + e.message);
   }
 }
@@ -16325,21 +16556,57 @@ async function parseXLSX(file){
 }
 
 // ── Render equipamentos table ─────────────────────────────────────────────────
-// ── Badge de última importação de equipamentos ────────────────────────────────
+// ── Badges das até 3 planilhas de equipamentos ────────────────────────────────
 function _equipUpdateImportBadge(){
   const el = document.getElementById('equip-import-ts');
   if (!el) return;
-  const at = window._equipImportAt;
-  if (!at || !at.ts) {
-    el.innerHTML = '<span style="font-style:italic;opacity:.6">Nenhuma importação registrada</span>';
+  const slots = _equipGetSlotsMeta();
+  const activeSlots = [1, 2, 3].filter(s => slots[s]);
+  const canManage = (typeof currentUser !== 'undefined' && currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP'));
+
+  const btnTextEl = document.getElementById('equip-import-btn-text');
+  if(btnTextEl){
+    if(activeSlots.length === 0) btnTextEl.textContent = '📂 Importar planilha (0/3)';
+    else if(activeSlots.length < 3) btnTextEl.textContent = `📂 Importar +1 planilha (${activeSlots.length}/3)`;
+    else btnTextEl.textContent = '📂 Substituir planilha (3/3)';
+  }
+
+  if (!activeSlots.length) {
+    el.innerHTML = '<span style="font-style:italic;opacity:.6">Nenhuma planilha importada (0/3)</span>';
     return;
   }
-  const d = new Date(at.ts);
-  const data = d.toLocaleDateString('pt-BR');
-  const hora = d.toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' });
-  const user = at.user ? ` por <b style="color:var(--text)">${at.user}</b>` : '';
-  const cnt  = at.count ? ` &nbsp;·&nbsp; <span style="color:var(--text)">${at.count} equipamentos</span>` : '';
-  el.innerHTML = `<span style="display:inline-flex;align-items:center;gap:5px;background:rgba(79,142,247,.10);border:1px solid rgba(79,142,247,.30);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;color:#4f8ef7;white-space:nowrap">📂 Última importação: ${data} às ${hora}${user}${cnt}</span>`;
+
+  el.innerHTML = [1, 2, 3].map(s => {
+    const info = slots[s];
+    const col = _EQUIP_SLOT_COLORS[s] || _EQUIP_SLOT_COLORS[1];
+    if(info){
+      const d = new Date(info.ts);
+      const data = d.toLocaleDateString('pt-BR');
+      const hora = d.toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' });
+      const user = info.user ? ` por <b style="color:var(--text)">${info.user}</b>` : '';
+      const cnt  = (info.count !== undefined) ? ` &nbsp;·&nbsp; <span style="color:var(--text)">${info.count} equip.</span>` : '';
+      const fn   = info.fileName ? ` <span style="color:var(--text);opacity:.85" title="${info.fileName.replace(/"/g, '&quot;')}">(${info.fileName.length > 22 ? info.fileName.slice(0, 20) + '…' : info.fileName})</span>` : '';
+      const isFiltered = window._equipSlotFilter === s;
+      const filterStyle = isFiltered ? `box-shadow:0 0 0 2px ${col.fg};` : '';
+      const actions = canManage
+        ? ` <button type="button" onclick="event.stopPropagation();triggerEquipSlotImport(${s})" title="Substituir Planilha ${s}" style="background:rgba(255,255,255,.08);border:1px solid ${col.border};border-radius:10px;color:${col.fg};font-size:10px;font-weight:700;padding:1px 6px;cursor:pointer;margin-left:4px">🔄</button>` +
+          `<button type="button" onclick="event.stopPropagation();removeEquipSlot(${s})" title="Remover apenas a Planilha ${s}" style="background:rgba(242,87,87,.14);border:1px solid rgba(242,87,87,.35);border-radius:10px;color:var(--danger);font-size:10px;font-weight:700;padding:1px 6px;cursor:pointer;margin-left:2px">✕</button>`
+        : '';
+      return `<span onclick="toggleEquipSlotFilter(${s})" title="Clique para filtrar pela Planilha ${s}" style="display:inline-flex;align-items:center;gap:4px;background:${col.bg};border:1px solid ${col.border};border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;color:${col.fg};white-space:nowrap;cursor:pointer;${filterStyle}">📂 <b>Planilha ${s}</b>${fn}: ${data} às ${hora}${user}${cnt}${actions}</span>`;
+    } else if(canManage){
+      return `<span onclick="triggerEquipSlotImport(${s})" title="Clique para importar uma nova planilha na posição ${s} sem remover as anteriores" style="display:inline-flex;align-items:center;gap:5px;background:rgba(255,255,255,.03);border:1px dashed var(--border2);border-radius:20px;padding:3px 10px;font-size:11px;font-weight:600;color:var(--muted);white-space:nowrap;cursor:pointer">➕ Planilha ${s}: disponível</span>`;
+    }
+    return '';
+  }).filter(Boolean).join('');
+}
+
+function toggleEquipSlotFilter(slotNum){
+  if(window._equipSlotFilter === slotNum){
+    window._equipSlotFilter = null;
+  } else {
+    window._equipSlotFilter = slotNum;
+  }
+  renderEquipTable();
 }
 
 // Carrega o timestamp do app_config ao abrir a aba de equipamentos (chamado no setView)
@@ -16355,21 +16622,43 @@ async function _equipLoadImportTs(){
 function renderEquipTable(){
   _equipUpdateImportBadge();
   const q = (document.getElementById('equip-search')?.value||'').toUpperCase();
+  const slotFilter = window._equipSlotFilter || null;
   const entries = Object.entries(equipamentos)
-    .filter(([k,v]) => !q || k.includes(q) || v.toUpperCase().includes(q) || (getEquipSerie(k) || '').toUpperCase().includes(q) || (getEquipSku(k) || '').toUpperCase().includes(q) || (getEquipUnitizador(k) || '').toUpperCase().includes(q))
+    .filter(([k,v]) => {
+      if(slotFilter === 'manual'){
+        if(!_equipManualInfo[k]) return false;
+      } else if(slotFilter && [1, 2, 3].includes(slotFilter)){
+        if(_equipManualInfo[k]) return false;
+        const kSlot = (_equipSlots[k] >= 1 && _equipSlots[k] <= 3) ? _equipSlots[k] : 1;
+        if(kSlot !== slotFilter) return false;
+      }
+      return !q || k.includes(q) || v.toUpperCase().includes(q) || (getEquipSerie(k) || '').toUpperCase().includes(q) || (getEquipSku(k) || '').toUpperCase().includes(q) || (getEquipUnitizador(k) || '').toUpperCase().includes(q);
+    })
     .sort((a,b) => a[0].localeCompare(b[0]));
 
   // Stats
   const total = Object.keys(equipamentos).length;
+  const slotsMeta = _equipGetSlotsMeta();
+  const slotCardsHtml = [1, 2, 3].map(s => {
+    if(!slotsMeta[s]) return '';
+    const col = _EQUIP_SLOT_COLORS[s] || _EQUIP_SLOT_COLORS[1];
+    const isAct = slotFilter === s;
+    return `
+    <div class="sum-card" onclick="toggleEquipSlotFilter(${s})" title="Clique para filtrar pela Planilha ${s}" style="padding:10px 16px;cursor:pointer;border-color:${isAct ? col.fg : ''};background:${isAct ? col.bg : ''}">
+      <div class="slbl" style="color:${col.fg}">Planilha ${s}</div>
+      <div class="sval" style="color:${col.fg};font-size:18px">${slotsMeta[s].count || 0}</div>
+    </div>`;
+  }).join('');
+
   document.getElementById('equip-stats').innerHTML = `
-    <div class="sum-card" style="padding:10px 16px">
+    <div class="sum-card" onclick="if(window._equipSlotFilter){window._equipSlotFilter=null;renderEquipTable();}" title="Mostrar todos os equipamentos" style="padding:10px 16px;cursor:pointer">
       <div class="slbl">Total cadastrado</div>
       <div class="sval" style="color:var(--accent);font-size:18px">${total}</div>
     </div>
     <div class="sum-card" style="padding:10px 16px">
-      <div class="slbl">Exibindo</div>
+      <div class="slbl">Exibindo${slotFilter ? ` (Planilha ${slotFilter})` : ''}</div>
       <div class="sval" style="color:var(--muted);font-size:18px">${entries.length}</div>
-    </div>`;
+    </div>${slotCardsHtml}`;
 
   const tbody = document.getElementById('equip-body');
   if(!entries.length){
@@ -16385,7 +16674,11 @@ function renderEquipTable(){
           const _diasRestantes = Math.max(0, Math.ceil((EQUIP_MANUAL_GRACE_MS - (Date.now() - _manualCriadoEm)) / 86400000));
           return ` <span class="pinbadge" title="Cadastro manual — some da lista em ${_diasRestantes} dia(s) se não constar na próxima planilha importada" style="background:rgba(245,166,35,0.12);color:var(--warn);border:1px solid rgba(245,166,35,0.35);font-size:10px">✋ manual · ${_diasRestantes}d</span>`;
         })()
-      : '';
+      : (() => {
+          const sNum = (_equipSlots[selb] >= 1 && _equipSlots[selb] <= 3) ? _equipSlots[selb] : 1;
+          const col = _EQUIP_SLOT_COLORS[sNum] || _EQUIP_SLOT_COLORS[1];
+          return ` <span class="pinbadge" title="Importado na Planilha ${sNum}" style="background:${col.bg};color:${col.fg};border:1px solid ${col.border};font-size:10px">P${sNum}</span>`;
+        })();
     return `<tr>
     <td><span class="pinbadge" style="font-size:12px">${selb}</span>${_manualBadge}</td>
     <td style="font-weight:500">${nome}</td>
@@ -16395,7 +16688,17 @@ function renderEquipTable(){
     <td>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button onclick="qualGerarEtiquetaUnica('${selbEsc}')" title="Gerar etiqueta" style="background:rgba(167,139,250,0.12);border:1px solid rgba(167,139,250,0.4);border-radius:7px;color:var(--purple);font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer">🏷️ Etiqueta</button>
-        <button onclick="equipImprimirSelb('${selbEsc}')" title="Imprimir SELB (padrão selbetti 8x3cm)" style="background:rgba(28,107,69,0.12);border:1px solid rgba(28,107,69,0.4);border-radius:7px;color:#1c6b45;font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer">🖨️ Imprimir SELB</button>
+        ${(() => {
+          const st = (typeof _equipGetSelbPrintState === 'function') ? _equipGetSelbPrintState(selb) : null;
+          if(st && st.isLast){
+            const hr = st.ts ? new Date(st.ts).toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'}) : '';
+            return `<button onclick="equipImprimirSelb('${selbEsc}')" title="Último SELB impresso${hr ? ' às ' + hr : ''} — clique para reimprimir" style="background:rgba(34,211,238,0.20);border:1.5px solid #22d3ee;border-radius:7px;color:#22d3ee;font-size:11px;font-weight:800;padding:4px 10px;cursor:pointer;box-shadow:0 0 10px rgba(34,211,238,0.35)">🖨️✓ SELB • ÚLTIMO</button>`;
+          } else if(st && st.printed){
+            const hr = st.ts ? new Date(st.ts).toLocaleTimeString('pt-BR', {hour:'2-digit', minute:'2-digit'}) : '';
+            return `<button onclick="equipImprimirSelb('${selbEsc}')" title="SELB já impresso${hr ? ' às ' + hr : ''} — clique para reimprimir" style="background:rgba(74,222,128,0.18);border:1px solid rgba(74,222,128,0.5);border-radius:7px;color:#4ade80;font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer">✓ SELB Impresso</button>`;
+          }
+          return `<button onclick="equipImprimirSelb('${selbEsc}')" title="Imprimir SELB direto (padrão selbetti 8x3cm)" style="background:rgba(28,107,69,0.12);border:1px solid rgba(28,107,69,0.4);border-radius:7px;color:#1c6b45;font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer">🖨️ Imprimir SELB</button>`;
+        })()}
       </div>
     </td>
     <td>${(typeof currentUser !== 'undefined' && currentUser && (currentUser.isAdmin || currentUser.sector === 'PCP')) ? `<div class="tbl-acts">
@@ -16442,11 +16745,13 @@ async function saveEquipamento(){
   const err        = document.getElementById('meq-err');
   if(!selb){ err.textContent='Informe o código SELB.'; return; }
   if(!nome){ err.textContent='Informe o nome do equipamento.'; return; }
+  const prevSlot = editingEquipKey ? _equipSlots[editingEquipKey] : null;
   // If key changed, remove old
   if(editingEquipKey && editingEquipKey !== selb){
     await _supa.from('equipamentos').delete().eq('id', editingEquipKey);
     delete equipamentos[editingEquipKey];
     delete _equipManualInfo[editingEquipKey];
+    delete _equipSlots[editingEquipKey];
     await _supa.from('equipamentos_series').delete().eq('id', editingEquipKey);
     delete _equipSeries[editingEquipKey];
     await _supa.from('equipamentos_skus').delete().eq('id', editingEquipKey);
@@ -16457,16 +16762,24 @@ async function saveEquipamento(){
   // Marca como cadastro manual (protegido por 10 dias da importação de planilha):
   // - equipamento totalmente novo → começa a contar agora;
   // - edição de um equipamento que já era manual → mantém a data original;
-  // - edição de um equipamento que veio da planilha → continua não-manual.
+  // - edição de um equipamento que veio da planilha → continua não-manual e preserva o slot.
   let _eqRaw = { nome };
   if(!editingEquipKey){
     _eqRaw = { nome, manual: true, criadoEm: Date.now() };
   } else if(_equipManualInfo[editingEquipKey]){
     _eqRaw = { nome, manual: true, criadoEm: _equipManualInfo[editingEquipKey] };
+  } else {
+    _eqRaw = { nome, slot: prevSlot || _equipSlots[selb] || 1 };
   }
   await _supa.from('equipamentos').upsert({ id: selb, nome, raw: _eqRaw }, { onConflict: 'id' });
   equipamentos[selb] = nome;
-  if(_eqRaw.manual) _equipManualInfo[selb] = _eqRaw.criadoEm; else delete _equipManualInfo[selb];
+  if(_eqRaw.manual){
+    _equipManualInfo[selb] = _eqRaw.criadoEm;
+    delete _equipSlots[selb];
+  } else {
+    delete _equipManualInfo[selb];
+    _equipSlots[selb] = _eqRaw.slot || 1;
+  }
 
   if(serie){
     await _supa.from('equipamentos_series').upsert({ id: selb, raw: { serie } }, { onConflict: 'id' });
@@ -16494,11 +16807,12 @@ async function saveEquipamento(){
   
   closeModal('modal-equip');
   const _saveTs = Date.now();
-  _equipSaveToLocalCache(_saveTs);
+  const _savePayload = _equipBuildImportAtPayload(_saveTs);
+  _equipSaveToLocalCache(_saveTs, _savePayload);
   if(typeof _supa !== 'undefined' && _supa){
     _supa.from('app_config').upsert({
       key: 'equip_import_at',
-      value: { ts: _saveTs, user: (currentUser && (currentUser.name || currentUser.email)) || 'admin', count: Object.keys(equipamentos).length }
+      value: _savePayload
     }, { onConflict: 'key' }).catch(()=>{});
   }
   renderEquipTable();
@@ -16509,6 +16823,7 @@ async function deleteEquip(selb){
   await _supa.from('equipamentos').delete().eq('id', selb);
   delete equipamentos[selb];
   delete _equipManualInfo[selb];
+  delete _equipSlots[selb];
   await _supa.from('equipamentos_series').delete().eq('id', selb);
   delete _equipSeries[selb];
   await _supa.from('equipamentos_skus').delete().eq('id', selb);
@@ -16516,33 +16831,37 @@ async function deleteEquip(selb){
   await _supa.from('equipamentos_unitizadores').delete().eq('id', selb);
   delete _equipUnitizadores[selb];
   const _delTs = Date.now();
-  _equipSaveToLocalCache(_delTs);
+  const _delPayload = _equipBuildImportAtPayload(_delTs);
+  _equipSaveToLocalCache(_delTs, _delPayload);
   if(typeof _supa !== 'undefined' && _supa){
     _supa.from('app_config').upsert({
       key: 'equip_import_at',
-      value: { ts: _delTs, user: (currentUser && (currentUser.name || currentUser.email)) || 'admin', count: Object.keys(equipamentos).length }
+      value: _delPayload
     }, { onConflict: 'key' }).catch(()=>{});
   }
   renderEquipTable();
 }
 
 async function clearEquipamentos(){
-  if(!confirm('Isso vai remover TODOS os equipamentos cadastrados. Confirmar?')) return;
+  if(!confirm('Isso vai remover TODOS os equipamentos cadastrados (todas as planilhas e manuais). Confirmar?')) return;
   await _supa.from('equipamentos').delete().neq('id', '___never___');
   await _supa.from('equipamentos_series').delete().neq('id', '___never___');
   await _supa.from('equipamentos_skus').delete().neq('id', '___never___');
   await _supa.from('equipamentos_unitizadores').delete().neq('id', '___never___');
   equipamentos = {};
   _equipManualInfo = {};
+  _equipSlots = {};
   _equipSeries = {};
   _equipSkus = {};
   _equipUnitizadores = {};
+  window._equipSlotFilter = null;
   const _clrTs = Date.now();
-  _equipSaveToLocalCache(_clrTs);
+  const _clrPayload = _equipBuildImportAtPayload(_clrTs, { 1: null, 2: null, 3: null });
+  _equipSaveToLocalCache(_clrTs, _clrPayload);
   if(typeof _supa !== 'undefined' && _supa){
     _supa.from('app_config').upsert({
       key: 'equip_import_at',
-      value: { ts: _clrTs, user: (currentUser && (currentUser.name || currentUser.email)) || 'admin', count: 0 }
+      value: _clrPayload
     }, { onConflict: 'key' }).catch(()=>{});
   }
   renderEquipTable();
@@ -21718,12 +22037,34 @@ function renderQualRegistros(){
     .filter(r => !dayKeysForBadge.size || dayKeysForBadge.has(r.data));
   const checklistBadgeIds = _qualIdsComBadgeChecklist(poolBadge);
 
+  let lastFolhaId = null, lastFolhaTs = 0;
+  let lastSelbId = null, lastSelbTs = 0;
+  Object.entries(_qualRegistros || {}).forEach(([id, rec]) => {
+    if (!rec) return;
+    const fTs = Number(rec.folha_impressa_ts) || 0;
+    if (rec.folha_impressa && fTs >= lastFolhaTs && fTs > 0) {
+      lastFolhaTs = fTs;
+      lastFolhaId = id;
+    }
+    const sTs = Number(rec.selb_impresso_ts) || 0;
+    if (rec.selb_impresso && sTs >= lastSelbTs && sTs > 0) {
+      lastSelbTs = sTs;
+      lastSelbId = id;
+    }
+  });
+
   tbody.innerHTML = entries.map(r => {
     const isAdmin = !!(currentUser && currentUser.isAdmin);
     const canPrintLabel = isAdmin || !!(currentUser && (currentUser.sector === 'DESMEMBRAMENTO' || currentUser.sector === 'PCP' || currentUser.sector === 'QUALIDADE'));
     const canDelete = isAdmin;
     const chamado = !!r.chamado_aberto;
     const showChkBadge = checklistBadgeIds.has(r._id);
+    const folhaImp = !!r.folha_impressa;
+    const isLastFolha = folhaImp && (r._id === lastFolhaId);
+    const folhaHora = r.folha_impressa_ts ? new Date(r.folha_impressa_ts).toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' }) : '';
+    const selbImp = !!r.selb_impresso;
+    const isLastSelb = selbImp && (r._id === lastSelbId);
+    const selbHora = r.selb_impresso_ts ? new Date(r.selb_impresso_ts).toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' }) : '';
     return `
     <tr data-selb="${r.selb || ''}" style="${chamado ? 'border-left:3px solid #f5a623;background:linear-gradient(90deg,rgba(245,166,35,0.18) 0%,rgba(245,166,35,0.04) 100%);box-shadow:inset 0 0 0 1px rgba(245,166,35,0.25)' : (r.etiqueta_impressa ? 'border-left:3px solid #4ade80;background:linear-gradient(90deg,rgba(74,222,128,0.22) 0%,rgba(74,222,128,0.08) 100%);box-shadow:inset 0 0 0 1px rgba(74,222,128,0.25)' : 'border-left:3px solid rgba(74,222,128,0.55);background:linear-gradient(90deg,rgba(74,222,128,0.04) 0%,transparent 60%)')}">
       <td style="font-family:var(--mono);font-size:12px;white-space:nowrap">${r.data || '—'}<br><span style="color:var(--muted);font-size:10px">${r.hora || ''}</span></td>
@@ -21789,13 +22130,13 @@ function renderQualRegistros(){
             title="Gerar etiqueta deste SELB"
             style="background:${r.etiqueta_impressa ? 'rgba(74,222,128,0.18)' : 'rgba(167,139,250,0.12)'};border:1px solid ${r.etiqueta_impressa ? 'rgba(74,222,128,0.5)' : 'rgba(167,139,250,0.4)'};border-radius:7px;color:${r.etiqueta_impressa ? '#4ade80' : 'var(--purple)'};font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer">${r.etiqueta_impressa ? '✓ Impressa' : '🏷️ Etiqueta'}</button>` : (r.etiqueta_impressa ? `<span style="background:rgba(74,222,128,0.18);border:1px solid rgba(74,222,128,0.5);border-radius:7px;color:#4ade80;font-size:11px;font-weight:700;padding:4px 10px">✓ Impressa</span>` : '')}
           ${canPrintLabel ? `<button onclick="abrirFolhaLiberacao('${r._id}')"
-            title="Imprimir folha de liberação (revisão laboratório)"
-            style="background:rgba(56,161,105,0.12);border:1px solid rgba(56,161,105,0.4);border-radius:7px;color:#38a169;font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer">📄 Imprimir Folha</button>` : ''}
-          ${canPrintLabel ? `<button onclick="equipImprimirSelb('${(r.selb||'').replace(/'/g,"\\'")}')"
-            title="Imprimir etiqueta SELB (padrão selbetti)"
-            style="background:rgba(28,107,69,0.15);border:1px solid rgba(28,107,69,0.45);border-radius:7px;color:#2f9e63;font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:5px">
-            🖨️ Imprimir Selb
-          </button>` : ''}
+            title="${isLastFolha ? 'Última folha impressa' + (folhaHora ? ' às ' + folhaHora : '') + ' — clique para reimprimir' : (folhaImp ? 'Folha já impressa' + (folhaHora ? ' às ' + folhaHora : '') + ' — clique para reimprimir' : 'Imprimir folha de liberação (revisão laboratório)')}"
+            style="background:${isLastFolha ? 'rgba(34,211,238,0.22)' : (folhaImp ? 'rgba(74,222,128,0.18)' : 'rgba(56,161,105,0.12)')};border:${isLastFolha ? '1.5px solid #22d3ee' : (folhaImp ? '1px solid rgba(74,222,128,0.5)' : '1px solid rgba(56,161,105,0.4)')};border-radius:7px;color:${isLastFolha ? '#22d3ee' : (folhaImp ? '#4ade80' : '#38a169')};font-size:11px;font-weight:${isLastFolha ? '800' : '700'};padding:4px 10px;cursor:pointer;${isLastFolha ? 'box-shadow:0 0 10px rgba(34,211,238,0.35);' : ''}">${isLastFolha ? '📄✓ Folha • ÚLTIMA' : (folhaImp ? '✓ Folha Impressa' : '📄 Imprimir Folha')}</button>` : (folhaImp ? `<span style="background:rgba(74,222,128,0.18);border:1px solid rgba(74,222,128,0.5);border-radius:7px;color:#4ade80;font-size:11px;font-weight:700;padding:4px 10px">✓ Folha</span>` : '')}
+          ${canPrintLabel ? `<button onclick="equipImprimirSelb('${(r.selb||'').replace(/'/g,"\\'")}','${r._id}')"
+            title="${isLastSelb ? 'Último SELB impresso' + (selbHora ? ' às ' + selbHora : '') + ' — clique para reimprimir' : (selbImp ? 'Etiqueta SELB já impressa' + (selbHora ? ' às ' + selbHora : '') + ' — clique para reimprimir' : 'Imprimir etiqueta SELB direto (padrão selbetti)')}"
+            style="background:${isLastSelb ? 'rgba(34,211,238,0.22)' : (selbImp ? 'rgba(74,222,128,0.18)' : 'rgba(28,107,69,0.15)')};border:${isLastSelb ? '1.5px solid #22d3ee' : (selbImp ? '1px solid rgba(74,222,128,0.5)' : '1px solid rgba(28,107,69,0.45)')};border-radius:7px;color:${isLastSelb ? '#22d3ee' : (selbImp ? '#4ade80' : '#2f9e63')};font-size:11px;font-weight:${isLastSelb ? '800' : '700'};padding:4px 10px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:5px;${isLastSelb ? 'box-shadow:0 0 10px rgba(34,211,238,0.35);' : ''}">
+            ${isLastSelb ? '🖨️✓ Selb • ÚLTIMO' : (selbImp ? '✓ Selb Impresso' : '🖨️ Imprimir Selb')}
+          </button>` : (selbImp ? `<span style="background:rgba(74,222,128,0.18);border:1px solid rgba(74,222,128,0.5);border-radius:7px;color:#4ade80;font-size:11px;font-weight:700;padding:4px 10px">✓ Selb</span>` : '')}
           ${isAdmin && r.etiqueta_impressa ? `<button onclick="reverterEtiquetaImpressa('${r._id}')"
             title="Reverter — etiqueta impressa por engano"
             style="background:rgba(242,87,87,.1);border:1px solid rgba(242,87,87,.4);border-radius:7px;color:var(--danger);font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer">↺ Reverter</button>` : ''}
@@ -23061,24 +23402,92 @@ const SELB_LABEL_CSS = `
   .selb2-codigo{ font-family:'Consolas',monospace; font-size:8pt; font-weight:700; letter-spacing:2px; text-align:center; color:#1a1a1a; line-height:1; }
 `;
 
-// ── Gera e imprime a etiqueta padrão SELB (selbetti) da aba Equipamentos — 80mm x 30mm ──
-function equipImprimirSelb(selb){
+// ── Controle de marcação de impressão (Folha e SELB) + destaque do último impresso ──
+const _EQUIP_SELB_PRINT_KEY = 'sb_equip_selb_print_v1';
+
+function _equipLoadSelbPrintHist(){
+  if(window._equipSelbPrintHist) return window._equipSelbPrintHist;
+  try {
+    const raw = localStorage.getItem(_EQUIP_SELB_PRINT_KEY);
+    if(raw){
+      const parsed = JSON.parse(raw);
+      if(parsed && typeof parsed === 'object'){
+        window._equipSelbPrintHist = {
+          printed: parsed.printed || {},
+          lastSelb: parsed.lastSelb || null,
+          lastTs: parsed.lastTs || 0
+        };
+        return window._equipSelbPrintHist;
+      }
+    }
+  } catch(e){}
+  window._equipSelbPrintHist = { printed: {}, lastSelb: null, lastTs: 0 };
+  return window._equipSelbPrintHist;
+}
+
+function _equipGetSelbPrintState(selb){
+  const code = String(selb || '').toUpperCase().trim();
+  if(!code) return null;
+  const h = _equipLoadSelbPrintHist();
+  const ts = h.printed[code];
+  if(!ts) return null;
+  return { printed: true, ts, isLast: h.lastSelb === code };
+}
+
+async function _qualMarcarImpresso(regId, tipo, selb){
+  const now = Date.now();
+  const code = String(selb || '').toUpperCase().trim();
+  const by = (typeof currentUser !== 'undefined' && currentUser && currentUser.name) || null;
+
+  if(tipo === 'selb' && code){
+    const h = _equipLoadSelbPrintHist();
+    h.printed[code] = now;
+    h.lastSelb = code;
+    h.lastTs = now;
+    try { localStorage.setItem(_EQUIP_SELB_PRINT_KEY, JSON.stringify(h)); } catch(e){}
+    const eqView = document.getElementById('view-equip');
+    if(eqView && eqView.classList.contains('active') && typeof renderEquipTable === 'function'){
+      renderEquipTable();
+    }
+  }
+
+  if(regId && typeof _qualRegistros !== 'undefined' && _qualRegistros[regId]){
+    const patch = (tipo === 'folha')
+      ? { folha_impressa: true, folha_impressa_ts: now, folha_impressa_by: by }
+      : { selb_impresso: true, selb_impresso_ts: now, selb_impresso_by: by };
+    const newRaw = { ..._qualRegistros[regId], ...patch };
+    _qualRegistros[regId] = newRaw;
+    if(typeof renderQualRegistros === 'function') renderQualRegistros();
+    try {
+      if(typeof _supaAuthed === 'function'){
+        await _supaAuthed().from('qualidade_registros').update({ raw: newRaw }).eq('id', regId);
+      }
+    } catch(e){
+      console.warn('[Qualidade] Falha ao salvar marcação de impressão:', e);
+    }
+  }
+}
+
+// Pré-carrega fontes e biblioteca de código de barras em segundo plano para impressão imediata
+try { setTimeout(() => { selbEnsureFonts(); selbLoadBarcodeLib(() => {}); }, 800); } catch(e){}
+
+// ── Gera e imprime DIRETO a etiqueta padrão SELB (selbetti) — 80mm x 30mm (sem pré-visualização) ──
+function equipImprimirSelb(selb, regId){
   selb = (selb || '').toUpperCase().trim();
   if(!selb) return;
 
   selbEnsureFonts();
 
-  // Remove overlay anterior se existir
+  // Remove eventual modal antigo se existir
   const existente = document.getElementById('modal-selb-print');
   if(existente) existente.remove();
 
-  const overlay = document.createElement('div');
-  overlay.id = 'modal-selb-print';
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,0.75);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;overflow:auto';
+  // Abre a janela de impressão sincronicamente no clique para não ser bloqueada por pop-up blocker
+  const w = window.open('', '_blank', 'width=500,height=350');
+  if(!w){ alert('Permita pop-ups para imprimir.'); return; }
 
-  const styleTag = document.createElement('style');
-  styleTag.textContent = SELB_LABEL_CSS;
-  overlay.appendChild(styleTag);
+  // Marca imediatamente como impresso (e como o último impresso)
+  _qualMarcarImpresso(regId || null, 'selb', selb);
 
   const labelWrap = document.createElement('div');
   labelWrap.className = 'selb2-etiqueta';
@@ -23094,65 +23503,6 @@ function equipImprimirSelb(selb){
   const svgEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   qrBox.appendChild(svgEl);
 
-  const btns = document.createElement('div');
-  btns.className = 'no-print';
-  btns.style.cssText = 'display:flex;gap:12px;flex-wrap:wrap;justify-content:center';
-
-  const btnImprimir = document.createElement('button');
-  btnImprimir.textContent = '⏳ Carregando...';
-  btnImprimir.disabled = true;
-  btnImprimir.style.cssText = 'background:var(--accent);border:none;border-radius:10px;color:#fff;font-family:var(--font);font-size:14px;font-weight:700;padding:10px 28px;cursor:pointer;opacity:.7';
-  btnImprimir.onclick = function(){
-    const w = window.open('', '_blank', 'width=500,height=350');
-    if(!w){ alert('Permita pop-ups para imprimir.'); return; }
-    w.document.write(`<!doctype html><html><head>
-<meta charset="utf-8">
-<title>SELB ${selb}</title>
-<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@800&family=IBM+Plex+Mono:wght@600&display=swap" rel="stylesheet">
-<style>
-  @page { size: 80mm 30mm; margin: 0mm; }
-  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; width: 80mm !important; height: 30mm !important; overflow: hidden !important; }
-  ${styleTag.textContent}
-  .selb2-etiqueta{ box-shadow:none !important; border-radius:0 !important; }
-  @media print { html, body { width: 80mm !important; height: 30mm !important; overflow: hidden !important; } * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; } }
-  @media screen { body { display:flex; align-items:center; justify-content:center; min-height:100vh; background:#eee !important; } }
-</style>
-</head><body>${labelWrap.outerHTML}</body></html>`);
-    w.document.close();
-    const doPrint = () => {
-      try { w.focus(); w.print(); } catch(e){}
-      setTimeout(() => { try { w.close(); } catch(e){} }, 1000);
-    };
-    setTimeout(() => {
-      const imgs = Array.from(w.document.images);
-      if(imgs.length === 0){ setTimeout(doPrint, 300); return; }
-      let pending = imgs.filter(i => !i.complete).length;
-      if(pending === 0){ setTimeout(doPrint, 300); return; }
-      imgs.forEach(img => {
-        if(!img.complete){
-          img.onload  = () => { pending--; if(pending <= 0) setTimeout(doPrint, 300); };
-          img.onerror = () => { pending--; if(pending <= 0) setTimeout(doPrint, 300); };
-        }
-      });
-      setTimeout(doPrint, 3000);
-    }, 300);
-  };
-
-  const btnFechar = document.createElement('button');
-  btnFechar.textContent = '✕ Fechar';
-  btnFechar.style.cssText = 'background:var(--bg3);border:1px solid var(--border2);border-radius:10px;color:var(--text);font-family:var(--font);font-size:14px;font-weight:600;padding:10px 22px;cursor:pointer';
-  btnFechar.onclick = function(){ overlay.remove(); };
-
-  btns.append(btnImprimir, btnFechar);
-  overlay.append(btns, labelWrap);
-  document.body.appendChild(overlay);
-
-  overlay.addEventListener('click', function(e){
-    if(e.target === overlay) overlay.remove();
-  });
-
-  // Gera o código de barras (CODE128) assim que a biblioteca estiver disponível
   selbLoadBarcodeLib(function(){
     try{
       window.JsBarcode(svgEl, selb, {
@@ -23167,9 +23517,43 @@ function equipImprimirSelb(selb){
     }catch(e){
       console.error('Erro ao gerar código de barras SELB', e);
     }
-    btnImprimir.disabled = false;
-    btnImprimir.textContent = '🖨️ Imprimir';
-    btnImprimir.style.opacity = '1';
+
+    w.document.write(`<!doctype html><html><head>
+<meta charset="utf-8">
+<title>SELB ${selb}</title>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@800&family=IBM+Plex+Mono:wght@600&display=swap" rel="stylesheet">
+<style>
+  @page { size: 80mm 30mm; margin: 0mm; }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; width: 80mm !important; height: 30mm !important; overflow: hidden !important; }
+  ${SELB_LABEL_CSS}
+  .selb2-etiqueta{ box-shadow:none !important; border-radius:0 !important; }
+  @media print { html, body { width: 80mm !important; height: 30mm !important; overflow: hidden !important; } * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; } }
+  @media screen { body { display:flex; align-items:center; justify-content:center; min-height:100vh; background:#eee !important; } }
+</style>
+</head><body>${labelWrap.outerHTML}</body></html>`);
+    w.document.close();
+
+    let printed = false;
+    const doPrint = () => {
+      if(printed) return;
+      printed = true;
+      try { w.focus(); w.print(); } catch(e){}
+      setTimeout(() => { try { w.close(); } catch(e){} }, 1000);
+    };
+    setTimeout(() => {
+      const imgs = Array.from(w.document.images);
+      if(imgs.length === 0){ setTimeout(doPrint, 200); return; }
+      let pending = imgs.filter(i => !i.complete).length;
+      if(pending === 0){ setTimeout(doPrint, 200); return; }
+      imgs.forEach(img => {
+        if(!img.complete){
+          img.onload  = () => { pending--; if(pending <= 0) setTimeout(doPrint, 200); };
+          img.onerror = () => { pending--; if(pending <= 0) setTimeout(doPrint, 200); };
+        }
+      });
+      setTimeout(doPrint, 2500);
+    }, 150);
   });
 }
 window.equipImprimirSelb = equipImprimirSelb;
@@ -23262,6 +23646,7 @@ window.abrirFolhaLiberacao = function(regId){
     const senha = box.querySelector('#_fl-senha').value.trim();
     const liberado = box.querySelector('#_fl-liberadopor').value.trim();
     _folhaLibSalvarPadrao(equipamento, usuario, senha);
+    _qualMarcarImpresso(regId, 'folha', selb);
     _imprimirFolhaLiberacao({ selb, dataFmt, usuario, senha, liberado, equipamento, contadorPB, contadorColor });
     overlay.remove();
   };
@@ -23375,6 +23760,7 @@ function _imprimirFolhaLiberacao({ selb, dataFmt, usuario, senha, liberado, equi
       if(printed) return;
       printed = true;
       try{ w.focus(); w.print(); }catch(e){}
+      setTimeout(() => { try { w.close(); } catch(e){} }, 1000);
     };
     const img = w.document.getElementById('qr-selb-img');
     if(img && !img.complete){
@@ -24504,6 +24890,7 @@ function toggleEquipImportUI(u){
   if(addBtn) addBtn.style.display = canManage ? '' : 'none';
   const clearBtn = document.getElementById('equip-clear-btn');
   if(clearBtn) clearBtn.style.display = canManage ? '' : 'none';
+  if(typeof _equipUpdateImportBadge === 'function') _equipUpdateImportBadge();
 }
 
 function applySectorTabPerms(u){
