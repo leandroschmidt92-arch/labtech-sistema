@@ -12762,6 +12762,7 @@ function renderReprovRel(){
       </td>
     </tr>`;
   }).join('');
+  if(typeof _qualSyncFolhaLoteUI === 'function') _qualSyncFolhaLoteUI();
 }
 
 function toggleReprovUser(nome){
@@ -18118,6 +18119,7 @@ async function renderPecasSubView(){
       </td>
     </tr>`;
   }).join('');
+  if(typeof _qualSyncFolhaLoteUI === 'function') _qualSyncFolhaLoteUI();
 }
 
 // ── Listener Supabase para maquinas_a ───────────────────────────────────
@@ -19433,6 +19435,7 @@ async function _qualFetchDia(yyyymmdd, silent){
 }
 
 async function qualOnDateFilterChange(){
+  window._qualPageLimit = 10;
   const v = document.getElementById('qual-reg-date-filter')?.value;
   renderQualRegistros();               // mostra já o que existe em cache
   if(!v) return;
@@ -21493,15 +21496,18 @@ async function toggleChamadoAberto(id, novoValor){
 
 // ── Alterna o filtro "Aberto Chamado" (ignora data, mostra todos com chamado aberto) ──
 window.toggleFilterChamado = function(){
+  window._qualPageLimit = 10;
   window._qualFilterChamado = !window._qualFilterChamado;
   renderQualRegistros();
 };
 window.toggleFilterConcluidos = function(){
+  window._qualPageLimit = 10;
   window._qualFilterConcluidos = !window._qualFilterConcluidos;
   if(window._qualFilterConcluidos){ window._qualFilterPendentes=false; window._qualFilterChamado=false; }
   renderQualRegistros();
 };
 window.toggleFilterPendentes = function(){
+  window._qualPageLimit = 10;
   window._qualFilterPendentes = !window._qualFilterPendentes;
   if(window._qualFilterPendentes){ window._qualFilterConcluidos=false; window._qualFilterChamado=false; }
   renderQualRegistros();
@@ -21626,6 +21632,7 @@ let _qualHistSelbUltimaBusca = '';
 // Mantém o comportamento original (filtra a tabela de registros de qualidade)
 // e, em paralelo, dispara (com debounce) a busca global de histórico do SELB.
 function qualOnBuscaInput(){
+  window._qualPageLimit = 10;
   renderQualRegistros();
   clearTimeout(_qualHistSelbTimer);
   const q = (document.getElementById('qual-reg-search')?.value || '').trim().toUpperCase();
@@ -22047,8 +22054,23 @@ function renderQualRegistros(){
     })
     .sort((a, b) => (b.ts || 0) - (a.ts || 0));  // mais recentes primeiro
 
+  const totalFiltered = entries.length;
+  const pageLimit = window._qualPageLimit || 10;
+  const visibleEntries = entries.slice(0, pageLimit);
+
+  if(!window._qualFolhaSelIds) window._qualFolhaSelIds = new Set();
+  // Remove da seleção IDs que não existem mais
+  Array.from(window._qualFolhaSelIds).forEach(id => {
+    if(!_qualRegistros || !_qualRegistros[id]) window._qualFolhaSelIds.delete(id);
+  });
+  window._qualVisibleIds = visibleEntries.map(r => r._id);
+
+  const pagBar = document.getElementById('qual-pagination-bar');
+
   if(!entries.length){
-    tbody.innerHTML = `<tr><td colspan="9" class="empty">Nenhum registro de qualidade encontrado para os filtros selecionados.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" class="empty">Nenhum registro de qualidade encontrado para os filtros selecionados.</td></tr>`;
+    if(pagBar) pagBar.style.display = 'none';
+    if(typeof _qualSyncFolhaLoteUI === 'function') _qualSyncFolhaLoteUI();
     return;
   }
 
@@ -22076,7 +22098,7 @@ function renderQualRegistros(){
     }
   });
 
-  tbody.innerHTML = entries.map(r => {
+  tbody.innerHTML = visibleEntries.map(r => {
     const isAdmin = !!(currentUser && currentUser.isAdmin);
     const canPrintLabel = isAdmin || !!(currentUser && (currentUser.sector === 'DESMEMBRAMENTO' || currentUser.sector === 'PCP' || currentUser.sector === 'QUALIDADE'));
     const canDelete = isAdmin;
@@ -22088,41 +22110,63 @@ function renderQualRegistros(){
     const selbImp = !!r.selb_impresso;
     const isLastSelb = selbImp && (r._id === lastSelbId);
     const selbHora = r.selb_impresso_ts ? new Date(r.selb_impresso_ts).toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' }) : '';
+    const isFolhaSel = window._qualFolhaSelIds.has(r._id);
     return `
-    <tr data-selb="${r.selb || ''}" style="${chamado ? 'border-left:3px solid #f5a623;background:linear-gradient(90deg,rgba(245,166,35,0.18) 0%,rgba(245,166,35,0.04) 100%);box-shadow:inset 0 0 0 1px rgba(245,166,35,0.25)' : (r.etiqueta_impressa ? 'border-left:3px solid #4ade80;background:linear-gradient(90deg,rgba(74,222,128,0.22) 0%,rgba(74,222,128,0.08) 100%);box-shadow:inset 0 0 0 1px rgba(74,222,128,0.25)' : 'border-left:3px solid rgba(74,222,128,0.55);background:linear-gradient(90deg,rgba(74,222,128,0.04) 0%,transparent 60%)')}">
-      <td style="font-family:var(--mono);font-size:12px;white-space:nowrap">${r.data || '—'}<br><span style="color:var(--muted);font-size:10px">${r.hora || ''}</span></td>
-      <td style="font-family:var(--mono);font-weight:700;color:var(--accent);white-space:nowrap">${r.selb || '—'}${r.selb ? `${(() => { const fa = r.fotos || (r.raw && r.raw.fotos) || []; const up = window._qualUploadsAtivos && window._qualUploadsAtivos[r._id]; let h = ""; if (fa.length) { h += `<button type="button" class="qual-selb-badge-foto" onclick="qualAbrirModalFotos(\'${r._id}\')" title="Visualizar ${fa.length} foto(s) anexada(s)" style="margin-left:6px;background:rgba(59,130,246,0.18);border:1px solid rgba(59,130,246,0.5);border-radius:6px;color:#60a5fa;font-size:11px;font-weight:700;padding:2px 7px;cursor:pointer;display:inline-flex;align-items:center;gap:4px">📷 ${fa.length}</button>`; } if (up) { h += `<span id="qual-upload-badge-${r._id}" title="Enviando fotos para o Google Drive em segundo plano" style="margin-left:6px;background:rgba(245,158,11,0.18);border:1px solid rgba(245,158,11,0.5);border-radius:6px;color:#fbbf24;font-size:11px;font-weight:700;padding:2px 8px;display:inline-flex;align-items:center;gap:4px">⏳ Enviando ${up.enviadas}/${up.total}...</span>`; } else if (r.fotos_enviando || (window._qualUploadsPendentes && window._qualUploadsPendentes[r._id])) { h += window._qualBadgeEnvioParado(r); } return h; })()}<button onclick="(function(btn,val){navigator.clipboard.writeText(val).then(function(){var o=btn.textContent;btn.textContent='✓';btn.style.color='var(--accent2)';setTimeout(function(){btn.textContent=o;btn.style.color='';},1500)}).catch(function(){});})(this,'${r.selb}')" title="Copiar SELB" style="margin-left:6px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:var(--muted);font-size:10px;font-weight:600;padding:1px 5px;cursor:pointer;transition:all .15s">⧉</button><button type="button" onclick="qualAbrirModalAnexarFotos('${r._id}')" title="Anexar ou adicionar fotos a este registro" style="margin-left:6px;background:rgba(16,185,129,0.16);border:1px solid rgba(16,185,129,0.45);border-radius:6px;color:#34d399;font-size:11px;font-weight:700;padding:3px 8px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px">📷 Anexar fotos</button>` : ''}</td>
-      <td style="font-size:12px;color:var(--muted);max-width:240px">
-        ${r.equipamento || '—'}
-        ${showChkBadge ? `<br><span title="Checklist atribuído a este registro (prioridade: mais antigos do dia)" style="display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:800;color:#22d3ee;background:rgba(34,211,238,.15);border:1px solid rgba(34,211,238,.5);border-radius:7px;padding:4px 10px;margin-top:5px">📋 Checklist</span>` : ''}
-        ${(r.serie || getEquipSerie(r.selb)) ? `<br><span style="font-family:var(--mono);font-size:10px;color:var(--accent);opacity:.85;letter-spacing:.03em">S/N: ${r.serie || getEquipSerie(r.selb)}</span>` : ''}
-        ${getEquipSku(r.selb) ? `<br><span style="font-family:var(--mono);font-size:10px;color:var(--accent2);opacity:.85;letter-spacing:.03em">SKU: ${getEquipSku(r.selb)}</span>` : ''}
+    <tr data-selb="${r.selb || ''}" data-reg-id="${r._id}" style="${chamado ? 'border-left:3px solid #f5a623;background:linear-gradient(90deg,rgba(245,166,35,0.18) 0%,rgba(245,166,35,0.04) 100%);box-shadow:inset 0 0 0 1px rgba(245,166,35,0.25)' : (r.etiqueta_impressa ? 'border-left:3px solid #4ade80;background:linear-gradient(90deg,rgba(74,222,128,0.22) 0%,rgba(74,222,128,0.08) 100%);box-shadow:inset 0 0 0 1px rgba(74,222,128,0.25)' : 'border-left:3px solid rgba(74,222,128,0.55);background:linear-gradient(90deg,rgba(74,222,128,0.04) 0%,transparent 60%)')}">
+      <td style="width:32px;text-align:center;vertical-align:middle;padding:6px 2px">
+        <input type="checkbox" class="qual-folha-chk" data-reg-id="${r._id}" ${isFolhaSel ? 'checked' : ''} onchange="qualToggleFolhaSel('${r._id}', this.checked)" title="Selecionar SELB ${r.selb || ''} para imprimir Folha em lote" style="width:14px;height:14px;cursor:pointer;accent-color:#38a169">
       </td>
-      <td style="font-size:12px">${r.responsavel || '—'}</td>
-      <td style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--text);text-align:right;white-space:nowrap;line-height:1.4">
+      <td style="width:85px;white-space:nowrap;font-family:var(--mono);font-size:11px;line-height:1.2;padding:6px 6px">${r.data || '—'}<br><span style="color:var(--muted);font-size:10px">${r.hora || ''}</span></td>
+      <td style="width:125px;white-space:nowrap;font-family:var(--mono);font-weight:700;color:var(--accent);padding:6px 4px">${r.selb || '—'}${r.selb ? `${(() => { const fa = r.fotos || (r.raw && r.raw.fotos) || []; const up = window._qualUploadsAtivos && window._qualUploadsAtivos[r._id]; let h = ""; if (fa.length) { h += `<button type="button" class="qual-selb-badge-foto" onclick="qualAbrirModalFotos(\'${r._id}\')" title="Visualizar ${fa.length} foto(s) anexada(s)" style="margin-left:4px;background:rgba(59,130,246,0.18);border:1px solid rgba(59,130,246,0.5);border-radius:5px;color:#60a5fa;font-size:10px;font-weight:700;padding:2px 5px;cursor:pointer;display:inline-flex;align-items:center;gap:3px">📷 ${fa.length}</button>`; } if (up) { h += `<span id="qual-upload-badge-${r._id}" title="Enviando fotos para o Google Drive em segundo plano" style="margin-left:4px;background:rgba(245,158,11,0.18);border:1px solid rgba(245,158,11,0.5);border-radius:5px;color:#fbbf24;font-size:10px;font-weight:700;padding:2px 6px;display:inline-flex;align-items:center;gap:3px">⏳ ${up.enviadas}/${up.total}</span>`; } else if (r.fotos_enviando || (window._qualUploadsPendentes && window._qualUploadsPendentes[r._id])) { h += window._qualBadgeEnvioParado(r); } return h; })()}<button onclick="(function(btn,val){navigator.clipboard.writeText(val).then(function(){var o=btn.textContent;btn.textContent='✓';btn.style.color='var(--accent2)';setTimeout(function(){btn.textContent=o;btn.style.color='';},1500)}).catch(function(){});})(this,'${r.selb}')" title="Copiar SELB" style="margin-left:4px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:4px;color:var(--muted);font-size:10px;font-weight:600;padding:1px 4px;cursor:pointer;transition:all .15s">⧉</button><button type="button" onclick="qualAbrirModalAnexarFotos('${r._id}')" title="Anexar ou adicionar fotos a este registro" style="margin-left:4px;background:rgba(16,185,129,0.16);border:1px solid rgba(16,185,129,0.45);border-radius:5px;color:#34d399;font-size:10px;font-weight:700;padding:2px 6px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:3px">📷 Fotos</button>` : ''}</td>
+      <td style="width:395px;white-space:nowrap;padding:6px 4px">
+        <div style="display:flex;gap:4px;align-items:center;flex-wrap:nowrap">
+          ${canPrintLabel ? `<button onclick="qualGerarEtiquetaUnica('${(r.selb||'').replace(/'/g,"\\'")}','${r._id}')"
+            title="Gerar etiqueta deste SELB"
+            style="background:${r.etiqueta_impressa ? 'rgba(74,222,128,0.18)' : 'rgba(167,139,250,0.12)'};border:1px solid ${r.etiqueta_impressa ? 'rgba(74,222,128,0.5)' : 'rgba(167,139,250,0.4)'};border-radius:6px;color:${r.etiqueta_impressa ? '#4ade80' : 'var(--purple)'};font-size:11px;font-weight:700;padding:3px 7px;cursor:pointer">${r.etiqueta_impressa ? '✓ Impressa' : '🏷️ Etiqueta'}</button>` : (r.etiqueta_impressa ? `<span style="background:rgba(74,222,128,0.18);border:1px solid rgba(74,222,128,0.5);border-radius:6px;color:#4ade80;font-size:11px;font-weight:700;padding:3px 7px">✓ Impressa</span>` : '')}
+          ${canPrintLabel ? `<button onclick="abrirFolhaLiberacao('${r._id}')"
+            title="${isLastFolha ? 'Última folha impressa' + (folhaHora ? ' às ' + folhaHora : '') + ' — clique para reimprimir' : (folhaImp ? 'Folha já impressa' + (folhaHora ? ' às ' + folhaHora : '') + ' — clique para reimprimir' : 'Imprimir folha de liberação (revisão laboratório)')}"
+            style="background:${isLastFolha ? 'rgba(34,211,238,0.22)' : (folhaImp ? 'rgba(74,222,128,0.18)' : 'rgba(56,161,105,0.12)')};border:${isLastFolha ? '1.5px solid #22d3ee' : (folhaImp ? '1px solid rgba(74,222,128,0.5)' : '1px solid rgba(56,161,105,0.4)')};border-radius:6px;color:${isLastFolha ? '#22d3ee' : (folhaImp ? '#4ade80' : '#38a169')};font-size:11px;font-weight:${isLastFolha ? '800' : '700'};padding:3px 7px;cursor:pointer;${isLastFolha ? 'box-shadow:0 0 10px rgba(34,211,238,0.35);' : ''}">${isLastFolha ? '📄✓ ÚLTIMA' : (folhaImp ? '✓ Folha' : '📄 Folha')}</button>` : (folhaImp ? `<span style="background:rgba(74,222,128,0.18);border:1px solid rgba(74,222,128,0.5);border-radius:6px;color:#4ade80;font-size:11px;font-weight:700;padding:3px 7px">✓ Folha</span>` : '')}
+          ${canPrintLabel ? `<button onclick="equipImprimirSelb('${(r.selb||'').replace(/'/g,"\\'")}','${r._id}')"
+            title="${isLastSelb ? 'Último SELB impresso' + (selbHora ? ' às ' + selbHora : '') + ' — clique para reimprimir' : (selbImp ? 'Etiqueta SELB já impressa' + (selbHora ? ' às ' + selbHora : '') + ' — clique para reimprimir' : 'Imprimir etiqueta SELB direto (padrão selbetti)')}"
+            style="background:${isLastSelb ? 'rgba(34,211,238,0.22)' : (selbImp ? 'rgba(74,222,128,0.18)' : 'rgba(28,107,69,0.15)')};border:${isLastSelb ? '1.5px solid #22d3ee' : (selbImp ? '1px solid rgba(74,222,128,0.5)' : '1px solid rgba(28,107,69,0.45)')};border-radius:6px;color:${isLastSelb ? '#22d3ee' : (selbImp ? '#4ade80' : '#2f9e63')};font-size:11px;font-weight:${isLastSelb ? '800' : '700'};padding:3px 7px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:4px;${isLastSelb ? 'box-shadow:0 0 10px rgba(34,211,238,0.35);' : ''}">
+            ${isLastSelb ? '🖨️✓ ÚLTIMO' : (selbImp ? '✓ Selb' : '🖨️ Selb')}
+          </button>` : (selbImp ? `<span style="background:rgba(74,222,128,0.18);border:1px solid rgba(74,222,128,0.5);border-radius:6px;color:#4ade80;font-size:11px;font-weight:700;padding:3px 7px">✓ Selb</span>` : '')}
+          ${isAdmin && r.etiqueta_impressa ? `<button onclick="reverterEtiquetaImpressa('${r._id}')"
+            title="Reverter — etiqueta impressa por engano"
+            style="background:rgba(242,87,87,.1);border:1px solid rgba(242,87,87,.4);border-radius:6px;color:var(--danger);font-size:11px;font-weight:700;padding:3px 7px;cursor:pointer">↺ Reverter</button>` : ''}
+          ${(isAdmin || (currentUser && (currentUser.sector === 'PCP' || currentUser.sector === 'QUALIDADE'))) ? `<button onclick="toggleChamadoAberto('${r._id}', ${chamado ? 'false' : 'true'})"
+            title="${chamado ? 'Marcar chamado como fechado' : 'Marcar como chamado aberto'}"
+            style="background:${chamado ? 'rgba(245,166,35,0.18)' : 'rgba(255,255,255,0.05)'};border:1px solid ${chamado ? 'rgba(245,166,35,0.55)' : 'rgba(255,255,255,0.18)'};border-radius:6px;color:${chamado ? '#f5a623' : 'var(--muted)'};font-size:11px;font-weight:700;padding:3px 7px;cursor:pointer">${chamado ? '📞 Aberto' : '📞 Chamado'}</button>` : (chamado ? `<span style="background:rgba(245,166,35,0.18);border:1px solid rgba(245,166,35,0.55);border-radius:6px;color:#f5a623;font-size:11px;font-weight:700;padding:3px 7px">📞 Aberto</span>` : '')}
+          ${canDelete ? `<button onclick="qualExcluirRegistro('${r._id}','${(r.selb||'').replace(/'/g,"\\'")}','${(r.equipamento||'').replace(/'/g,"\\'")}')"
+            title="Excluir este registro"
+            style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.35);border-radius:6px;color:var(--danger);font-size:11px;font-weight:700;padding:3px 7px;cursor:pointer">🗑️ Excluir</button>` : ''}
+        </div>
+      </td>
+      <td style="width:85px;white-space:nowrap;font-size:11px;padding:6px 6px 6px 10px">${r.responsavel || '—'}</td>
+      <td style="width:115px;white-space:nowrap;font-family:var(--mono);font-size:11px;font-weight:700;color:var(--text);text-align:right;line-height:1.3;padding:6px 6px">
         PB: ${Number(r.contador_pb ?? r.contador ?? 0).toLocaleString('pt-BR')}
         <button onclick="(function(btn,val){navigator.clipboard.writeText(val).then(function(){var o=btn.textContent;btn.textContent='✓';btn.style.color='var(--accent2)';setTimeout(function(){btn.textContent=o;btn.style.color='';},1500)}).catch(function(){});})(this,'${r.contador_pb ?? r.contador ?? 0}')"
           title="Copiar contador PB"
-          style="margin-left:4px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:var(--muted);font-size:10px;font-weight:600;padding:1px 5px;cursor:pointer;transition:all .15s">⧉</button>
+          style="margin-left:3px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:4px;color:var(--muted);font-size:10px;font-weight:600;padding:1px 4px;cursor:pointer;transition:all .15s">⧉</button>
         ${(r.contador_color != null && r.contador_color !== '') ? `
           <br>
-          <span style="color:var(--accent2);font-size:11px">COR: ${Number(r.contador_color).toLocaleString('pt-BR')}</span>
+          <span style="color:var(--accent2);font-size:10px">COR: ${Number(r.contador_color).toLocaleString('pt-BR')}</span>
           <button onclick="(function(btn,val){navigator.clipboard.writeText(val).then(function(){var o=btn.textContent;btn.textContent='✓';btn.style.color='var(--accent2)';setTimeout(function(){btn.textContent=o;btn.style.color='';},1500)}).catch(function(){});})(this,'${r.contador_color}')"
             title="Copiar contador Color"
-            style="margin-left:4px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:5px;color:var(--muted);font-size:10px;font-weight:600;padding:1px 5px;cursor:pointer;transition:all .15s">⧉</button>
+            style="margin-left:3px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:4px;color:var(--muted);font-size:10px;font-weight:600;padding:1px 4px;cursor:pointer;transition:all .15s">⧉</button>
         ` : ''}
       </td>
-      <td style="font-size:12px;color:var(--muted);max-width:220px">${r.obs || '—'}</td>
-      <td style="font-size:12px">
+      <td style="width:55px;white-space:nowrap;font-size:11px;padding:6px 4px;text-align:center">
         ${(function(){
           const pedVal = r.pedido ? String(r.pedido).trim() : '';
           const rid = r._id || '';
           const selbVal = (r.selb||'').replace(/'/g,"\\'");
           if(pedVal){
-            return `<span style="font-family:var(--mono);font-weight:700;color:#fbbf24;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.35);border-radius:6px;padding:3px 8px;font-size:12px;white-space:nowrap">${pedVal}</span>`;
+            return `<span style="font-family:var(--mono);font-weight:700;color:#fbbf24;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.35);border-radius:5px;padding:2px 6px;font-size:11px;white-space:nowrap">${pedVal}</span>`;
           }
-          // Sem pedido: exibe campo para digitar
-          return `<input type="text" placeholder="—" onblur="(function(inp,id,selb){
+          // Sem pedido: campo ultra-compacto que expande ao focar
+          return `<input type="text" placeholder="—" onfocus="this.style.width='75px'" onblur="(function(inp,id,selb){
+            inp.style.width='36px';
             var v=(inp.value||'').trim();
             if(!v)return;
             if(!confirm('Salvar pedido '+v+' para SELB '+selb+'?')){inp.value='';return;}
@@ -22132,49 +22176,75 @@ function renderQualRegistros(){
             _supaAuthed().from('qualidade_registros').update({raw:nRaw}).eq('id',id).then(function(r){if(r.error){alert('Erro: '+r.error.message);}else{_qualRegistros[id]=nRaw;renderQualRegistros();try{if(typeof fluxolabRemoverPedidoDaLista==='function'){fluxolabRemoverPedidoDaLista(v);}else if(typeof fluxolabRenderChecklistsImported==='function'){fluxolabRenderChecklistsImported();
     if (typeof window._pvRenderModalTable === 'function' && document.getElementById('pv-modal') && document.getElementById('pv-modal').style.display === 'flex') { window._pvRenderModalTable(); }
     if (typeof window._pvcRenderModalTable === 'function' && document.getElementById('pvc-modal') && document.getElementById('pvc-modal').style.display === 'flex') { window._pvcRenderModalTable(); }}}catch(e){}}});
-          })(this,'${rid}','${selbVal}')" style="width:90px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 6px;font-size:12px;font-family:var(--mono);outline:none" />`;
+          })(this,'${rid}','${selbVal}')" style="width:36px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 3px;font-size:11px;font-family:var(--mono);text-align:center;outline:none;transition:width .15s" title="Clique para inserir nº do pedido" />`;
         })()}
       </td>
-      <td style="text-align:center">
-        <div style="display:flex;flex-direction:column;align-items:center;gap:6px">
-          <span style="display:inline-flex;align-items:center;gap:5px;background:rgba(74,222,128,0.12);border:1px solid rgba(74,222,128,0.40);border-radius:20px;padding:4px 10px;font-size:11px;font-weight:700;color:#4ade80;white-space:nowrap;letter-spacing:.02em">
-            ✅ Máquina Liberada
+      <td style="width:60px;white-space:nowrap;font-size:11px;color:var(--muted);padding:6px 6px;text-align:center">
+        ${r.obs ? `<span title="${String(r.obs).replace(/"/g,'&quot;')}" style="display:inline-block;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle">${r.obs}</span>` : '<span style="color:var(--muted);opacity:.5">—</span>'}
+      </td>
+      <td style="width:90px;white-space:nowrap;text-align:center;padding:6px 6px">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:3px">
+          <span style="display:inline-flex;align-items:center;gap:4px;background:rgba(74,222,128,0.12);border:1px solid rgba(74,222,128,0.40);border-radius:12px;padding:2px 7px;font-size:10px;font-weight:700;color:#4ade80;white-space:nowrap">
+            ✅ Liberada
           </span>
-          ${canPrintLabel ? `<label title="Marcar etiqueta como impressa (concluído)" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;font-weight:600;color:${r.etiqueta_impressa ? '#4ade80' : 'var(--muted)'};user-select:none">
-            <input type="checkbox" ${r.etiqueta_impressa ? 'checked' : ''} onchange="toggleEtiquetaImpressaManual('${r._id}', this.checked, this)" style="width:14px;height:14px;cursor:pointer;accent-color:#4ade80">
+          ${canPrintLabel ? `<label title="Marcar etiqueta como impressa (concluído)" style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;font-size:10px;font-weight:600;color:${r.etiqueta_impressa ? '#4ade80' : 'var(--muted)'};user-select:none">
+            <input type="checkbox" ${r.etiqueta_impressa ? 'checked' : ''} onchange="toggleEtiquetaImpressaManual('${r._id}', this.checked, this)" style="width:13px;height:13px;cursor:pointer;accent-color:#4ade80">
             Concluída
-          </label>` : `<span style="font-size:11px;font-weight:600;color:${r.etiqueta_impressa ? '#4ade80' : 'var(--muted)'}">${r.etiqueta_impressa ? '✓ Concluída' : 'Pendente'}</span>`}
+          </label>` : `<span style="font-size:10px;font-weight:600;color:${r.etiqueta_impressa ? '#4ade80' : 'var(--muted)'}">${r.etiqueta_impressa ? '✓ Concluída' : 'Pendente'}</span>`}
         </div>
       </td>
-
-      <td>
-        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-          ${canPrintLabel ? `<button onclick="qualGerarEtiquetaUnica('${(r.selb||'').replace(/'/g,"\\'")}','${r._id}')"
-            title="Gerar etiqueta deste SELB"
-            style="background:${r.etiqueta_impressa ? 'rgba(74,222,128,0.18)' : 'rgba(167,139,250,0.12)'};border:1px solid ${r.etiqueta_impressa ? 'rgba(74,222,128,0.5)' : 'rgba(167,139,250,0.4)'};border-radius:7px;color:${r.etiqueta_impressa ? '#4ade80' : 'var(--purple)'};font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer">${r.etiqueta_impressa ? '✓ Impressa' : '🏷️ Etiqueta'}</button>` : (r.etiqueta_impressa ? `<span style="background:rgba(74,222,128,0.18);border:1px solid rgba(74,222,128,0.5);border-radius:7px;color:#4ade80;font-size:11px;font-weight:700;padding:4px 10px">✓ Impressa</span>` : '')}
-          ${canPrintLabel ? `<button onclick="abrirFolhaLiberacao('${r._id}')"
-            title="${isLastFolha ? 'Última folha impressa' + (folhaHora ? ' às ' + folhaHora : '') + ' — clique para reimprimir' : (folhaImp ? 'Folha já impressa' + (folhaHora ? ' às ' + folhaHora : '') + ' — clique para reimprimir' : 'Imprimir folha de liberação (revisão laboratório)')}"
-            style="background:${isLastFolha ? 'rgba(34,211,238,0.22)' : (folhaImp ? 'rgba(74,222,128,0.18)' : 'rgba(56,161,105,0.12)')};border:${isLastFolha ? '1.5px solid #22d3ee' : (folhaImp ? '1px solid rgba(74,222,128,0.5)' : '1px solid rgba(56,161,105,0.4)')};border-radius:7px;color:${isLastFolha ? '#22d3ee' : (folhaImp ? '#4ade80' : '#38a169')};font-size:11px;font-weight:${isLastFolha ? '800' : '700'};padding:4px 10px;cursor:pointer;${isLastFolha ? 'box-shadow:0 0 10px rgba(34,211,238,0.35);' : ''}">${isLastFolha ? '📄✓ Folha • ÚLTIMA' : (folhaImp ? '✓ Folha Impressa' : '📄 Imprimir Folha')}</button>` : (folhaImp ? `<span style="background:rgba(74,222,128,0.18);border:1px solid rgba(74,222,128,0.5);border-radius:7px;color:#4ade80;font-size:11px;font-weight:700;padding:4px 10px">✓ Folha</span>` : '')}
-          ${canPrintLabel ? `<button onclick="equipImprimirSelb('${(r.selb||'').replace(/'/g,"\\'")}','${r._id}')"
-            title="${isLastSelb ? 'Último SELB impresso' + (selbHora ? ' às ' + selbHora : '') + ' — clique para reimprimir' : (selbImp ? 'Etiqueta SELB já impressa' + (selbHora ? ' às ' + selbHora : '') + ' — clique para reimprimir' : 'Imprimir etiqueta SELB direto (padrão selbetti)')}"
-            style="background:${isLastSelb ? 'rgba(34,211,238,0.22)' : (selbImp ? 'rgba(74,222,128,0.18)' : 'rgba(28,107,69,0.15)')};border:${isLastSelb ? '1.5px solid #22d3ee' : (selbImp ? '1px solid rgba(74,222,128,0.5)' : '1px solid rgba(28,107,69,0.45)')};border-radius:7px;color:${isLastSelb ? '#22d3ee' : (selbImp ? '#4ade80' : '#2f9e63')};font-size:11px;font-weight:${isLastSelb ? '800' : '700'};padding:4px 10px;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:5px;${isLastSelb ? 'box-shadow:0 0 10px rgba(34,211,238,0.35);' : ''}">
-            ${isLastSelb ? '🖨️✓ Selb • ÚLTIMO' : (selbImp ? '✓ Selb Impresso' : '🖨️ Imprimir Selb')}
-          </button>` : (selbImp ? `<span style="background:rgba(74,222,128,0.18);border:1px solid rgba(74,222,128,0.5);border-radius:7px;color:#4ade80;font-size:11px;font-weight:700;padding:4px 10px">✓ Selb</span>` : '')}
-          ${isAdmin && r.etiqueta_impressa ? `<button onclick="reverterEtiquetaImpressa('${r._id}')"
-            title="Reverter — etiqueta impressa por engano"
-            style="background:rgba(242,87,87,.1);border:1px solid rgba(242,87,87,.4);border-radius:7px;color:var(--danger);font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer">↺ Reverter</button>` : ''}
-          ${(isAdmin || (currentUser && (currentUser.sector === 'PCP' || currentUser.sector === 'QUALIDADE'))) ? `<button onclick="toggleChamadoAberto('${r._id}', ${chamado ? 'false' : 'true'})"
-            title="${chamado ? 'Marcar chamado como fechado' : 'Marcar como chamado aberto'}"
-            style="background:${chamado ? 'rgba(245,166,35,0.18)' : 'rgba(255,255,255,0.05)'};border:1px solid ${chamado ? 'rgba(245,166,35,0.55)' : 'rgba(255,255,255,0.18)'};border-radius:7px;color:${chamado ? '#f5a623' : 'var(--muted)'};font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer">${chamado ? '📞 Chamado aberto' : '📞 Abrir chamado'}</button>` : (chamado ? `<span style="background:rgba(245,166,35,0.18);border:1px solid rgba(245,166,35,0.55);border-radius:7px;color:#f5a623;font-size:11px;font-weight:700;padding:4px 10px">📞 Chamado aberto</span>` : '')}
-          ${canDelete ? `<button onclick="qualExcluirRegistro('${r._id}','${(r.selb||'').replace(/'/g,"\\'")}','${(r.equipamento||'').replace(/'/g,"\\'")}')"
-            title="Excluir este registro"
-            style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.35);border-radius:7px;color:var(--danger);font-size:11px;font-weight:700;padding:4px 10px;cursor:pointer">🗑️ Excluir</button>` : ''}
-
-        </div>
+      <td style="font-size:11px;color:var(--muted);padding:6px 8px;line-height:1.3">
+        <span style="color:var(--text);font-weight:600">${r.equipamento || '—'}</span>
+        ${showChkBadge ? `<br><span title="Checklist atribuído a este registro (prioridade: mais antigos do dia)" style="display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:800;color:#22d3ee;background:rgba(34,211,238,.15);border:1px solid rgba(34,211,238,.5);border-radius:5px;padding:1px 6px;margin-top:3px">📋 Checklist</span>` : ''}
+        ${(r.serie || getEquipSerie(r.selb)) ? `<br><span style="font-family:var(--mono);font-size:10px;color:var(--accent);opacity:.85;letter-spacing:.02em">S/N: ${r.serie || getEquipSerie(r.selb)}</span>` : ''}
+        ${getEquipSku(r.selb) ? `<br><span style="font-family:var(--mono);font-size:10px;color:var(--accent2);opacity:.85;letter-spacing:.02em">SKU: ${getEquipSku(r.selb)}</span>` : ''}
       </td>
     </tr>`;
   }).join('');
+
+  if(pagBar){
+    if(totalFiltered > 10){
+      pagBar.style.display = 'flex';
+      const showingCnt = document.getElementById('qual-page-showing-cnt');
+      const totalCnt = document.getElementById('qual-page-total-cnt');
+      const btnMais = document.getElementById('qual-btn-ver-mais');
+      const btnTodos = document.getElementById('qual-btn-ver-todos');
+      const btnMenos = document.getElementById('qual-btn-ver-menos');
+
+      if(showingCnt) showingCnt.textContent = visibleEntries.length;
+      if(totalCnt) totalCnt.textContent = totalFiltered;
+
+      const hasMore = visibleEntries.length < totalFiltered;
+      if(btnMais) {
+        btnMais.style.display = hasMore ? 'inline-flex' : 'none';
+        btnMais.innerHTML = `⬇️ Ver mais (+${Math.min(10, totalFiltered - visibleEntries.length)})`;
+      }
+      if(btnTodos) {
+        btnTodos.style.display = hasMore ? 'inline-flex' : 'none';
+        btnTodos.textContent = `👁️ Mostrar todos (${totalFiltered})`;
+      }
+      if(btnMenos) {
+        btnMenos.style.display = (visibleEntries.length > 10) ? 'inline-flex' : 'none';
+      }
+    } else {
+      pagBar.style.display = 'none';
+    }
+  }
+
+  if(typeof _qualSyncFolhaLoteUI === 'function') _qualSyncFolhaLoteUI();
 }
+
+window._qualPageLimit = 10;
+window.qualVerMaisRegistros = function(increment){
+  if(increment === 'all'){
+    window._qualPageLimit = 999999;
+  } else if(increment === 'reset'){
+    window._qualPageLimit = 10;
+  } else {
+    window._qualPageLimit = (window._qualPageLimit || 10) + (Number(increment) || 10);
+  }
+  renderQualRegistros();
+};
 
 // ════════════════════════════════════════════════════════════════════
 // QUALIDADE — EXCLUSÃO DE REGISTRO
@@ -23792,6 +23862,370 @@ function _imprimirFolhaLiberacao({ selb, dataFmt, usuario, senha, liberado, equi
       setTimeout(doPrint, 2500);
     } else {
       setTimeout(doPrint, 250);
+    }
+  })();
+}
+
+// ════════════════════════════════════════════════════════════════════
+// QUALIDADE — IMPRESSÃO DE FOLHAS DE LIBERAÇÃO EM LOTE
+// ════════════════════════════════════════════════════════════════════
+function _qualSyncFolhaLoteUI(){
+  const sel = window._qualFolhaSelIds || new Set();
+  const cnt = sel.size;
+  const badge = document.getElementById('qual-folha-sel-badge');
+  if(badge){
+    badge.textContent = `${cnt} selecionada(s)`;
+    badge.style.background = cnt > 0 ? 'rgba(74,222,128,.20)' : 'rgba(56,161,105,.12)';
+    badge.style.color = cnt > 0 ? '#4ade80' : '#38a169';
+  }
+  const btnCnt = document.getElementById('qual-folha-sel-btn-cnt');
+  if(btnCnt) btnCnt.textContent = String(cnt);
+  const btnPrint = document.getElementById('qual-btn-imprimir-folha-lote');
+  if(btnPrint){
+    btnPrint.disabled = cnt === 0;
+    btnPrint.style.opacity = cnt > 0 ? '1' : '.45';
+    btnPrint.style.cursor = cnt > 0 ? 'pointer' : 'not-allowed';
+  }
+  const btnClear = document.getElementById('qual-btn-limpar-folha-lote');
+  if(btnClear){
+    btnClear.style.display = cnt > 0 ? '' : 'none';
+  }
+  const chkAll = document.getElementById('qual-folha-chk-all');
+  if(chkAll){
+    const vis = window._qualVisibleIds || [];
+    chkAll.checked = vis.length > 0 && vis.every(id => sel.has(id));
+  }
+}
+
+window.qualToggleFolhaSel = function(regId, checked){
+  if(!window._qualFolhaSelIds) window._qualFolhaSelIds = new Set();
+  if(checked) window._qualFolhaSelIds.add(regId);
+  else window._qualFolhaSelIds.delete(regId);
+  _qualSyncFolhaLoteUI();
+};
+
+window.qualToggleSelectAllFolhas = function(checked){
+  if(!window._qualFolhaSelIds) window._qualFolhaSelIds = new Set();
+  const vis = window._qualVisibleIds || [];
+  vis.forEach(id => {
+    if(checked) window._qualFolhaSelIds.add(id);
+    else window._qualFolhaSelIds.delete(id);
+  });
+  document.querySelectorAll('#qual-reg-body .qual-folha-chk').forEach(cb => {
+    const id = cb.getAttribute('data-reg-id');
+    if(id) cb.checked = window._qualFolhaSelIds.has(id);
+  });
+  _qualSyncFolhaLoteUI();
+};
+
+window.qualSelecionarFolhasNaoImpressas = function(){
+  if(!window._qualFolhaSelIds) window._qualFolhaSelIds = new Set();
+  const vis = window._qualVisibleIds || [];
+  let added = 0;
+  vis.forEach(id => {
+    const rec = _qualRegistros && _qualRegistros[id];
+    if(rec && !rec.folha_impressa){
+      window._qualFolhaSelIds.add(id);
+      added++;
+    }
+  });
+  if(added === 0 && window._qualFolhaSelIds.size === 0){
+    alert('Todas as folhas visíveis na lista já estão marcadas como impressas.\nVocê pode marcar as caixas manualmente ou clicar em "Selecionar todas" caso deseje reimprimir.');
+  }
+  document.querySelectorAll('#qual-reg-body .qual-folha-chk').forEach(cb => {
+    const id = cb.getAttribute('data-reg-id');
+    if(id) cb.checked = window._qualFolhaSelIds.has(id);
+  });
+  _qualSyncFolhaLoteUI();
+};
+
+window.qualLimparSelecaoFolhas = function(){
+  if(window._qualFolhaSelIds) window._qualFolhaSelIds.clear();
+  document.querySelectorAll('#qual-reg-body .qual-folha-chk').forEach(cb => { cb.checked = false; });
+  _qualSyncFolhaLoteUI();
+};
+
+window.abrirFolhaLiberacaoLote = function(){
+  const allowed = currentUser && (currentUser.isAdmin || currentUser.sector === 'DESMEMBRAMENTO' || currentUser.sector === 'PCP' || currentUser.sector === 'QUALIDADE');
+  if(!allowed){
+    alert('Você não tem permissão para imprimir folhas de liberação.');
+    return;
+  }
+  const selSet = window._qualFolhaSelIds || new Set();
+  if(!selSet.size){
+    alert('Selecione pelo menos 1 registro na tabela para imprimir em lote.');
+    return;
+  }
+
+  // Mantém a ordem visual da tabela
+  const visOrder = window._qualVisibleIds || [];
+  const orderedIds = [
+    ...visOrder.filter(id => selSet.has(id)),
+    ...Array.from(selSet).filter(id => !visOrder.includes(id))
+  ].filter(id => _qualRegistros && _qualRegistros[id]);
+
+  if(!orderedIds.length){
+    alert('Nenhum registro válido selecionado.');
+    return;
+  }
+
+  // Se selecionou apenas 1, pode usar o fluxo normal ou o de lote (o de lote funciona para 1 ou N)
+  const liberadoPor = (currentUser && currentUser.name) || '';
+
+  // Agrupa por modelo de equipamento para preencher Usuário/Senha padrão de cada modelo uma única vez
+  const modelosMap = new Map(); // modelKey -> { nome, ids: [], padrao: {usuario, senha} }
+  orderedIds.forEach(id => {
+    const rec = _qualRegistros[id] || {};
+    const eqNome = (rec.equipamento || 'SEM MODELO').trim();
+    const mKey = eqNome.toUpperCase();
+    if(!modelosMap.has(mKey)){
+      modelosMap.set(mKey, {
+        key: mKey,
+        nome: eqNome,
+        ids: [],
+        selbs: [],
+        padrao: _folhaLibGetPadrao(eqNome) || {}
+      });
+    }
+    const g = modelosMap.get(mKey);
+    g.ids.push(id);
+    g.selbs.push((rec.selb || '—').toUpperCase().trim());
+  });
+
+  const existente = document.getElementById('modal-folha-liberacao');
+  if(existente) existente.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'modal-folha-liberacao';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(0,0,0,0.75);display:flex;align-items:center;justify-content:center;padding:20px;overflow-y:auto';
+
+  const modelosArr = Array.from(modelosMap.values());
+  const modelosHtml = modelosArr.map((g, idx) => `
+    <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <div style="font-size:12px;font-weight:700;color:var(--text)">${g.nome}</div>
+        <span style="font-size:11px;font-weight:700;color:#4ade80;background:rgba(74,222,128,.14);border:1px solid rgba(74,222,128,.35);border-radius:99px;padding:2px 8px">${g.selbs.length} folha(s): ${g.selbs.join(', ')}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <label style="font-size:11px;font-weight:600;color:var(--muted)">Usuário
+          <input class="_fll-usu" data-mkey="${idx}" type="text" value="${(g.padrao.usuario || '').replace(/"/g,'&quot;')}" placeholder="Usuário da máquina"
+            style="width:100%;margin-top:3px;padding:7px 9px;border-radius:7px;border:1px solid var(--border2);background:var(--bg2);color:var(--text);font-family:var(--font);font-size:12px">
+        </label>
+        <label style="font-size:11px;font-weight:600;color:var(--muted)">Senha
+          <input class="_fll-sen" data-mkey="${idx}" type="text" value="${(g.padrao.senha || '').replace(/"/g,'&quot;')}" placeholder="Senha da máquina"
+            style="width:100%;margin-top:3px;padding:7px 9px;border-radius:7px;border:1px solid var(--border2);background:var(--bg2);color:var(--text);font-family:var(--font);font-size:12px">
+        </label>
+      </div>
+    </div>
+  `).join('');
+
+  const box = document.createElement('div');
+  box.style.cssText = 'background:var(--bg2);border:1px solid var(--border2);border-radius:16px;padding:24px;width:100%;max-width:540px;max-height:90vh;overflow-y:auto;display:flex;flex-direction:column;gap:14px;box-shadow:0 16px 48px rgba(0,0,0,.6)';
+  box.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:20px">📄</span>
+        <div style="font-size:15px;font-weight:700;color:var(--text)">Imprimir Folhas em Lote (${orderedIds.length} selecionada${orderedIds.length > 1 ? 's' : ''})</div>
+      </div>
+    </div>
+    <div style="font-size:11.5px;color:var(--muted)">Confira ou preencha o Usuário e a Senha padrão por modelo de equipamento. Todas as <b>${orderedIds.length}</b> folhas serão geradas em um único documento A4 (uma página por SELB).</div>
+    <div style="display:flex;flex-direction:column;gap:10px;max-height:48vh;overflow-y:auto;padding-right:2px">
+      ${modelosHtml}
+    </div>
+    <label style="font-size:12px;font-weight:600;color:var(--muted)">Liberado por (Ass.)
+      <input id="_fll-liberadopor" type="text" value="${liberadoPor.replace(/"/g,'&quot;')}" placeholder="Responsável pela qualidade"
+        style="width:100%;margin-top:4px;padding:9px 10px;border-radius:8px;border:1px solid var(--border2);background:var(--bg3);color:var(--text);font-family:var(--font);font-size:13px">
+    </label>
+    <div style="display:flex;gap:10px;margin-top:4px">
+      <button id="_fll-cancel" style="flex:1;padding:10px;border-radius:10px;border:1px solid var(--border2);background:var(--bg3);color:var(--muted);font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer">Cancelar</button>
+      <button id="_fll-print" style="flex:1.4;padding:10px;border-radius:10px;border:none;background:#38a169;color:#fff;font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer">🖨️ Imprimir ${orderedIds.length} Folha(s)</button>
+    </div>
+  `;
+
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if(e.target === overlay) overlay.remove(); });
+  box.querySelector('#_fll-cancel').onclick = () => overlay.remove();
+
+  box.querySelector('#_fll-print').onclick = async () => {
+    const liberado = box.querySelector('#_fll-liberadopor').value.trim();
+    const credPorModelo = new Map();
+    modelosArr.forEach((g, idx) => {
+      const uEl = box.querySelector(`._fll-usu[data-mkey="${idx}"]`);
+      const sEl = box.querySelector(`._fll-sen[data-mkey="${idx}"]`);
+      const usuario = uEl ? uEl.value.trim() : '';
+      const senha = sEl ? sEl.value.trim() : '';
+      _folhaLibSalvarPadrao(g.nome, usuario, senha);
+      credPorModelo.set(g.key, { usuario, senha });
+    });
+
+    const itemsToPrint = [];
+    const baseTs = Date.now();
+    const by = (currentUser && currentUser.name) || null;
+    const dbUpdates = [];
+
+    orderedIds.forEach((id, i) => {
+      const rec = _qualRegistros[id] || {};
+      const selb = (rec.selb || '').toUpperCase().trim();
+      const equipamento = rec.equipamento || '';
+      const mKey = (equipamento || 'SEM MODELO').trim().toUpperCase();
+      const cred = credPorModelo.get(mKey) || { usuario: '', senha: '' };
+      const contadorPB = rec.contador_pb ?? rec.contador ?? null;
+      const contadorColor = rec.contador_color ?? null;
+      const dataFmt = rec.data || new Date().toLocaleDateString('pt-BR');
+
+      itemsToPrint.push({
+        selb,
+        dataFmt,
+        usuario: cred.usuario,
+        senha: cred.senha,
+        liberado,
+        equipamento,
+        contadorPB,
+        contadorColor
+      });
+
+      const itemTs = baseTs + i;
+      const newRaw = {
+        ...rec,
+        folha_impressa: true,
+        folha_impressa_ts: itemTs,
+        folha_impressa_by: by
+      };
+      _qualRegistros[id] = newRaw;
+      if(typeof _supaAuthed === 'function'){
+        dbUpdates.push(_supaAuthed().from('qualidade_registros').update({ raw: newRaw }).eq('id', id));
+      }
+    });
+
+    // Abre a janela de impressão em lote imediatamente no clique
+    _imprimirFolhasLiberacaoLote(itemsToPrint);
+    overlay.remove();
+
+    // Limpa a seleção e atualiza a tabela
+    if(window._qualFolhaSelIds) window._qualFolhaSelIds.clear();
+    if(typeof renderQualRegistros === 'function') renderQualRegistros();
+
+    try { await Promise.all(dbUpdates); } catch(e){ console.warn('[Qualidade] Erro ao salvar marcação de lote:', e); }
+  };
+};
+
+function _imprimirFolhasLiberacaoLote(items){
+  if(!items || !items.length) return;
+  const w = window.open('', '_blank', 'width=850,height=1000');
+  if(!w){ alert('Permita pop-ups para imprimir.'); return; }
+
+  const pagesHtml = items.map((item, idx) => {
+    const { selb, dataFmt, usuario, senha, liberado, equipamento, contadorPB, contadorColor } = item;
+    const qrSelbSrc = selb ? _qualGerarQrDataUrl(selb, 260) : '';
+    const isLastPage = idx === items.length - 1;
+    return `
+    <div class="folha-page"${isLastPage ? '' : ' style="page-break-after:always;break-after:page"'}>
+      ${qrSelbSrc ? `<div class="qr-topo">
+        <div class="qr-topo-info">
+          <div class="qr-topo-tit">QR Code SELB • Registro de Fotos</div>
+          <div class="qr-topo-selb">SELB: ${selb || ''}</div>
+          <div class="qr-topo-sub">Aponte o leitor da aba Qualidade para vincular fotos a este equipamento</div>
+        </div>
+        <div class="qr-topo-box">
+          <img class="qr-selb-img" src="${qrSelbSrc}" alt="QR Code SELB ${selb}">
+        </div>
+      </div>` : ''}
+      <table class="folha" cellspacing="0" cellpadding="0">
+        <tr>
+          <td class="marca"><img src="${SELBETTI_LOGO_DATAURL}" alt="selbetti"></td>
+          <td class="titulo">REVISÃO<br>LABORATÓRIO</td>
+          <td class="selo"><div class="selo-badge">✓<br>APPROVED</div></td>
+        </tr>
+        <tr>
+          <td class="campo-cell borda-dir" colspan="2">SELB: ${selb || ''}</td>
+          <td class="campo-cell">DATA: ${dataFmt || ''}</td>
+        </tr>
+        ${equipamento ? `<tr><td class="linha-equip" colspan="3">EQUIPAMENTO: ${equipamento}</td></tr>` : ''}
+        ${(contadorPB != null || contadorColor != null) ? `<tr>
+          <td class="campo-cell borda-dir" colspan="2">CONTADOR PB: ${contadorPB != null ? Number(contadorPB).toLocaleString('pt-BR') : '—'}</td>
+          <td class="campo-cell">CONTADOR COLOR: ${contadorColor != null && contadorColor !== '' ? Number(contadorColor).toLocaleString('pt-BR') : '—'}</td>
+        </tr>` : ''}
+        <tr>
+          <td colspan="3">
+            <div class="corpo">
+              <div class="campo">USUÁRIO:<span class="val">${usuario || ''}</span></div>
+              <div class="campo">SENHA:<span class="val">${senha || ''}</span></div>
+              <div class="espaco"></div>
+              <div class="campo">LIBERADO POR</div>
+              <div class="ass-line">ASS: ${liberado || ''}</div>
+              <div class="qr-rodape">
+                <div class="qr-box">
+                  <img src="${QR_AVALIACAO_LAB_DATAURL}" alt="QR Code - Avaliação de Qualidade - Laboratório">
+                  <div class="qr-tit">Avaliação de Qualidade<br>Laboratório</div>
+                </div>
+              </div>
+            </div>
+          </td>
+        </tr>
+      </table>
+    </div>`;
+  }).join('\n');
+
+  w.document.write(`<!doctype html><html><head>
+<meta charset="utf-8">
+<title>Folhas de Liberação (${items.length})</title>
+<style>
+  @page { size: A4; margin: 16mm; }
+  * { box-sizing:border-box; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  body { margin:0; font-family: Arial, Helvetica, sans-serif; color:#111; }
+  .folha-page { width:100%; }
+  .qr-topo { display:flex; align-items:center; justify-content:space-between; border:1.5px solid #111; border-bottom:none; padding:10px 16px; background:#fff; }
+  .qr-topo-info { display:flex; flex-direction:column; gap:3px; }
+  .qr-topo-tit { font-size:10px; font-weight:800; color:#444; letter-spacing:.06em; text-transform:uppercase; }
+  .qr-topo-selb { font-size:20px; font-weight:900; color:#111; letter-spacing:.04em; }
+  .qr-topo-sub { font-size:10px; color:#555; }
+  .qr-topo-box { padding:3px; background:#fff; text-align:center; }
+  .qr-topo-box img { width:88px; height:88px; display:block; }
+  table.folha { width:100%; border-collapse:collapse; border:1.5px solid #111; }
+  table.folha td { padding:13px 16px; vertical-align:middle; }
+  .marca { width:34%; border-right:1.5px solid #111; text-align:center; }
+  .marca img { height:38px; width:auto; display:inline-block; }
+  .titulo { width:33%; border-right:1.5px solid #111; text-align:center; font-weight:800; font-size:16px; line-height:1.3; }
+  .selo { width:33%; text-align:center; }
+  .selo-badge { border:3px solid #1c6b45; color:#1c6b45; border-radius:50%; width:84px; height:84px; display:inline-flex; align-items:center; justify-content:center; font-size:11px; font-weight:800; text-align:center; line-height:1.2; }
+  .campo-cell { border-top:1.5px solid #111; padding:11px 16px; font-size:15px; font-weight:700; }
+  .campo-cell.borda-dir { border-right:1.5px solid #111; }
+  .linha-equip { border-top:1.5px solid #111; padding:10px 16px; font-size:12px; font-weight:600; color:#333; }
+  .corpo { padding:18px 20px 24px; }
+  .campo { font-size:15px; font-weight:700; margin-bottom:20px; }
+  .campo .val { font-weight:400; margin-left:6px; border-bottom:1px solid #111; padding-bottom:2px; }
+  .espaco { height:40px; }
+  .ass-line { border-top:1px solid #111; margin-top:30px; padding-top:6px; font-size:14px; }
+  .qr-rodape { display:flex; justify-content:flex-end; margin-top:18px; }
+  .qr-box { text-align:center; width:130px; }
+  .qr-box img { width:110px; height:110px; display:block; margin:0 auto 4px; }
+  .qr-box .qr-tit { font-size:9px; font-weight:800; line-height:1.25; text-transform:uppercase; }
+</style>
+</head><body>
+${pagesHtml}
+</body></html>`);
+  w.document.close();
+  (function waitAndPrintBatch(){
+    let printed = false;
+    const doPrint = () => {
+      if(printed) return;
+      printed = true;
+      try{ w.focus(); w.print(); }catch(e){}
+      setTimeout(() => { try { w.close(); } catch(e){} }, 1000);
+    };
+    const imgs = Array.from(w.document.images || []);
+    let pending = imgs.filter(i => !i.complete).length;
+    if(pending === 0){
+      setTimeout(doPrint, 250);
+    } else {
+      imgs.forEach(img => {
+        if(!img.complete){
+          img.addEventListener('load', () => { pending--; if(pending <= 0) setTimeout(doPrint, 150); }, { once: true });
+          img.addEventListener('error', () => { pending--; if(pending <= 0) setTimeout(doPrint, 150); }, { once: true });
+        }
+      });
+      setTimeout(doPrint, 3000);
     }
   })();
 }

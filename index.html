@@ -3577,25 +3577,70 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 
     <!-- Tabela de registros -->
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:20px">
+      <div id="qual-folha-lote-bar" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px;padding:10px 14px;background:var(--bg3);border:1px solid var(--border2);border-radius:10px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span style="font-size:12px;font-weight:700;color:var(--text);display:inline-flex;align-items:center;gap:6px">
+            📄 Impressão de Folhas em Lote
+          </span>
+          <span id="qual-folha-sel-badge" style="font-size:11px;font-weight:700;padding:3px 10px;border-radius:99px;background:rgba(56,161,105,.15);border:1px solid rgba(56,161,105,.4);color:#38a169">0 selecionada(s)</span>
+          <button type="button" onclick="qualSelecionarFolhasNaoImpressas()" style="background:rgba(255,255,255,.06);border:1px solid var(--border2);border-radius:7px;color:var(--text);font-family:var(--font);font-size:11px;font-weight:600;padding:5px 10px;cursor:pointer" title="Seleciona todos os registros visíveis cuja Folha ainda não foi impressa">☑️ Selecionar não impressas</button>
+          <button type="button" onclick="qualToggleSelectAllFolhas(true)" style="background:rgba(255,255,255,.06);border:1px solid var(--border2);border-radius:7px;color:var(--muted);font-family:var(--font);font-size:11px;font-weight:600;padding:5px 10px;cursor:pointer" title="Seleciona todas as linhas visíveis">Selecionar todas</button>
+          <button type="button" id="qual-btn-limpar-folha-lote" onclick="qualLimparSelecaoFolhas()" style="display:none;background:rgba(239,68,68,.10);border:1px solid rgba(239,68,68,.35);border-radius:7px;color:var(--danger);font-family:var(--font);font-size:11px;font-weight:600;padding:5px 10px;cursor:pointer">✕ Limpar seleção</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <button type="button" id="qual-btn-imprimir-folha-lote" onclick="abrirFolhaLiberacaoLote()" disabled style="background:#38a169;border:1px solid rgba(74,222,128,.5);border-radius:8px;color:#fff;font-family:var(--font);font-size:12px;font-weight:800;padding:7px 16px;cursor:not-allowed;opacity:.45;display:inline-flex;align-items:center;gap:6px;transition:all .15s">
+            📄 Imprimir Folha em Lote (<span id="qual-folha-sel-btn-cnt">0</span>)
+          </button>
+        </div>
+      </div>
       <div style="overflow-x:auto">
-        <table class="rtbl">
+        <table class="rtbl" style="display:table;width:100%;table-layout:fixed;border-collapse:collapse">
+          <colgroup>
+            <col style="width:32px">
+            <col style="width:85px">
+            <col style="width:125px">
+            <col style="width:395px">
+            <col style="width:85px">
+            <col style="width:115px">
+            <col style="width:55px">
+            <col style="width:60px">
+            <col style="width:90px">
+            <col>
+          </colgroup>
           <thead>
             <tr>
-              <th style="width:100px;white-space:nowrap">DATA</th>
-              <th style="min-width:160px">SELB</th>
-              <th style="min-width:200px">EQUIPAMENTO</th>
-              <th style="min-width:120px">RESPONSÁVEL</th>
-              <th style="text-align:right;min-width:140px">CONTADOR PB / COLOR</th>
-              <th style="min-width:120px">PEDIDO</th>
-              <th style="min-width:180px">OBSERVAÇÃO</th>
-              <th style="width:130px;text-align:center">STATUS</th>
-              <th style="min-width:260px">AÇÃO</th>
+              <th style="width:32px;text-align:center;padding:7px 2px"><input type="checkbox" id="qual-folha-chk-all" onchange="qualToggleSelectAllFolhas(this.checked)" title="Selecionar/desmarcar todas visíveis para imprimir Folha em lote" style="width:14px;height:14px;cursor:pointer;accent-color:#38a169"></th>
+              <th style="width:85px;white-space:nowrap;padding:7px 6px;font-size:10px">DATA</th>
+              <th style="width:125px;white-space:nowrap;padding:7px 4px;font-size:10px">SELB</th>
+              <th style="width:395px;white-space:nowrap;padding:7px 4px;font-size:10px">AÇÃO</th>
+              <th style="width:85px;white-space:nowrap;padding:7px 6px 7px 10px;font-size:10px">RESPONSÁVEL</th>
+              <th style="width:115px;white-space:nowrap;text-align:right;padding:7px 6px;font-size:10px">CONTADOR PB/COR</th>
+              <th style="width:55px;white-space:nowrap;text-align:center;padding:7px 4px;font-size:10px">PEDIDO</th>
+              <th style="width:60px;white-space:nowrap;text-align:center;padding:7px 6px;font-size:10px">OBSERVAÇÃO</th>
+              <th style="width:90px;white-space:nowrap;text-align:center;padding:7px 6px;font-size:10px">STATUS</th>
+              <th style="padding:7px 8px;text-align:left;font-size:10px">EQUIPAMENTO</th>
             </tr>
           </thead>
           <tbody id="qual-reg-body">
-            <tr><td colspan="9" class="empty">Carregando...</td></tr>
+            <tr><td colspan="10" class="empty">Carregando...</td></tr>
           </tbody>
         </table>
+      </div>
+      <div id="qual-pagination-bar" style="display:none;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding:10px 14px;border-top:1px solid var(--border);background:rgba(255,255,255,0.015);border-radius:0 0 12px 12px">
+        <div style="font-size:12px;color:var(--muted)">
+          Exibindo <b id="qual-page-showing-cnt" style="color:var(--text)">0</b> de <b id="qual-page-total-cnt" style="color:var(--accent)">0</b> registros
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button type="button" id="qual-btn-ver-mais" onclick="qualVerMaisRegistros(10)" style="background:rgba(79,142,247,0.12);border:1px solid rgba(79,142,247,0.4);border-radius:7px;color:var(--accent);font-size:11px;font-weight:700;padding:5px 14px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:all .15s">
+            ⬇️ Ver mais (+10)
+          </button>
+          <button type="button" id="qual-btn-ver-todos" onclick="qualVerMaisRegistros('all')" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:7px;color:var(--text);font-size:11px;font-weight:600;padding:5px 12px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;transition:all .15s">
+            👁️ Mostrar todos
+          </button>
+          <button type="button" id="qual-btn-ver-menos" onclick="qualVerMaisRegistros('reset')" style="display:none;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.12);border-radius:7px;color:var(--muted);font-size:11px;font-weight:600;padding:5px 10px;cursor:pointer;transition:all .15s">
+            ⬆️ Mostrar menos (10)
+          </button>
+        </div>
       </div>
     </div>
 
