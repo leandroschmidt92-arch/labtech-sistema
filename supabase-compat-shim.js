@@ -305,26 +305,47 @@ function createSupabaseCompatShim(supa) {
   const _pendingPatches = new Map(); // key: table|dateKey|id -> {merged, resolvers[], cfg, id, dateKey, scheduled}
   const COALESCE_MS = 120;
 
-  function _flushPatch(bucketKey) {
+  function _flushPatch(bucketKey, isRetry) {
     const bucket = _pendingPatches.get(bucketKey);
     if (!bucket) return;
     _pendingPatches.delete(bucketKey);
-    const { cfg, id, dateKey, merged, resolvers, rejecters } = bucket;
-    supa.rpc('jsonb_patch_row', {
+    const { cfg, id, dateKey, merged, resolvers } = bucket;
+    const sendRpc = () => supa.rpc('jsonb_patch_row', {
       p_table: cfg.table,
       p_id: id,
       p_patch: merged,
       p_date_key: dateKey || null,
-    }).then(({ error }) => {
-      if (error) {
-        // Não relança: sob 504/timeout, o próximo save reenvia o estado.
-        console.warn('[shim] rowsUpdate falhou (patch descartado, próximo save reenvia):', cfg.table, id, error.message || error);
+    });
+    const scheduleRetryOnce = (reason) => {
+      if (isRetry) {
+        console.warn('[shim] rowsUpdate falhou após retry:', cfg.table, id, reason);
+        return;
       }
-      else pubRow(cfg.table, id, dateKey, 'patch', { patch: merged });
+      setTimeout(() => {
+        // Se outro patch para a mesma linha entrou nesse meio-tempo, mescla nele (0 request extra)
+        let activeBucket = _pendingPatches.get(bucketKey);
+        if (activeBucket) {
+          activeBucket.merged = Object.assign({}, merged, activeBucket.merged);
+          return;
+        }
+        sendRpc().then(({ error: err2 }) => {
+          if (err2) console.warn('[shim] rowsUpdate retry falhou:', cfg.table, id, err2.message || err2);
+          else pubRow(cfg.table, id, dateKey, 'patch', { patch: merged });
+        }).catch(() => {});
+      }, 1500);
+    };
+    sendRpc().then(({ error }) => {
+      if (error) {
+        pubRow(cfg.table, id, dateKey, 'patch', { patch: merged });
+        scheduleRetryOnce(error.message || error);
+      } else {
+        pubRow(cfg.table, id, dateKey, 'patch', { patch: merged });
+      }
       resolvers.forEach(r => r());
     }).catch(err => {
-      console.warn('[shim] rowsUpdate exceção:', cfg.table, id, err && err.message || err);
-      resolvers.forEach(r => r()); // não propaga; UI continua fluindo
+      pubRow(cfg.table, id, dateKey, 'patch', { patch: merged });
+      scheduleRetryOnce(err && err.message || err);
+      resolvers.forEach(r => r());
     });
   }
 
@@ -686,10 +707,24 @@ function createSupabaseCompatShim(supa) {
   function rowsSubscribe(cfg, p, cb, filters) {
     const { dateKey, id, isCollection } = resolveRows(cfg, p);
     let cache = null;
+    let initialLoaded = false;
+    const earlyPatches = new Map(); // id -> patch acumulado antes do initial load
 
     // Carrega estado inicial UMA VEZ.
     rowsGet(cfg, p, filters).then(v => {
       cache = isCollection ? (v || {}) : v;
+      initialLoaded = true;
+      if (earlyPatches.size > 0) {
+        if (isCollection && cache && typeof cache === 'object') {
+          earlyPatches.forEach((patchObj, pid) => {
+            if (cache[pid]) cache[pid] = Object.assign({}, cache[pid], patchObj);
+          });
+        } else if (!isCollection && cache && typeof cache === 'object') {
+          const patchObj = earlyPatches.get(id);
+          if (patchObj) cache = Object.assign({}, cache, patchObj);
+        }
+        earlyPatches.clear();
+      }
       cb(makeSnapshot(cache));
     }).catch(err => console.warn('[shim] initial load falhou:', cfg.table, err));
 
@@ -765,6 +800,10 @@ function createSupabaseCompatShim(supa) {
         }
         if (ev.k !== 'row' || !relevant(ev)) return;
         if (isCollection) {
+          if (!initialLoaded && ev.op === 'patch') {
+            earlyPatches.set(ev.id, Object.assign({}, earlyPatches.get(ev.id) || {}, ev.patch));
+            return;
+          }
           if (cache == null) cache = {};
           if (ev.op === 'del') {
             if (cache[ev.id] !== undefined) {
@@ -776,6 +815,8 @@ function createSupabaseCompatShim(supa) {
             }
             return;
           }
+          // Evita criar registro incompleto (sem nome/setor/_selb) se um patch chegar para linha ausente no cache
+          if (ev.op === 'patch' && !cache[ev.id]) return;
           const raw = ev.op === 'patch'
             ? Object.assign({}, cache[ev.id] || {}, ev.patch)
             : ev.raw;
@@ -790,6 +831,11 @@ function createSupabaseCompatShim(supa) {
           cb(makeSnapshot(cache));
         } else {
           if (ev.op === 'del') { cache = null; cb(makeSnapshot(null)); return; }
+          if (!initialLoaded && ev.op === 'patch') {
+            earlyPatches.set(id, Object.assign({}, earlyPatches.get(id) || {}, ev.patch));
+            return;
+          }
+          if (ev.op === 'patch' && !cache) return;
           cache = ev.op === 'patch' ? Object.assign({}, cache || {}, ev.patch) : ev.raw;
           cb(makeSnapshot(cache));
         }

@@ -1441,90 +1441,57 @@ function applyUserSnapshot(freshUsers){
     users = users.filter(u => freshUsers.find(fu => fu.id === u.id));
   }
 
-  // ── Sync wstate a partir do Supabase ──
+  // ── Sync wstate a partir do Supabase (history = fonte única de verdade) ──
   users.forEach(fu => {
     if (fu._stale) return; // Ignora o snapshot antigo para não corromper o wstate local
-    const s      = getS(fu.id);
-    const status = fu._status || null;
-    const activeHistoryStatus = status === 'aguardando' ? 'aguardando' : 'running';
-    const activeHistory = history.find(h => h.uid === fu.id && h.status === activeHistoryStatus);
-    const activeSelb = (fu._selb !== undefined && fu._selb !== null) ? fu._selb : (activeHistory?.selb || null);
+    const s = getS(fu.id);
+    const activeHistory = history.find(h => h.uid === fu.id && (h.status === 'running' || h.status === 'aguardando'));
 
-    // An active status without a SELB is stale state left after completion.
-    // PROTEÇÃO contra flickering: se o snapshot chega com status ativo mas sem
-    // _selb (race condition entre listeners ou snapshot parcial do Firebase),
-    // e o wstate local JÁ tem este operador com um SELB ativo, preserva o
-    // estado local — não reseta para idle. Isso elimina o vai-e-vem visual.
-    const hasActiveStatus = status === 'running' || status === 'paused' || status === 'aguardando';
-    const localAlreadyActive = s.status === 'running' || s.status === 'paused' || s.status === 'aguardando';
-    if (hasActiveStatus && activeSelb === null && _historyReady) {
-      if (localAlreadyActive && s.selb) {
-        // O wstate local já tem um SELB válido rodando — snapshot parcial, preserva estado
+    // Fonte primária: se existe registro 'running'/'aguardando' em history (Consulta), o SELB está ativo.
+    // Mesmo que operadores.raw (_status/_selb) tenha falhado ou vindo 'idle', nunca esconde o SELB.
+    let status = null;
+    let activeSelb = null;
+
+    if (activeHistory && activeHistory.selb) {
+      activeSelb = activeHistory.selb;
+      if (activeHistory.status === 'aguardando') {
+        status = 'aguardando';
+      } else if (fu._status === 'paused' && (!fu._selb || fu._selb === activeHistory.selb)) {
+        status = 'paused';
+      } else {
+        status = 'running';
+      }
+      // Repara o nó de operadores silenciosamente se estiver dessincronizado na sessão do próprio operador
+      const isOwnOp = currentUser && !currentUser.isAdmin && currentUser.id === fu.id;
+      if (isOwnOp && (fu._selb !== activeSelb || !['running','paused','aguardando'].includes(fu._status))) {
+        fu._selb = activeSelb;
+        fu._status = status;
+        fu._startEpoch = activeHistory.startEpoch || fu._startEpoch || Date.now();
+        dbPatch('/users/' + fu.id, {
+          _selb: activeSelb,
+          _status: status,
+          _startEpoch: fu._startEpoch
+        }).catch(() => {});
+      }
+    } else if ((fu._status === 'running' || fu._status === 'paused' || fu._status === 'aguardando') && fu._selb) {
+      // Fallback caso o snapshot de /users chegue alguns ms antes do /history ou seja SELB de dia anterior:
+      // preserva ativo, a menos que este SELB já conste como finalizado/cancelado hoje no history[].
+      const finishedToday = _historyReady && history.find(h =>
+        h.uid === fu.id &&
+        h.selb === fu._selb &&
+        ['ok','rep','scrap','cancelado','Máquina A'].includes(h.status) &&
+        (!fu._startEpoch || !h.startEpoch || h.startEpoch >= fu._startEpoch - 5000)
+      );
+      if (!finishedToday) {
+        status = fu._status;
+        activeSelb = fu._selb;
+      }
+    } else if ((fu._status === 'running' || fu._status === 'paused' || fu._status === 'aguardando') && !fu._selb) {
+      // Snapshot parcial sem _selb: se o wstate local já tem um SELB ativo válido, preserva
+      const localAlreadyActive = (s.status === 'running' || s.status === 'paused' || s.status === 'aguardando') && s.selb;
+      if (localAlreadyActive) {
         return;
       }
-
-      // FIX (bug "SELB some do card mas continua 'Em andamento' na Consulta"):
-      // Antes, este bloco confiava só no array local `history[]` para decidir se
-      // o SELB era "stale". Se esse array ainda não tivesse o registro (listener
-      // de /history atrasado, SELB de dia anterior, ou propagação parcial do
-      // Supabase), o operador era zerado (_status:'idle', _selb:null) mesmo com
-      // um SELB de verdade rodando em /history — dessincronizando o card
-      // (mostra "Iniciar SELB") do registro real (continua "Em andamento" na
-      // Consulta), e bloqueando o reinício com "já possui um SELB em andamento".
-      //
-      // Agora: exige confirmação em 2 snapshots consecutivos (filtra flicker
-      // passageiro) e, antes de apagar, confirma contra o /history real do
-      // Supabase — não só o array local — antes de decidir que é realmente stale.
-      s._staleStrikes = (s._staleStrikes || 0) + 1;
-      if (s._staleStrikes < 2) return; // aguarda confirmação no próximo snapshot
-      s._staleStrikes = 0;
-
-      const _dateKeyCheck = new Date().toDateString().replace(/ /g, '_');
-      dbGet('/history/' + _dateKeyCheck).then(fbHist => {
-        const recs = fbHist ? Object.values(fbHist) : [];
-        const stillActive = recs.find(r => r.uid === fu.id && (r.status === 'running' || r.status === 'aguardando'));
-
-        if (stillActive) {
-          // Falso positivo: existe um SELB de verdade em andamento no Supabase —
-          // não apaga, re-sincroniza o wstate a partir do registro real.
-          console.warn('[Sanity Check] Falso positivo evitado — SELB real encontrado em /history, preservando:', stillActive);
-          s.status = stillActive.status === 'aguardando' ? 'aguardando' : 'running';
-          s.selb = stillActive.selb || s.selb;
-          s.startEpoch = stillActive.startEpoch || s.startEpoch || Date.now();
-          dbPatch('/users/' + fu.id, {
-            _selb: s.selb,
-            _status: s.status,
-            _startEpoch: s.startEpoch
-          }).catch(() => {});
-          renderCard(fu.id);
-          return;
-        }
-
-        // Confirmado contra o Supabase: não há SELB ativo de verdade — reparo seguro.
-        s.status = 'idle';
-        s.selb = null;
-        s.startEpoch = null;
-        s.elapsed = 0;
-        s.pausedElapsed = 0;
-        s._activeFrom = null;
-        s._frozenElapsed = 0;
-        s._pausedAt = null;
-        s._pauseAccum = 0;
-        dbPatch('/users/' + fu.id, {
-          _selb: null,
-          _status: 'idle',
-          _startEpoch: null,
-          _activeFrom: null,
-          _frozenElapsed: 0
-        }).catch(err => console.warn('[Sanity Check] Could not repair stale operator state:', err));
-        renderCard(fu.id);
-      }).catch(err => {
-        // Falha ao verificar — não apaga nada às cegas, mantém estado local por segurança
-        console.warn('[Sanity Check] Falha ao confirmar contra /history, mantendo estado local:', err);
-      });
-      return;
-    } else if (s._staleStrikes) {
-      s._staleStrikes = 0; // condição não bateu neste snapshot — reseta o contador
     }
 
     // SELBs de dias anteriores são mantidos — o operador finaliza normalmente.
@@ -1763,8 +1730,8 @@ function startRealtimeSync(){
           const s = getS(u.id);
           const hActive = history.find(h => h.uid === u.id && (h.status === 'running' || h.status === 'aguardando'));
           if (hActive) {
-            const targetSt = hActive.status === 'aguardando' ? 'aguardando' : 'running';
-            if (s.status === 'idle' || s.selb !== hActive.selb) {
+            const targetSt = hActive.status === 'aguardando' ? 'aguardando' : (s.status === 'paused' ? 'paused' : 'running');
+            if (s.status === 'idle' || s.selb !== hActive.selb || !s.selb) {
               s.status = targetSt;
               s.selb = hActive.selb || s.selb;
               s.startEpoch = hActive.startEpoch || s.startEpoch || Date.now();
@@ -1773,10 +1740,11 @@ function startRealtimeSync(){
                 if (!timers[u.id]) startTimer(u.id);
               }
             }
-          } else if ((s.status === 'running' || s.status === 'aguardando') && s.selb) {
-            // Se o SELB que estava rodando neste card acabou de ser finalizado no history de hoje, libera o card na hora
-            const hFinished = history.find(h => h.uid === u.id && h.selb === s.selb && ['ok','rep','scrap','cancelado'].includes(h.status) && (!s.startEpoch || !h.startEpoch || h.startEpoch >= s.startEpoch - 5000));
+          } else if ((s.status === 'running' || s.status === 'paused' || s.status === 'aguardando') && s.selb) {
+            // Se o SELB que estava rodando neste card acabou de ser finalizado/cancelado no history de hoje, libera o card na hora
+            const hFinished = history.find(h => h.uid === u.id && h.selb === s.selb && ['ok','rep','scrap','cancelado','Máquina A'].includes(h.status) && (!s.startEpoch || !h.startEpoch || h.startEpoch >= s.startEpoch - 5000));
             if (hFinished) {
+              if (timers[u.id]) { clearInterval(timers[u.id]); delete timers[u.id]; }
               s.status = 'idle';
               s.selb = null;
               s.startEpoch = null;
@@ -1799,7 +1767,8 @@ function startRealtimeSync(){
           });
         }
         if(!currentUser.isAdmin && document.getElementById('view-operador').classList.contains('active')){
-          opRenderHistory(currentUser.id);
+          if(!_opSyncPending) opRenderState(currentUser.id);
+          else opRenderHistory(currentUser.id);
         }
         if(document.getElementById('view-consulta').classList.contains('active')) renderConsulta();
         if(document.getElementById('view-qualidade').classList.contains('active')) scheduleRenderQualidade();
@@ -2165,7 +2134,7 @@ function bootApp(){
   localStorage.removeItem('sb_dashboard_zerado_dia');
   _dashboardZerado = false;
 
-  _historyReady = true;
+  _historyReady = false;
   _bootReady    = true;
 
   // Pré-carrega operadores apenas uma vez para o numpad (sem conexões Realtime)
@@ -2912,6 +2881,7 @@ function logout(){
     _supa.auth.signOut().catch(()=>{});
   }
   currentUser=null; pv=''; updPD();
+  _historyReady = false;
   _consultaDateKey = null;
   _consultaRecords = [];
   // Reseta inputs de data da consulta
@@ -3008,57 +2978,124 @@ async function opSyncFromSupabase(uid){
   let _syncDone = false;
   const _syncTimeout = setTimeout(() => {
     if(!_syncDone){
-      console.warn('[opSyncFromSupabase] Timeout — exibindo tela idle');
-      const s = getS(uid);
-      if(s.status === 'idle' || !s.status) opRenderState(uid);
+      console.warn('[opSyncFromSupabase] Timeout — exibindo estado atual');
+      _opSyncPending = false;
+      opRenderState(uid);
     }
   }, 5000);
 
   try {
-    const { data, error } = await _supa.from('operadores').select('raw').eq('id', uid).single();
+    // Fonte única de verdade: valida direto na tabela history do Supabase se este
+    // operador possui um SELB 'running' ou 'aguardando' (máx 1 linha, super leve),
+    // em paralelo com a leitura de operadores (usada para metadados de pausa/timer).
+    const [opRes, histRes] = await Promise.all([
+      _supa.from('operadores').select('raw').eq('id', uid).maybeSingle(),
+      _supa.from('history')
+        .select('id,date_key,raw,selb,status,start_epoch')
+        .eq('uid', uid)
+        .in('status', ['running', 'aguardando'])
+        .order('start_epoch', { ascending: false })
+        .limit(1)
+    ]);
     _syncDone = true;
     clearTimeout(_syncTimeout);
-    
-    if(error || !data || !data.raw){
-      _opSyncPending = false;
-      opRenderState(uid);
-      return;
-    }
-    const fbUser = data.raw;
-    const s = getS(uid);
-    const fbStatus = fbUser._status || 'idle';
 
-    if(fbStatus === 'running' && fbUser._selb){
-      s.status         = 'running';
-      s.selb           = fbUser._selb;
-      if(fbUser._startEpoch) s.startEpoch = fbUser._startEpoch;
-      // ── Protege timer local: só aplica _activeFrom/_frozenElapsed do Supabase
-      // quando o timer local ainda não foi iniciado (primeira carga).
-      // Evita que o sync periódico de 5s cause saltos no timer visual. ──
-      const localRunning = s._activeFrom != null && s._activeFrom > 0;
-      if(!localRunning){
-        s._frozenElapsed = (fbUser._frozenElapsed != null) ? fbUser._frozenElapsed : (s._frozenElapsed || 0);
-        s._activeFrom    = (fbUser._activeFrom    != null) ? fbUser._activeFrom    : (s._activeFrom  || Date.now());
+    const fbUser = (opRes && !opRes.error && opRes.data && opRes.data.raw) ? opRes.data.raw : null;
+    const activeRow = (histRes && !histRes.error && Array.isArray(histRes.data) && histRes.data[0]) ? histRes.data[0] : null;
+    const s = getS(uid);
+
+    if (activeRow) {
+      // Existe um SELB em andamento na tabela history (Consulta) — fonte oficial
+      const rawRec = (activeRow.raw && typeof activeRow.raw === 'object') ? activeRow.raw : {};
+      const activeSelb = rawRec.selb || activeRow.selb;
+      const activeSt = (rawRec.status || activeRow.status) === 'aguardando' ? 'aguardando' : 'running';
+      const activeEpoch = rawRec.startEpoch || activeRow.start_epoch || (fbUser && fbUser._startEpoch) || Date.now();
+      const activeDk = activeRow.date_key || rawRec._dateKey || new Date().toDateString().replace(/ /g, '_');
+
+      const hRec = {
+        ...rawRec,
+        _docId: activeRow.id,
+        _dateKey: activeDk,
+        uid: uid,
+        selb: activeSelb,
+        status: activeSt,
+        startEpoch: activeEpoch
+      };
+      const existingIdx = history.findIndex(x => x._docId === hRec._docId);
+      if (existingIdx === -1) history.unshift(hRec);
+      else history[existingIdx] = { ...history[existingIdx], ...hRec };
+
+      s.selb = activeSelb;
+      s.startEpoch = activeEpoch;
+
+      if (activeSt === 'aguardando') {
+        s.status = 'aguardando';
+        s._frozenElapsed = (fbUser && fbUser._frozenElapsed != null) ? fbUser._frozenElapsed : (s._frozenElapsed || 0);
+        s._activeFrom = null;
+      } else if (fbUser && fbUser._status === 'paused' && (!fbUser._selb || fbUser._selb === activeSelb)) {
+        s.status = 'paused';
+        s._frozenElapsed = (fbUser && fbUser._frozenElapsed != null) ? fbUser._frozenElapsed : (s._frozenElapsed || 0);
+        s._activeFrom = null;
+      } else {
+        s.status = 'running';
+        const localRunning = s._activeFrom != null && s._activeFrom > 0;
+        if (!localRunning) {
+          s._frozenElapsed = (fbUser && fbUser._frozenElapsed != null) ? fbUser._frozenElapsed : (s._frozenElapsed || 0);
+          s._activeFrom = (fbUser && fbUser._activeFrom != null) ? fbUser._activeFrom : (s._activeFrom || activeEpoch);
+        }
+        if (!timers[uid]) startTimer(uid);
       }
-    } else if(fbStatus === 'paused' && fbUser._selb){
-      s.status         = 'paused';
-      s.selb           = fbUser._selb;
-      if(fbUser._startEpoch) s.startEpoch = fbUser._startEpoch;
-      s._frozenElapsed = fbUser._frozenElapsed != null ? fbUser._frozenElapsed : (s._frozenElapsed||0);
-      s._activeFrom    = null;
-    } else if(fbStatus === 'aguardando' && fbUser._selb){
-      s.status         = 'aguardando';
-      s.selb           = fbUser._selb;
-      if(fbUser._startEpoch) s.startEpoch = fbUser._startEpoch;
-      s._frozenElapsed = fbUser._frozenElapsed != null ? fbUser._frozenElapsed : (s._frozenElapsed||0);
-      s._activeFrom    = null;
-    } else {
+
+      // Se a tabela operadores estava dessincronizada (ex: _status:'idle' ou _selb:null), corrige automaticamente
+      if (!fbUser || fbUser._selb !== activeSelb || !['running','paused','aguardando'].includes(fbUser._status)) {
+        dbPatch('/users/' + uid, {
+          _selb: activeSelb,
+          _status: s.status,
+          _startEpoch: activeEpoch,
+          _activeFrom: s._activeFrom || activeEpoch,
+          _frozenElapsed: s._frozenElapsed || 0
+        }).catch(() => {});
+      }
+    } else if (histRes && !histRes.error) {
+      // Confirmado na tabela history: NÃO há nenhum SELB 'running'/'aguardando' para este operador
+      if (timers[uid]) { clearInterval(timers[uid]); delete timers[uid]; }
       s.status = 'idle';
-      s.selb   = null;
+      s.selb = null;
+      s.startEpoch = null;
+      s.elapsed = 0;
+      s._activeFrom = null;
+      s._frozenElapsed = 0;
+      if (fbUser && (fbUser._selb || (fbUser._status && fbUser._status !== 'idle'))) {
+        dbPatch('/users/' + uid, {
+          _selb: null,
+          _status: 'idle',
+          _startEpoch: null,
+          _activeFrom: null,
+          _frozenElapsed: 0
+        }).catch(() => {});
+      }
+    } else if (fbUser) {
+      // Fallback caso a query em history tenha falhado por oscilação de rede
+      const fbStatus = fbUser._status || 'idle';
+      if ((fbStatus === 'running' || fbStatus === 'paused' || fbStatus === 'aguardando') && fbUser._selb) {
+        s.status = fbStatus;
+        s.selb = fbUser._selb;
+        if (fbUser._startEpoch) s.startEpoch = fbUser._startEpoch;
+        s._frozenElapsed = (fbUser._frozenElapsed != null) ? fbUser._frozenElapsed : (s._frozenElapsed || 0);
+        s._activeFrom = fbStatus === 'running' ? ((fbUser._activeFrom != null) ? fbUser._activeFrom : (s._activeFrom || Date.now())) : null;
+        if (fbStatus === 'running' && !timers[uid]) startTimer(uid);
+      } else {
+        s.status = 'idle';
+        s.selb = null;
+      }
     }
+
     _opSyncPending = false;
     opRenderState(uid);
-  } catch(e){ _opSyncPending = false; }
+  } catch(e){
+    _opSyncPending = false;
+    opRenderState(uid);
+  }
 }
 
 function opRenderState(uid){
@@ -4741,111 +4778,37 @@ async function confirmarInicio(){
   // antes de registrar, para evitar duplicatas quando a aba do
   // navegador está desatualizada e o usuário clica duas vezes.
   // ════════════════════════════════════════════════════════════════
+  // VERIFICAÇÃO SUPABASE-FIRST (Fonte única: tabela history):
+  // Consulta apenas os registros recentes DESTE operador no Supabase
+  // (máx. 20 linhas, em vez de baixar o histórico do dia da fábrica inteira).
+  // ════════════════════════════════════════════════════════════════
   if(dest !== 'scrap'){
     try {
-      const dateKey = new Date().toDateString().replace(/ /g,'_');
+      const { data: opRows, error: opErr } = await _supa
+        .from('history')
+        .select('id,date_key,raw,selb,status,start_epoch')
+        .eq('uid', actionUid)
+        .order('start_epoch', { ascending: false })
+        .limit(20);
 
-      // 1) Lê o nó do usuário direto do Supabase (estado live)
-      const fbUser = await dbGet('/users/'+actionUid);
-
-      // 2) Se o Supabase diz que este usuário já está em 'running',
-      //    verifica se existe um SELB concluído hoje antes de permitir novo início
-      if(fbUser && fbUser._status === 'running'){
-        // Busca o histórico do dia direto do Supabase para verificar SELBs concluídos
-        const fbHistory = await dbGet('/history/'+dateKey);
-        const recs = fbHistory
-          ? Object.entries(fbHistory).map(([k,v])=>({...v,_docId:k,_dateKey:dateKey}))
-          : [];
-
-        // Verifica se existe um registro 'running' ativo para este usuário hoje
-        const runOrphanCheck = recs.find(r => r.uid === actionUid && r.status === 'running');
-
-        if(runOrphanCheck){
-          // ── Detecção robusta de SELB fantasma ─────────────────────────────
-          // Um 'running' é FANTASMA (fechar automaticamente) se apresentar
-          // qualquer uma destas condições:
-          //   a) não tem startEpoch nem campo 'start' (registro incompleto)
-          //   b) não tem código SELB (não representa um SELB real)
-          //   c) startEpoch mais antigo que 18h (SELB abandonado)
-          //   d) startEpoch anterior ao endEpoch do último 'ok' (fantasma clássico)
-          //   e) fbUser._selb existe e diverge do selb do registro (estado dessincronizado)
-          const latestOkEndEpoch = recs
-            .filter(r => r.uid === actionUid && r.status === 'ok' && r.endEpoch)
-            .reduce((max, r) => Math.max(max, r.endEpoch), 0);
-          const runStart     = runOrphanCheck.startEpoch || 0;
-          const ageHours     = runStart ? (Date.now() - runStart) / 3600000 : Infinity;
-          const hasNoStart   = !runStart && !runOrphanCheck.start;
-          const hasNoSelb    = !runOrphanCheck.selb;
-          const tooOld       = ageHours > 18;
-          const beforeLastOk = latestOkEndEpoch > 0 && runStart > 0 && runStart < latestOkEndEpoch;
-          const selbMismatch = !!(fbUser._selb && runOrphanCheck.selb && fbUser._selb !== runOrphanCheck.selb);
-          // FIX BUG: selbMismatch removido do critério isPhantom.
-          // Divergência entre fbUser._selb e o registro pode ser race condition
-          // de propagação do Firebase — fechar o SELB nesse caso encerra um SELB
-          // legítimo em andamento. Apenas logamos para auditoria.
-          if(selbMismatch) console.warn('[SELB] selbMismatch detectado (possível race condition — não fechando automaticamente):', {
-            fbSelb: fbUser._selb, histSelb: runOrphanCheck.selb,
-            docId: runOrphanCheck._docId, uid: actionUid, ts: new Date().toISOString()
-          });
-          const isPhantom    = hasNoStart || hasNoSelb || tooOld || beforeLastOk;
-
-          if(!isPhantom){
-            // SELB atual válido em andamento — bloquear novo início.
-            const localOrphan = history.find(h => h._docId === runOrphanCheck._docId);
-            if(!localOrphan) history.unshift({...runOrphanCheck});
-            const s2 = getS(actionUid);
-            s2.status     = 'running';
-            s2.selb       = fbUser._selb || s2.selb || runOrphanCheck.selb || null;
-            s2.startEpoch = runOrphanCheck.startEpoch || fbUser._startEpoch || s2.startEpoch || Date.now();
-            if(!timers[actionUid] && s2.startEpoch) startTimer(actionUid);
-            renderCard(actionUid);
-            alert('⚠️ Atenção: este operador já possui um SELB em andamento.\n\nFinalize o SELB atual antes de iniciar um novo.');
-            closeModal('modal-selb');
-            return;
-          }
-
-          console.warn('[SELB fantasma] Fechando registro órfão automaticamente:', {
-            docId: runOrphanCheck._docId, hasNoStart, hasNoSelb, tooOld, beforeLastOk, selbMismatch
-          });
-
-          // O running é anterior ao último 'ok' — é um fantasma: fechar.
-          const now2 = new Date();
-          const orphEnd = now2.toLocaleTimeString('pt-BR');
-          const orphStart = runOrphanCheck.startEpoch || 0;
-          let orphElapsed = orphStart ? Math.max(0, Math.floor((Date.now() - orphStart)/1000)) : 0;
-          if(runOrphanCheck.start){
-            const oSS = timeStrToSec(runOrphanCheck.start);
-            const oES = timeStrToSec(orphEnd);
-            if(oSS!==null && oES!==null){
-              let od = oES-oSS; if(od<0) od+=86400;
-              if(od>=0 && od<86400 && Math.abs(orphElapsed-od)>60) orphElapsed=od;
-            }
-          }
-          const _orphEndEpoch = Date.now();
-          const _orphEndDateKey = new Date(_orphEndEpoch).toDateString().replace(/ /g,'_');
-          await dbUpdateHistory(runOrphanCheck._docId, runOrphanCheck._dateKey,
-            {end:orphEnd, duracao:fmt(orphElapsed), status:'ok', endEpoch:_orphEndEpoch, endDateKey:_orphEndDateKey}).catch(()=>{});
-          const localRef = history.find(h=>h._docId===runOrphanCheck._docId);
-          if(localRef){ localRef.status='ok'; localRef.end=orphEnd; localRef.duracao=fmt(orphElapsed); localRef.endEpoch=_orphEndEpoch; localRef.endDateKey=_orphEndDateKey; }
-        }
-
-        // Reseta o wstate local para refletir idle antes do novo início
-        const s3 = getS(actionUid);
-        s3.status='idle'; s3.selb=null; s3.elapsed=0; s3.startEpoch=null;
-      }
-
-      // 3) Sincroniza o history[] local com os registros do Supabase para garantir
-      //    que o fechamento de orphans locais (abaixo) use dados atualizados
-      const fbHistSync = await dbGet('/history/'+dateKey);
-      if(fbHistSync){
-        const fbRecs = Object.entries(fbHistSync).map(([k,v])=>({...v,_docId:k,_dateKey:dateKey}));
-        // Adiciona ao history[] qualquer registro running do Supabase que não esteja local
-        fbRecs.filter(r=>r.uid===actionUid&&r.status==='running').forEach(r=>{
-          if(!history.find(h=>h._docId===r._docId)) history.unshift(r);
+      if(!opErr && Array.isArray(opRows)){
+        opRows.forEach(row => {
+          const raw = (row.raw && typeof row.raw === 'object') ? row.raw : {};
+          const recObj = {
+            ...raw,
+            _docId: row.id,
+            _dateKey: row.date_key || raw._dateKey || new Date().toDateString().replace(/ /g,'_'),
+            uid: actionUid,
+            selb: raw.selb || row.selb,
+            status: raw.status || row.status,
+            startEpoch: raw.startEpoch || row.start_epoch
+          };
+          const idx = history.findIndex(h => h._docId === recObj._docId);
+          if(idx === -1) history.unshift(recObj);
+          else history[idx] = { ...history[idx], ...recObj };
         });
       }
     } catch(e){
-      // Falha na consulta Supabase — continua normalmente (comportamento anterior)
       console.warn('[SELB] Verificação Supabase-first falhou, continuando:', e);
     }
   }
@@ -4873,17 +4836,7 @@ async function confirmarInicio(){
     fluxolabFinalizarSelb(selb, u.sector, 'scrap').catch(e => console.warn('[FluxoLAB] Erro ao remover SCRAP dos bolsões:', e));
     closeModal('modal-selb'); updateSummary(); renderConsulta(); return;
   }
-  // ── Fecha qualquer SELB anterior ainda em 'running' do mesmo usuário ──
-  // Evita registros fantasma quando operador inicia novo SELB sem finalizar o anterior.
-  //
-  // FIX (bug "SELB some do card + é aprovado sozinho ao reiniciar"): antes, este
-  // trecho fechava QUALQUER registro 'running' do usuário sem nenhum critério —
-  // se o card tivesse sido zerado por race condition (ver "Sanity Check" no sync
-  // de /users), a checagem "SELB fantasma" acima era pulada (ela só roda quando o
-  // Supabase ainda mostra _status:'running'), e este loop aprovava silenciosamente
-  // um SELB que na verdade ainda estava em andamento de verdade. Agora só fecha
-  // automaticamente registros que também pareçam órfãos pelos mesmos critérios
-  // usados na checagem acima; caso contrário, bloqueia o novo início com alerta.
+  // ── Verifica na fonte única (history) se já existe SELB 'running' deste operador ──
   const orphans = history.filter(x => x.uid === actionUid && x.status === 'running');
   const _latestOkEndEpochLocal = history
     .filter(x => x.uid === actionUid && x.status === 'ok' && x.endEpoch)
@@ -4899,14 +4852,30 @@ async function confirmarInicio(){
     const isPhantom2     = hasNoStart2 || hasNoSelb2 || tooOld2 || beforeLastOk2;
 
     if(!isPhantom2){
-      // Não parece abandonado — provavelmente ainda está em andamento de verdade.
-      // Bloqueia o novo início em vez de fechar/aprovar automaticamente.
-      console.warn('[AUTO-CLOSE-ORPHAN] Bloqueado: SELB anterior não parece órfão, não será fechado automaticamente:', {
+      // SELB válido em andamento na tabela history: restaura imediatamente na tela do operador
+      // e re-sincroniza o nó /users para que o próprio operador possa finalizá-lo sem chamar o Admin.
+      console.warn('[AUTO-CLOSE-ORPHAN] SELB em andamento encontrado no history — restaurando na tela do operador:', {
         uid: actionUid, selbAnterior: orphan.selb, docId: orphan._docId,
         selbNovo: selb, acaoDeQuem: currentUser ? currentUser.name : '?',
         ts: new Date().toISOString()
       });
-      alert('⚠️ Atenção: este operador já possui um SELB em andamento (' + (orphan.selb || '—') + ').\n\nFinalize o SELB atual antes de iniciar um novo.');
+      s.status     = 'running';
+      s.selb       = orphan.selb;
+      s.startEpoch = orphan.startEpoch || s.startEpoch || Date.now();
+      s._activeFrom = s._activeFrom || s.startEpoch;
+      if(!timers[actionUid] && s.startEpoch) startTimer(actionUid);
+      dbPatch('/users/' + actionUid, {
+        _selb: s.selb,
+        _status: 'running',
+        _startEpoch: s.startEpoch,
+        _activeFrom: s._activeFrom
+      }).catch(()=>{});
+      renderCard(actionUid);
+      if(currentUser && !currentUser.isAdmin && currentUser.id === actionUid &&
+         document.getElementById('view-operador')?.classList.contains('active')){
+        opRenderState(actionUid);
+      }
+      alert('⚠️ Atenção: este operador já possui um SELB em andamento (' + (orphan.selb || '—') + ').\n\nO SELB foi restaurado na tela — finalize-o antes de iniciar um novo.');
       closeModal('modal-selb');
       return;
     }
@@ -5201,7 +5170,40 @@ async function confirmarFin(){
       return;
     }
   }
-  const h=history.find(x=>x.selb===selbAtualSnapshot&&x.uid===actionUid&&x.status==='running');
+  // ── Localiza o registro ativo na tabela history (memória + confirmação no Supabase) ──
+  // Antes, se o array local history[] ainda não tivesse carregado o registro (ou se estivesse
+  // como 'paused'), `h` vinha undefined: o sistema limpava /users para 'idle' mas deixava o
+  // registro 'Em andamento' na Consulta (history), travando o próximo início do operador.
+  let h = history.find(x => x.selb === selbAtualSnapshot && x.uid === actionUid && (x.status === 'running' || x.status === 'paused'))
+       || history.find(x => x.uid === actionUid && x.status === 'running');
+
+  let dbActiveRows = [];
+  try {
+    const { data: _actRows, error: _actErr } = await _supa
+      .from('history')
+      .select('id,date_key,raw,selb,status,start_epoch')
+      .eq('uid', actionUid)
+      .in('status', ['running', 'paused'])
+      .order('start_epoch', { ascending: false })
+      .limit(5);
+    if (!_actErr && Array.isArray(_actRows)) dbActiveRows = _actRows;
+  } catch (_e) {}
+
+  if (!h && dbActiveRows.length > 0) {
+    const targetRow = dbActiveRows.find(r => (r.selb || (r.raw && r.raw.selb)) === selbAtualSnapshot) || dbActiveRows[0];
+    const rawRec = (targetRow.raw && typeof targetRow.raw === 'object') ? targetRow.raw : {};
+    h = {
+      ...rawRec,
+      _docId: targetRow.id,
+      _dateKey: targetRow.date_key || rawRec._dateKey || new Date().toDateString().replace(/ /g, '_'),
+      uid: actionUid,
+      selb: rawRec.selb || targetRow.selb || selbAtualSnapshot,
+      status: rawRec.status || targetRow.status || 'running',
+      startEpoch: rawRec.startEpoch || targetRow.start_epoch || s.startEpoch || Date.now()
+    };
+    history.unshift(h);
+  }
+
   const endTime=new Date().toLocaleTimeString('pt-BR');
   // Elapsed: usa h.startEpoch (Supabase) como fonte mais confiável;
   // s.startEpoch pode estar desatualizado se outra tela retomou a pausa.
@@ -5210,16 +5212,26 @@ async function confirmarFin(){
   // Duração = mesmo cálculo do timer exibido no card
   const duracaoFinal = calcElapsedRunning(actionUid);
   const duracao = fmt(duracaoFinal);
+  const endEpoch   = Date.now();
+  const endDateKey = new Date(endEpoch).toDateString().replace(/ /g,'_');
 
   if(h){
-    const endEpoch   = Date.now();
-    const endDateKey = new Date(endEpoch).toDateString().replace(/ /g,'_');
     h.end=endTime; h.duracao=duracao; h.status=res; h.motivo=motivo||''; h._closed=true; h.endEpoch=endEpoch; h.endDateKey=endDateKey;
     if(comentario) h.comentario=comentario;
     await dbUpdateHistory(h._docId, h._dateKey, {
       end:endTime, duracao, status:res, motivo:motivo||'', endEpoch, endDateKey,
       ...(comentario ? {comentario} : {})
     });
+  }
+
+  // Garante que qualquer outro registro 'running' residual deste operador no banco também seja fechado
+  for (const extraRow of dbActiveRows) {
+    if (h && extraRow.id === h._docId) continue;
+    const extraDk = extraRow.date_key || (extraRow.raw && extraRow.raw._dateKey) || endDateKey;
+    await dbUpdateHistory(extraRow.id, extraDk, {
+      end: endTime, duracao, status: res, motivo: motivo || '', endEpoch, endDateKey,
+      ...(comentario ? { comentario } : {})
+    }).catch(() => {});
   }
 
   // ── Se era retrabalho, grava o tempo no registro de reprovação e limpa a flag ──
@@ -9220,7 +9232,7 @@ async function confirmarEdicaoStatus(){
       history[hIdx] = { ...history[hIdx], ...patch };
     }
 
-    // Ajusta repDia se mudou de/para rep/scrap
+    // Ajusta repDia se mudou de/para rep/scrap e sincroniza sessão do operador quando status 'running' muda
     const rec = _consultaRecords[recIdx] || history[hIdx];
     if(rec){
       const profUser = users.find(u => u.id === rec.uid);
@@ -9235,6 +9247,43 @@ async function confirmarEdicaoStatus(){
           await dbPatch('/users/'+profUser.id, { repDia: profUser.repDia }).catch(()=>{});
         }
         profUser._localRepDia = profUser.repDia;
+
+        const eraAtivo = _editStatus === 'running' || _editStatus === 'paused' || _editStatus === 'aguardando';
+        const agoraAtivo = patch.status === 'running' || patch.status === 'aguardando';
+        const sProf = getS(profUser.id);
+        if (eraAtivo && !agoraAtivo) {
+          const outroAtivo = history.find(h => h.uid === profUser.id && h._docId !== _editDocId && (h.status === 'running' || h.status === 'aguardando'));
+          if (!outroAtivo) {
+            if (timers[profUser.id]) { clearInterval(timers[profUser.id]); delete timers[profUser.id]; }
+            sProf.status = 'idle';
+            sProf.selb = null;
+            sProf.startEpoch = null;
+            sProf.elapsed = 0;
+            sProf._activeFrom = null;
+            sProf._frozenElapsed = 0;
+            await dbPatch('/users/' + profUser.id, {
+              _selb: null,
+              _status: 'idle',
+              _startEpoch: null,
+              _activeFrom: null,
+              _frozenElapsed: 0
+            }).catch(() => {});
+            renderCard(profUser.id);
+          }
+        } else if (agoraAtivo) {
+          sProf.status = patch.status === 'aguardando' ? 'aguardando' : 'running';
+          sProf.selb = novoSelb;
+          sProf.startEpoch = rec.startEpoch || Date.now();
+          sProf._activeFrom = sProf.status === 'running' ? (sProf._activeFrom || sProf.startEpoch) : null;
+          if (sProf.status === 'running' && !timers[profUser.id]) startTimer(profUser.id);
+          await dbPatch('/users/' + profUser.id, {
+            _selb: novoSelb,
+            _status: sProf.status,
+            _startEpoch: sProf.startEpoch,
+            _activeFrom: sProf._activeFrom
+          }).catch(() => {});
+          renderCard(profUser.id);
+        }
       }
     }
 
@@ -17128,15 +17177,21 @@ async function pauseAllRunning(){
   const promises = [];
   users.forEach(u=>{
     const s=getS(u.id);
-    if(s.status==='running'){
+    if(s.status==='running' && s.selb){
       // Captura o valor atual do timer e congela (líquido)
       s._frozenElapsed  = calcElapsedRunning(u.id);
       s._activeFrom     = null;
       s.status          = 'paused';
       renderCard(u.id);
-      promises.push(
-        dbPatch('/users/'+u.id, {_status:'paused', _frozenElapsed: s._frozenElapsed, _activeFrom: null}).catch(()=>{})
-      );
+      if(currentUser && (currentUser.isAdmin || currentUser.id === u.id)){
+        promises.push(
+          dbPatch('/users/'+u.id, {_status:'paused', _selb: s.selb, _frozenElapsed: s._frozenElapsed, _activeFrom: null}).catch(()=>{})
+        );
+      }
+      if(currentUser && !currentUser.isAdmin && currentUser.id === u.id &&
+         document.getElementById('view-operador')?.classList.contains('active')){
+        opRenderState(u.id);
+      }
     }
   });
   await Promise.all(promises);
@@ -17148,14 +17203,20 @@ async function resumeAllPaused(){
   const promises = [];
   users.forEach(u=>{
     const s=getS(u.id);
-    if(s.status==='paused'){
+    if(s.status==='paused' && s.selb){
       // Descongela: marca o instante de retomada, _frozenElapsed preservado
       s._activeFrom  = now;
       s.status       = 'running';
       renderCard(u.id);
-      promises.push(
-        dbPatch('/users/'+u.id, {_status:'running', _activeFrom: now, _frozenElapsed: s._frozenElapsed||0}).catch(()=>{})
-      );
+      if(currentUser && (currentUser.isAdmin || currentUser.id === u.id)){
+        promises.push(
+          dbPatch('/users/'+u.id, {_status:'running', _selb: s.selb, _activeFrom: now, _frozenElapsed: s._frozenElapsed||0}).catch(()=>{})
+        );
+      }
+      if(currentUser && !currentUser.isAdmin && currentUser.id === u.id &&
+         document.getElementById('view-operador')?.classList.contains('active')){
+        opRenderState(u.id);
+      }
     }
   });
   await Promise.all(promises);
