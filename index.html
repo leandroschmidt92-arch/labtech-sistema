@@ -1206,7 +1206,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
     </div>
 
     <!-- ── LINHA: ABAS DE SETOR ── -->
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:24px;flex-wrap:wrap">
+    <div id="dash-toolbar-row" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:24px;flex-wrap:wrap">
       <div class="stabs" id="sector-tabs" style="margin:0;flex-shrink:0">
         <button class="stab a-mont" onclick="setSector('MONTAGEM',this)">Montagem</button>
         <button class="stab" onclick="setSector('LIMPEZA',this)">Limpeza</button>
@@ -1217,6 +1217,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
         <span class="layout-toggle-lbl">Layout</span>
         <button type="button" class="lt-btn on" data-layout="classic" onclick="setCardLayout('classic')">▦ Padrão</button>
         <button type="button" class="lt-btn" data-layout="compact" onclick="setCardLayout('compact')">☰ Compacto</button>
+        <button type="button" class="lt-btn" data-layout="geral" onclick="setCardLayout('geral')" title="Visão geral para TV: Montagem, Limpeza e Complexa na mesma tela">📺 Geral (TV)</button>
       </div>
     </div>
     <div class="grid" id="cards-grid"></div>

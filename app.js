@@ -1648,6 +1648,11 @@ function applyUserSnapshot(freshUsers){
 function rebuildOrUpdateCards(){
   const grid = document.getElementById('cards-grid');
   if(!grid) return;
+  if(_getCardLayout() === 'geral'){
+    _tvgSync();
+    updateSummary();
+    return;
+  }
   const visibleUsers = users.filter(u => u.active && !u.hidden && u.sector === activeSector);
 
   Array.from(grid.children).forEach(el => {
@@ -3022,6 +3027,7 @@ function loginAs(u){
   if(modAdm) modAdm.classList.add('hidden');
 }
 function logout(){
+  try { if(document.body.classList.contains('tvg-clean')) _tvgExitClean(); } catch(e){}
   try { _dashLibStop(); } catch(e){}
   _operatorAccessToken = null;
   try { sessionStorage.removeItem('_opToken'); } catch(e){}
@@ -3537,11 +3543,12 @@ function setView(v,btn){
   // Dados destas áreas são consultados e assinados apenas quando a área está
   // aberta. Ao trocar de tela, fecha o canal para não receber eventos que a
   // pessoa não está vendo.
+  if(v !== 'dashboard' && document.body.classList.contains('tvg-clean') && typeof _tvgExitClean === 'function') _tvgExitClean();
   if(v !== 'garantia' && typeof stopGarantiaListener === 'function') stopGarantiaListener();
   if(v !== 'perdidas' && typeof stopMaquinasPerdidasListener === 'function') stopMaquinasPerdidasListener();
   if(v !== 'maquinas-a' && typeof stopMaquinasAListener === 'function') stopMaquinasAListener();
   if(v !== 'gaiola-lab' && v !== 'qualidade' && typeof stopQualListener === 'function') stopQualListener();
-  if(v==='dashboard')   { if(typeof _dashChecklistsRecount === 'function') _dashChecklistsRecount(); if(typeof fetchDashboardSaudeEquipe === 'function') fetchDashboardSaudeEquipe(); }
+  if(v==='dashboard')   { if(typeof _dashChecklistsRecount === 'function') _dashChecklistsRecount(); if(typeof fetchDashboardSaudeEquipe === 'function') fetchDashboardSaudeEquipe(); setTimeout(() => { try { if(document.getElementById('tvg-board')){ _tvgSync(); _tvgFitSoon(); } } catch(e){} }, 80); }
   if(v==='fluxolab')    { renderFluxoLAB(); }
   if(v==='bip-mobile')  {
     // Reaproveita o painel "Movimentação de SELB" do FluxoLAB — garante que
@@ -3801,35 +3808,330 @@ function getAvgModeloCard(equipName, sector){
 }
 
 // ════ DASHBOARD ════
-// Layout dos cards: 'classic' (padrão) ou 'compact' (alta densidade). Preferência salva no navegador.
+// Layout dos cards: 'classic' (padrão), 'compact' (alta densidade) ou 'geral' (TV: Montagem + Limpeza + Complexa
+// na mesma tela). Preferência salva no navegador.
 function _getCardLayout(){
-  try { return localStorage.getItem('dash_card_layout') === 'compact' ? 'compact' : 'classic'; }
+  try {
+    const v = localStorage.getItem('dash_card_layout');
+    return (v === 'compact' || v === 'geral') ? v : 'classic';
+  }
   catch(e){ return 'classic'; }
 }
 function _applyCardLayoutUi(){
   const mode = _getCardLayout();
   const grid = document.getElementById('cards-grid');
-  if(grid) grid.classList.toggle('grid-compact', mode === 'compact');
+  if(grid){
+    grid.classList.toggle('grid-compact', mode === 'compact');
+    grid.classList.toggle('grid-tvg', mode === 'geral');
+  }
+  const tabs = document.getElementById('sector-tabs');
+  if(tabs) tabs.style.display = (mode === 'geral') ? 'none' : '';
+  // No layout Geral (TV) os cards de resumo do topo ficam ocultos (os totais já aparecem no quadro)
+  document.body.classList.toggle('tvg-on', mode === 'geral');
+  if(mode !== 'geral' && document.body.classList.contains('tvg-clean')) _tvgExitClean();
   document.querySelectorAll('#card-layout-toggle .lt-btn').forEach(b => {
     b.classList.toggle('on', b.dataset.layout === mode);
   });
 }
 function setCardLayout(mode){
-  try { localStorage.setItem('dash_card_layout', mode === 'compact' ? 'compact' : 'classic'); } catch(e){}
+  const m = (mode === 'compact' || mode === 'geral') ? mode : 'classic';
+  try { localStorage.setItem('dash_card_layout', m); } catch(e){}
   buildCards();
 }
 window.setCardLayout = setCardLayout;
+
+// ════════════════════════════════════════════════════════════════════════
+// LAYOUT "GERAL (TV)" — Montagem, Limpeza e Complexa lado a lado
+// Pensado para TV de 60": tipografia proporcional à largura da tela (vw) e
+// auto-ajuste da escala de cada coluna para caber SEM rolagem. Somente leitura
+// e 100% local (usa o history[]/wstate já em memória — nenhuma requisição nova).
+// ════════════════════════════════════════════════════════════════════════
+const _TVG_SECTORS = [
+  { key: 'MONTAGEM', label: 'Montagem', cls: 's-mont' },
+  { key: 'LIMPEZA',  label: 'Limpeza',  cls: 's-limp' },
+  { key: 'COMPLEXA', label: 'Complexa', cls: 's-comp' }
+];
+
+function _tvgOps(sector){
+  return users.filter(u => u.active && !u.hidden && u.sector === sector);
+}
+function _tvgSig(){
+  return _TVG_SECTORS.map(s => _tvgOps(s.key).map(u => u.id).sort().join(',')).join('|');
+}
+// Mesma grade horária usada em renderCard (expectativa de máquinas ao longo do dia)
+function _tvgExpected(sector, totalDia){
+  const sch = sector === 'COMPLEXA'
+    ? [['07:30','17:30']]
+    : [['07:30','08:25'],['08:25','09:20'],['09:20','10:15'],['10:15','11:10'],['11:10','12:05'],['12:05','13:00'],
+       ['14:12','15:01'],['15:01','15:50'],['15:50','16:40'],['16:40','17:30']];
+  const meta = sector === 'COMPLEXA' ? 1 : 10;
+  const now = new Date();
+  const cm = now.getHours() * 60 + now.getMinutes();
+  const tm = s => { const p = s.split(':').map(Number); return p[0] * 60 + p[1]; };
+  let expected = 0;
+  sch.forEach((m, i) => { if(cm >= tm(m[0])) expected = i + 1; });
+  let cls = 'ok';
+  if(totalDia < expected - 1) cls = 'red';
+  else if(totalDia < expected) cls = 'warn';
+  return { expected, meta, cls };
+}
+
+function _tvgFitSoon(){
+  if(window._tvgFitRaf) return;
+  window._tvgFitRaf = requestAnimationFrame(() => { window._tvgFitRaf = null; _tvgFitAll(); });
+}
+// Ajusta a altura do quadro à janela e reduz a escala de cada coluna até caber sem rolagem
+function _tvgFitAll(){
+  const board = document.getElementById('tvg-board');
+  if(!board || !board.offsetParent) return;
+  const top = board.getBoundingClientRect().top + window.scrollY;
+  board.style.height = Math.max(320, window.innerHeight - top - 14) + 'px';
+  board.querySelectorAll('.tvg-col').forEach(col => {
+    const list = col.querySelector('.tvg-list');
+    if(!list) return;
+    let sc = 1;
+    col.style.setProperty('--tvg-sc', sc);
+    let guard = 0;
+    while(list.scrollHeight > list.clientHeight + 1 && sc > 0.42 && guard++ < 30){
+      sc = Math.round((sc - 0.03) * 100) / 100;
+      col.style.setProperty('--tvg-sc', sc);
+    }
+  });
+}
+window.addEventListener('resize', () => { if(document.getElementById('tvg-board')) _tvgFitSoon(); });
+
+function _tvgExitClean(){
+  document.body.classList.remove('tvg-clean');
+  try { if(document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(()=>{}); } catch(e){}
+  _tvgUpdateFsBtn();
+  _tvgFitSoon();
+}
+function tvgToggleFullscreen(){
+  if(document.body.classList.contains('tvg-clean')){ _tvgExitClean(); return; }
+  document.body.classList.add('tvg-clean');
+  try {
+    const el = document.documentElement;
+    if(el.requestFullscreen) el.requestFullscreen().catch(()=>{});
+  } catch(e){}
+  _tvgUpdateFsBtn();
+  setTimeout(_tvgFitSoon, 150);
+}
+window.tvgToggleFullscreen = tvgToggleFullscreen;
+function _tvgUpdateFsBtn(){
+  const b = document.getElementById('tvg-fs-btn');
+  if(b) b.textContent = document.body.classList.contains('tvg-clean') ? '✕ Sair da tela cheia' : '⛶ Tela cheia (TV)';
+}
+document.addEventListener('fullscreenchange', () => {
+  if(!document.fullscreenElement && document.body.classList.contains('tvg-clean')) document.body.classList.remove('tvg-clean');
+  _tvgUpdateFsBtn();
+  setTimeout(_tvgFitSoon, 150);
+});
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape' && document.body.classList.contains('tvg-clean')) _tvgExitClean();
+});
+
+function _tvgStartClock(){
+  if(window._tvgClockTimer) return;
+  let tick = 0;
+  window._tvgClockTimer = setInterval(() => {
+    const el = document.getElementById('tvg-clock');
+    if(!el || _getCardLayout() !== 'geral'){ clearInterval(window._tvgClockTimer); window._tvgClockTimer = null; return; }
+    el.textContent = new Date().toLocaleTimeString('pt-BR');
+    // A cada 1 min recalcula "Exp." (muda conforme a grade horária) — tudo local, sem rede
+    if(++tick % 60 === 0) _tvgSync();
+  }, 1000);
+}
+
+function _tvgBuild(grid){
+  grid = grid || document.getElementById('cards-grid');
+  if(!grid) return;
+  grid.innerHTML = '';
+  const board = document.createElement('div');
+  board.id = 'tvg-board';
+  board.className = 'tvg-board';
+  board.innerHTML = `
+    <div class="tvg-top">
+      <div class="tvg-title">📺 Produção Geral</div>
+      <div class="tvg-clock" id="tvg-clock">${new Date().toLocaleTimeString('pt-BR')}</div>
+      <div class="tvg-kpis">
+        <div class="tvg-kpi k-run"><b id="tvg-k-run">0</b><span>Em andamento</span></div>
+        <div class="tvg-kpi k-done"><b id="tvg-k-done">0</b><span>Finalizados hoje</span></div>
+        <div class="tvg-kpi k-rep"><b id="tvg-k-rep">0</b><span>Reprovadas hoje</span></div>
+        <div class="tvg-kpi k-scrap"><b id="tvg-k-scrap">0</b><span>SCRAP hoje</span></div>
+        <div class="tvg-kpi k-peca"><b id="tvg-k-peca">0</b><span>Aguard. peça</span></div>
+      </div>
+      <button type="button" class="tvg-fs-btn" id="tvg-fs-btn" onclick="tvgToggleFullscreen()"></button>
+    </div>
+    <div class="tvg-cols">
+      ${_TVG_SECTORS.map(s => `
+        <div class="tvg-col ${s.cls}" id="tvg-col-${s.key}">
+          <div class="tvg-col-head" id="tvg-head-${s.key}"></div>
+          <div class="tvg-list" id="tvg-list-${s.key}"></div>
+        </div>`).join('')}
+    </div>`;
+  grid.appendChild(board);
+  board.dataset.sig = _tvgSig();
+  _TVG_SECTORS.forEach(s => {
+    const list = board.querySelector('#tvg-list-' + s.key);
+    _tvgOps(s.key).forEach(u => {
+      const d = document.createElement('div');
+      d.id = 'card-' + u.id;
+      list.appendChild(d);
+      _tvgRenderOp(u.id, true);
+    });
+  });
+  _tvgUpdateFsBtn();
+  _tvgRefreshHeader();
+  _tvgStartClock();
+  _tvgFitSoon();
+}
+
+// Reaproveita o DOM se os operadores não mudaram; reconstrói se entrou/saiu alguém
+function _tvgSync(){
+  const grid = document.getElementById('cards-grid');
+  if(!grid) return;
+  const board = document.getElementById('tvg-board');
+  if(!board || board.dataset.sig !== _tvgSig()){ _tvgBuild(grid); return; }
+  _TVG_SECTORS.forEach(s => _tvgOps(s.key).forEach(u => _tvgRenderOp(u.id, true)));
+  _tvgRefreshHeader();
+  _tvgFitSoon();
+}
+
+function _tvgRenderOp(uid, skipFit){
+  const u = users.find(x => x.id === uid);
+  if(!u) return;
+  const el = document.getElementById('card-' + uid);
+  if(!el) return;
+  // Elemento criado por outras rotinas direto no grid (novo operador/ativar): reconstrói o quadro
+  if(!el.closest('.tvg-list')){ el.remove(); _tvgSync(); return; }
+
+  const s = getS(uid);
+  const totalDia = getTotalDia(uid);
+  const ex = _tvgExpected(u.sector, totalDia);
+  const meta = ex.meta;
+  const isRun = s.status === 'running', isPaus = s.status === 'paused', isAg = s.status === 'aguardando';
+  const active = (isRun || isPaus || isAg) && s.selb;
+  const hRun = history.find(x => x.uid === uid && (x.status === 'running' || x.status === 'aguardando'));
+  const equipName = s.selb ? getEquipName(s.selb) : (hRun ? getEquipName(hRun.selb) : '');
+  const selbTag = s.selb || (hRun && hRun.selb) || '';
+  const goal = totalDia >= meta;
+
+  el.className = 'tvg-op' + (isRun ? ' running' : (isPaus || isAg) ? ' paused' : ' idle') + (goal ? ' goal' : '');
+  el.style.order = -totalDia;
+
+  const completed = getTodayCompletedList(uid);
+  const slots = Math.max(meta, totalDia);
+  let steps = '';
+  for(let i = 1; i <= slots; i++){
+    if(i <= totalDia){
+      const rec = completed[i - 1];
+      let late = false, txt = '';
+      if(rec){
+        const avg = getAvgModeloSeconds(rec.equipamento, u.sector);
+        if(avg && rec.sec > avg) late = true;
+        txt = fmtCompactDuration(rec.sec);
+      }
+      steps += `<div class="tvg-step${late ? ' late' : ''}"><i>${i}</i>${txt}</div>`;
+    } else {
+      steps += `<div class="tvg-step pend${i <= ex.expected ? ' due' : ''}"><i>${i}</i></div>`;
+    }
+  }
+
+  el.innerHTML = `
+    <div class="tvg-op-head">
+      <span class="tvg-dot ${isRun ? 'running' : (isPaus || isAg) ? 'paused' : ''}"></span>
+      <span class="tvg-name" title="${esc(u.name)}">${esc(u.name)}</span>
+      ${selbTag ? `<span class="tvg-selb">${esc(selbTag)}</span>` : ''}
+      ${(isPaus || isAg) ? `<span class="tvg-tag-pause">${isAg ? 'AG. PEÇA' : 'PAUSADO'}</span>` : ''}
+      <span class="tvg-exp ${ex.cls}" title="Expectativa agora">Exp. ${ex.expected}/${meta}</span>
+      ${goal ? `<span class="tvg-tag-goal">${totalDia > meta ? '⚡ SUPERADA' : '🏆 META'}</span>` : ''}
+      <span class="tvg-count"><b>${totalDia}</b><small>/${meta}</small></span>
+    </div>
+    <div class="tvg-steps">${steps}</div>
+    <div class="tvg-foot">
+      <span class="tvg-machine${equipName ? '' : ' none'}" title="${esc(equipName || '')}">🔧 ${equipName ? esc(equipName) : 'Nenhum equipamento em andamento'}</span>
+      ${active ? `<span class="tvg-timer${isRun ? '' : ' paused'}" id="m-timer-${uid}">${fmt(calcElapsedRunning(uid))}</span>` : ''}
+      <span class="tvg-avg" title="Tempo médio do modelo">⌀ ${getAvgModeloCard(equipName, u.sector)}</span>
+    </div>`;
+  if(!skipFit) _tvgFitSoon();
+}
+
+function _tvgRefreshHeader(){
+  const board = document.getElementById('tvg-board');
+  if(!board) return;
+  const cp = (src, dst) => {
+    const a = document.getElementById(src), b = document.getElementById(dst);
+    if(a && b) b.textContent = a.textContent;
+  };
+  cp('s-run', 'tvg-k-run'); cp('s-done', 'tvg-k-done'); cp('s-rep', 'tvg-k-rep');
+  cp('s-scrap', 'tvg-k-scrap'); cp('s-peça', 'tvg-k-peca');
+
+  _TVG_SECTORS.forEach(sec => {
+    const head = document.getElementById('tvg-head-' + sec.key);
+    if(!head) return;
+    const ops = _tvgOps(sec.key);
+    let done = 0, metaTot = 0, expTot = 0, running = 0, paused = 0, idle = 0, behind = 0, atGoal = 0;
+    ops.forEach(u => {
+      const t = getTotalDia(u.id);
+      const e = _tvgExpected(sec.key, t);
+      done += t; metaTot += e.meta; expTot += e.expected;
+      if(t >= e.meta) atGoal++;
+      if(t < e.expected) behind++;
+      const st = getS(u.id).status;
+      if(st === 'running') running++;
+      else if(st === 'paused' || st === 'aguardando') paused++;
+      else idle++;
+    });
+    const expTotAll = expTot; // soma das expectativas individuais
+    const pct = metaTot ? Math.min(100, Math.round(done / metaTot * 100)) : 0;
+    const expPct = metaTot ? Math.min(100, Math.round(Math.min(expTotAll, metaTot) / metaTot * 100)) : 0;
+    let fillCls = '';
+    if(done < expTotAll){ fillCls = (expTotAll - done) <= ops.length ? 'warn' : 'red'; }
+    head.innerHTML = `
+      <div class="tvg-col-title">
+        <span class="tvg-col-name">${sec.label}</span>
+        <span class="tvg-pill run">▶ ${running}</span>
+        ${paused ? `<span class="tvg-pill pause">⏸ ${paused}</span>` : ''}
+        ${idle ? `<span class="tvg-pill idle" title="Sem SELB em andamento">○ ${idle}</span>` : ''}
+        <span class="tvg-big">${done}<small>/${metaTot}</small></span>
+      </div>
+      <div class="tvg-bar"><div class="tvg-bar-fill ${fillCls}" style="width:${pct}%"></div><div class="tvg-bar-exp" style="left:${expPct}%" title="Esperado agora: ${expTotAll}"></div></div>
+      <div class="tvg-col-sub">
+        <span>Esperado agora <b>${expTotAll}</b></span>
+        <span class="${behind ? 'bad' : 'good'}">${behind ? behind + ' atrasado' + (behind > 1 ? 's' : '') : 'No prazo'}</span>
+        <span>${atGoal} na meta</span>
+        <span>${ops.length} profissionais</span>
+      </div>`;
+  });
+}
+
+// Mantém os KPIs/colunas do modo TV sincronizados a cada atualização do resumo do Dashboard
+(function(){
+  const _origSummary = window.updateSummary;
+  if(typeof _origSummary !== 'function') return;
+  window.updateSummary = function(){
+    const r = _origSummary.apply(this, arguments);
+    try { if(_getCardLayout() === 'geral' && document.getElementById('tvg-board')){ _tvgRefreshHeader(); _tvgFitSoon(); } } catch(e){}
+    return r;
+  };
+})();
 
 function buildCards(){
   const grid=document.getElementById('cards-grid');
   _applyCardLayoutUi();
   grid.innerHTML='';
+  if(_getCardLayout() === 'geral'){
+    _tvgBuild(grid);
+    updateSummary();
+    return;
+  }
   users.filter(u=>u.active&&!u.hidden&&u.sector===activeSector).forEach(u=>{
     const d=document.createElement('div'); d.id='card-'+u.id; grid.appendChild(d); renderCard(u.id);
   });
   updateSummary();
 }
 function renderCard(uid){
+  if(_getCardLayout() === 'geral'){ _tvgRenderOp(uid); return; }
   const u=users.find(x=>x.id===uid); if(!u) return;
   const s=getS(uid);
   const totalDia=getTotalDia(uid);
