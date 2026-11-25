@@ -1447,12 +1447,13 @@ function applyUserSnapshot(freshUsers){
   users.forEach(fu => {
     if (fu._stale) return; // Ignora o snapshot antigo para não corromper o wstate local
     const s = getS(fu.id);
-    // Só considera automaticamente registros 'running'/'aguardando' iniciados HOJE (evita ressuscitar órfãos de dias anteriores).
-    // Para COMPLEXA (máquinas de vários dias), aceita dia anterior apenas se o próprio operador ainda estiver com esse _selb em operadores.
+    // Só considera automaticamente registros 'running' (sem fim) iniciados HOJE (evita ressuscitar órfãos de dias anteriores).
+    // Nota: 'aguardando' é um status finalizado/estacionado na aba Aguardando Peças (o operador fica livre em 'idle').
     const activeHistory = history.find(h =>
       h.uid === fu.id &&
-      (h.status === 'running' || h.status === 'aguardando') &&
-      (h._dateKey === todayDkSync || (fu.sector === 'COMPLEXA' && fu._selb === h.selb && (fu._status === 'running' || fu._status === 'paused' || fu._status === 'aguardando')))
+      h.status === 'running' &&
+      !h.end &&
+      (h._dateKey === todayDkSync || (fu.sector === 'COMPLEXA' && fu._selb === h.selb && (fu._status === 'running' || fu._status === 'paused')))
     );
 
     let status = null;
@@ -1460,16 +1461,14 @@ function applyUserSnapshot(freshUsers){
 
     if (activeHistory && activeHistory.selb) {
       activeSelb = activeHistory.selb;
-      if (activeHistory.status === 'aguardando') {
-        status = 'aguardando';
-      } else if (fu._status === 'paused' && (!fu._selb || fu._selb === activeHistory.selb)) {
+      if (fu._status === 'paused' && (!fu._selb || fu._selb === activeHistory.selb)) {
         status = 'paused';
       } else {
         status = 'running';
       }
       // Repara o nó de operadores silenciosamente se estiver dessincronizado na sessão do próprio operador
       const isOwnOp = currentUser && !currentUser.isAdmin && currentUser.id === fu.id;
-      if (isOwnOp && (fu._selb !== activeSelb || !['running','paused','aguardando'].includes(fu._status))) {
+      if (isOwnOp && (fu._selb !== activeSelb || !['running','paused'].includes(fu._status))) {
         fu._selb = activeSelb;
         fu._status = status;
         fu._startEpoch = activeHistory.startEpoch || fu._startEpoch || Date.now();
@@ -1499,10 +1498,10 @@ function applyUserSnapshot(freshUsers){
         const finishedToday = _historyReady && history.find(h =>
           h.uid === fu.id &&
           h.selb === fu._selb &&
-          ['ok','rep','scrap','cancelado','Máquina A','closed_stale'].includes(h.status) &&
+          ['ok','rep','scrap','cancelado','Máquina A','aguardando','closed_stale'].includes(h.status) &&
           (!fu._startEpoch || !h.startEpoch || h.startEpoch >= fu._startEpoch - 5000)
         );
-        if (!finishedToday) {
+        if (!finishedToday && fu._status !== 'aguardando') {
           status = fu._status;
           activeSelb = fu._selb;
         }
@@ -1744,19 +1743,21 @@ function startRealtimeSync(){
         // ------------------------------------------------------------------
 
         // Preserva de dias anteriores:
+        // - 'aguardando' (SELBs aguardando peça continuam na fila até serem liberados/retomados)
         // - 'ok' marcado manualmente pelo Admin com "Contar no Card" para hoje
         // - 'ok' overnight legítimo (último SELB iniciado ontem pelo operador e finalizado hoje)
         // - 'running' de COMPLEXA (ou ativo no operador)
         const prevPool = history.filter(h => h._dateKey !== dk);
         const prevRelevant = prevPool.filter(h => {
+          if(h.status === 'aguardando') return true;
           if(h.status === 'ok'){
             if(h.contarNoCard === true && h.contarNoCardDia === todayDkNow) return true;
             if(typeof isGenuineOvernightRecord === 'function' && isGenuineOvernightRecord(h, prevPool, todayDkNow, todayStartNow)) return true;
             return false;
           }
-          if(h.status === 'running' || h.status === 'paused' || h.status === 'aguardando'){
+          if(h.status === 'running' || h.status === 'paused'){
             const uRef = users.find(u => u.id === h.uid);
-            if(uRef && uRef._selb === h.selb && (uRef._status === 'running' || uRef._status === 'paused' || uRef._status === 'aguardando')){
+            if(uRef && uRef._selb === h.selb && (uRef._status === 'running' || uRef._status === 'paused')){
               return true;
             }
           }
@@ -1778,7 +1779,7 @@ function startRealtimeSync(){
       } else {
         const todayDk3 = new Date().toDateString().replace(/ /g,'_');
         if(dk === todayDk3){
-          history = history.filter(h => h._dateKey !== dk && h.status === 'ok' && h.contarNoCard === true && h.contarNoCardDia === todayDk3);
+          history = history.filter(h => h._dateKey !== dk && (h.status === 'aguardando' || (h.status === 'ok' && h.contarNoCard === true && h.contarNoCardDia === todayDk3)));
         }
       }
       _historyReady = true;
@@ -1798,11 +1799,12 @@ function startRealtimeSync(){
           const s = getS(u.id);
           const hActive = history.find(h =>
             h.uid === u.id &&
-            (h.status === 'running' || h.status === 'aguardando') &&
+            h.status === 'running' &&
+            !h.end &&
             (h._dateKey === todayDkCard || (u.sector === 'COMPLEXA' && u._selb === h.selb))
           );
           if (hActive) {
-            const targetSt = hActive.status === 'aguardando' ? 'aguardando' : (s.status === 'paused' ? 'paused' : 'running');
+            const targetSt = s.status === 'paused' ? 'paused' : 'running';
             if (s.status === 'idle' || s.selb !== hActive.selb || !s.selb) {
               s.status = targetSt;
               s.selb = hActive.selb || s.selb;
@@ -1813,8 +1815,8 @@ function startRealtimeSync(){
               }
             }
           } else if ((s.status === 'running' || s.status === 'paused' || s.status === 'aguardando') && s.selb) {
-            // Se o SELB que estava rodando neste card acabou de ser finalizado/cancelado no history de hoje, libera o card na hora
-            const hFinished = history.find(h => h.uid === u.id && h.selb === s.selb && ['ok','rep','scrap','cancelado','Máquina A'].includes(h.status) && (!s.startEpoch || !h.startEpoch || h.startEpoch >= s.startEpoch - 5000));
+            // Se o SELB que estava rodando neste card acabou de ser finalizado/cancelado/aguardando peça no history, libera o card na hora
+            const hFinished = history.find(h => h.uid === u.id && h.selb === s.selb && ['ok','rep','scrap','cancelado','Máquina A','aguardando'].includes(h.status) && (!s.startEpoch || !h.startEpoch || h.startEpoch >= s.startEpoch - 5000));
             if (hFinished) {
               if (timers[u.id]) { clearInterval(timers[u.id]); delete timers[u.id]; }
               s.status = 'idle';
@@ -2158,10 +2160,11 @@ async function checkDayReset(){
               ? isGenuineOvernightRecord(r, allPrevRecs, todayDk2, todayStart2)
               : (r.status === 'ok' && r.contarNoCard === true && r.contarNoCardDia === todayDk2);
           });
+          const prevAg = allPrevRecs.filter(r => r.status === 'aguardando');
           allPrevRecs.forEach(r => {
             if (r.status === 'ok' && !prevOk.includes(r)) r._overnightInvalid = true;
           });
-          [...prevRecs, ...prevOk].forEach(r => {
+          [...prevRecs, ...prevOk, ...prevAg].forEach(r => {
             if(!history.find(h => h._docId === r._docId)) history.push(r);
           });
           prevRecs.forEach(r => {
@@ -2262,15 +2265,18 @@ function bootApp(){
           ? isGenuineOvernightRecord(r, allPrev, todayDkPrev, todayStart)
           : (r.status === 'ok' && r.contarNoCard === true && r.contarNoCardDia === todayDkPrev);
       });
+      const prevAgToday = allPrev.filter(r => r.status === 'aguardando');
       allPrev.forEach(r => {
         if (r.status === 'ok' && !prevOkToday.includes(r)) r._overnightInvalid = true;
       });
 
-      [...prevRunning, ...prevOkToday].forEach(r => {
+      [...prevRunning, ...prevOkToday, ...prevAgToday].forEach(r => {
         const existingIdx = history.findIndex(h => h._docId === r._docId);
         if(existingIdx === -1) history.push(r);
         else history[existingIdx] = { ...history[existingIdx], ...r };
       });
+
+      if(prevAgToday.length && currentUser){ updateSummary(); }
 
       prevRunning.forEach(r => {
         const s = getS(r.uid);
@@ -2295,7 +2301,7 @@ function bootApp(){
     _fetchPrevDay(_lastDk);
   }
   // Busca registros de dias anteriores concluídos ou marcados "Contar no Card" hoje (end_epoch >= hoje 00:00)
-  // Cobre máquinas iniciadas há 2+ dias (ex: sexta-feira concluída na segunda, ou aguardando peças)
+  // e SELBs de dias anteriores que ainda estão com status 'aguardando' (Aguardando Peças)
   try {
     const _todayStartBoot = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
     const _todayDkBoot = _bootToday.replace(/ /g,'_');
@@ -2318,6 +2324,27 @@ function bootApp(){
           else { history[idx] = { ...history[idx], ...rec }; _added = true; }
         });
         if(_added && currentUser){ buildCards(); updateSummary(); }
+      }).catch(()=>{});
+
+    const _14dAgoBoot = _todayStartBoot - (14 * 86400000);
+    _supa.from('history')
+      .select('id,date_key,raw,status,start_epoch')
+      .neq('date_key', _todayDkBoot)
+      .gte('start_epoch', _14dAgoBoot)
+      .eq('status', 'aguardando')
+      .limit(100)
+      .then(({ data: _agRows }) => {
+        if(!Array.isArray(_agRows) || !_agRows.length) return;
+        let _addedAg = false;
+        _agRows.forEach(row => {
+          const raw = (row.raw && typeof row.raw === 'object') ? row.raw : {};
+          if((raw.status || row.status) !== 'aguardando') return;
+          const rec = { ...raw, status: 'aguardando', _docId: row.id, _dateKey: row.date_key || raw._dateKey || '' };
+          const idx = history.findIndex(h => h._docId === rec._docId);
+          if(idx === -1){ history.push(rec); _addedAg = true; }
+          else { history[idx] = { ...history[idx], ...rec }; _addedAg = true; }
+        });
+        if(_addedAg && currentUser){ updateSummary(); }
       }).catch(()=>{});
   } catch(_e){}
 
@@ -3184,17 +3211,18 @@ async function opSyncFromSupabase(uid){
       else history[idx] = { ...history[idx], ...recObj };
     });
 
-    // Localiza apenas registro cujo JSONB raw.status seja realmente ativo e sem horário de fim
+    // Localiza apenas registro cujo JSONB raw.status seja realmente ativo ('running' ou 'paused') e sem horário de fim.
+    // Nota: 'aguardando' é um status finalizado na fila de Aguardando Peças (o operador fica livre em 'idle').
     const activeRow = rows.find(r => {
       const rRaw = (r.raw && typeof r.raw === 'object') ? r.raw : {};
       const rDk = r.date_key || rRaw._dateKey || '';
       const rawSt = rRaw.status || r.status;
-      const isReallyActive = (rawSt === 'running' || rawSt === 'paused' || rawSt === 'aguardando') && !rRaw.end;
+      const isReallyActive = (rawSt === 'running' || rawSt === 'paused') && !rRaw.end;
       if (!isReallyActive) return false;
       if (rDk === todayDk) return true;
       // De ontem: só considera ativo se o próprio operador ainda estiver com esse _selb em operadores
       const rSelb = rRaw.selb || r.selb;
-      return !!(fbUser && fbUser._selb === rSelb && ['running','paused','aguardando'].includes(fbUser._status));
+      return !!(fbUser && fbUser._selb === rSelb && ['running','paused'].includes(fbUser._status));
     }) || null;
     const s = getS(uid);
 
@@ -3951,11 +3979,12 @@ function _tvgBuild(grid){
   board.className = 'tvg-board';
   board.innerHTML = `
     <div class="tvg-top">
-      <div class="tvg-title">📺 Produção Geral</div>
-      <div class="tvg-clock" id="tvg-clock">${new Date().toLocaleTimeString('pt-BR')}</div>
+      <div class="tvg-top-left">
+        <div class="tvg-title">📺 Produção Geral</div>
+        <div class="tvg-clock" id="tvg-clock">${new Date().toLocaleTimeString('pt-BR')}</div>
+      </div>
       <div class="tvg-kpis">
         <div class="tvg-kpi k-run"><b id="tvg-k-run">0</b><span>Em andamento</span></div>
-        <div class="tvg-kpi k-done"><b id="tvg-k-done">0</b><span>Finalizados hoje</span></div>
         <div class="tvg-kpi k-rep"><b id="tvg-k-rep">0</b><span>Reprovadas hoje</span></div>
         <div class="tvg-kpi k-scrap"><b id="tvg-k-scrap">0</b><span>SCRAP hoje</span></div>
         <div class="tvg-kpi k-peca"><b id="tvg-k-peca">0</b><span>Aguard. peça</span></div>
@@ -4063,7 +4092,7 @@ function _tvgRefreshHeader(){
     const a = document.getElementById(src), b = document.getElementById(dst);
     if(a && b) b.textContent = a.textContent;
   };
-  cp('s-run', 'tvg-k-run'); cp('s-done', 'tvg-k-done'); cp('s-rep', 'tvg-k-rep');
+  cp('s-run', 'tvg-k-run'); cp('s-rep', 'tvg-k-rep');
   cp('s-scrap', 'tvg-k-scrap'); cp('s-peça', 'tvg-k-peca');
 
   _TVG_SECTORS.forEach(sec => {
@@ -6037,7 +6066,8 @@ function updateSummary(){
   const uniqueRep   = new Set(srcRep.filter(h => h.selb).map(h => String(h.selb).trim().toUpperCase())).size   + srcRep.filter(h => !h.selb).length;
   const uniqueScrap = new Set(srcScrap.filter(h => h.selb).map(h => String(h.selb).trim().toUpperCase())).size + srcScrap.filter(h => !h.selb).length;
 
-  const pecasCount  = history.filter(h => h.status === 'aguardando').length;
+  const srcAg     = history.filter(h => h.status === 'aguardando');
+  const pecasCount = new Set(srcAg.filter(h => h.selb).map(h => String(h.selb).trim().toUpperCase())).size + srcAg.filter(h => !h.selb).length;
   
   const elRun   = document.getElementById('s-run');
   const elDone  = document.getElementById('s-done');
@@ -6737,12 +6767,13 @@ async function renderPecasView(){
 
   // ── Filtro de data ──
   const todayIso = new Date().toISOString().slice(0,10);
+  const defaultFromIso = new Date(Date.now() - 14 * 86400000).toISOString().slice(0,10);
   const fromEl = document.getElementById('pecas-date-from');
   const toEl   = document.getElementById('pecas-date-to');
-  // Se não tiver datas preenchidas, inicializa com hoje
-  if(fromEl && !fromEl.value) fromEl.value = todayIso;
+  // Se não tiver datas preenchidas, inicializa com os últimos 14 dias até hoje
+  if(fromEl && !fromEl.value) fromEl.value = defaultFromIso;
   if(toEl   && !toEl.value)   toEl.value   = todayIso;
-  const fromIso = (fromEl && fromEl.value) ? fromEl.value : todayIso;
+  const fromIso = (fromEl && fromEl.value) ? fromEl.value : defaultFromIso;
   const toIso   = (toEl   && toEl.value)   ? toEl.value   : todayIso;
 
   // Converte dateKey (Mon_May_22_2026) para ISO para comparação
@@ -9719,9 +9750,9 @@ async function confirmarEdicaoStatus(){
   const setorRec = originalRec ? originalRec.sector : '—';
   const todayDk  = new Date().toDateString().replace(/ /g,'_');
 
-  let finalEnd = novoEnd || (querContarNoCard ? (originalRec?.end || new Date().toLocaleTimeString('pt-BR')) : null);
+  let finalEnd = novoEnd || ((querContarNoCard || novoStatus === 'aguardando') ? (originalRec?.end || new Date().toLocaleTimeString('pt-BR')) : null);
   let finalDuracao = novoDuracao || null;
-  if(!finalDuracao && novoStatus === 'ok' && (novoStart || originalRec?.start) && finalEnd){
+  if(!finalDuracao && (novoStatus === 'ok' || novoStatus === 'aguardando') && (novoStart || originalRec?.start) && finalEnd){
     const calcD = calcDuracaoExibir({
       ...(originalRec || {}),
       start: novoStart || originalRec?.start,
@@ -9756,6 +9787,10 @@ async function confirmarEdicaoStatus(){
   } else {
     patch.contarNoCard    = false;
     patch.contarNoCardDia = null;
+    if(novoStatus === 'aguardando'){
+      patch.endDateKey = originalRec?.endDateKey || todayDk;
+      patch.endEpoch   = originalRec?.endEpoch || Date.now();
+    }
   }
 
   let logMovimentacao = null;
@@ -9792,11 +9827,12 @@ async function confirmarEdicaoStatus(){
 
   try {
     await dbUpdateHistory(_editDocId, _editDateKey, patch);
-    // Espelha status e end_epoch na linha do Supabase para que registros de dias anteriores
-    // marcados "Contar no Card" hoje sejam recarregados automaticamente em qualquer F5
-    if (querContarNoCard && patch.endEpoch) {
-      _supa.from('history').update({ status: patch.status, end_epoch: patch.endEpoch, selb: novoSelb }).eq('id', _editDocId).catch(() => {});
-    }
+    // Espelha status e end_epoch na linha do Supabase para consultas por status/data
+    _supa.from('history').update({
+      status: patch.status,
+      ...(patch.endEpoch ? { end_epoch: patch.endEpoch } : {}),
+      selb: novoSelb
+    }).eq('id', _editDocId).catch(() => {});
 
     // Atualiza _consultaRecords
     const recIdx = _consultaRecords.findIndex(r => r._docId === _editDocId);
@@ -9810,11 +9846,11 @@ async function confirmarEdicaoStatus(){
         _consultaSelbSearchRecs[sIdx] = { ..._consultaSelbSearchRecs[sIdx], ...patch };
       }
     }
-    // Atualiza history[] (ou insere se veio de dia anterior e foi marcado para contar no card hoje)
+    // Atualiza history[] (ou insere se veio de dia anterior e foi marcado para contar no card hoje ou aguardando peças)
     let hIdx = history.findIndex(r => r._docId === _editDocId);
     if(hIdx !== -1){
       history[hIdx] = { ...history[hIdx], ...patch };
-    } else if(originalRec && (querContarNoCard || _editDateKey === todayDk)){
+    } else if(originalRec && (querContarNoCard || patch.status === 'aguardando' || _editDateKey === todayDk)){
       const inserted = { ...originalRec, ...patch, _docId: _editDocId, _dateKey: _editDateKey || originalRec._dateKey || todayDk };
       history.unshift(inserted);
       hIdx = 0;
@@ -9837,10 +9873,10 @@ async function confirmarEdicaoStatus(){
         profUser._localRepDia = profUser.repDia;
 
         const eraAtivo = _editStatus === 'running' || _editStatus === 'paused' || _editStatus === 'aguardando';
-        const agoraAtivo = patch.status === 'running' || patch.status === 'aguardando';
+        const agoraAtivo = patch.status === 'running';
         const sProf = getS(profUser.id);
         if (eraAtivo && !agoraAtivo) {
-          const outroAtivo = history.find(h => h.uid === profUser.id && h._docId !== _editDocId && (h.status === 'running' || h.status === 'aguardando'));
+          const outroAtivo = history.find(h => h.uid === profUser.id && h._docId !== _editDocId && h.status === 'running' && !h.end);
           if (!outroAtivo) {
             if (timers[profUser.id]) { clearInterval(timers[profUser.id]); delete timers[profUser.id]; }
             sProf.status = 'idle';
@@ -9859,14 +9895,14 @@ async function confirmarEdicaoStatus(){
             renderCard(profUser.id);
           }
         } else if (agoraAtivo) {
-          sProf.status = patch.status === 'aguardando' ? 'aguardando' : 'running';
+          sProf.status = 'running';
           sProf.selb = novoSelb;
           sProf.startEpoch = rec.startEpoch || Date.now();
-          sProf._activeFrom = sProf.status === 'running' ? (sProf._activeFrom || sProf.startEpoch) : null;
-          if (sProf.status === 'running' && !timers[profUser.id]) startTimer(profUser.id);
+          sProf._activeFrom = sProf._activeFrom || sProf.startEpoch;
+          if (!timers[profUser.id]) startTimer(profUser.id);
           await dbPatch('/users/' + profUser.id, {
             _selb: novoSelb,
-            _status: sProf.status,
+            _status: 'running',
             _startEpoch: sProf.startEpoch,
             _activeFrom: sProf._activeFrom
           }).catch(() => {});
