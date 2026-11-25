@@ -4642,8 +4642,12 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
         <input class="inp" id="medit-equip" placeholder="Ex: HP LaserJet Pro" maxlength="120">
       </div>
       <div>
-        <label class="flbl">Local / Unidade</label>
-        <input class="inp" id="medit-local" placeholder="Ex: Filial Joinville" maxlength="80">
+        <label class="flbl">Contar no Card</label>
+        <select class="sel" id="medit-contar-card">
+          <option value="sim">✅ Sim — Contar no card</option>
+          <option value="nao">🚫 Não contar no card</option>
+        </select>
+        <input type="hidden" id="medit-local">
       </div>
       <div>
         <label class="flbl">O.S.</label>

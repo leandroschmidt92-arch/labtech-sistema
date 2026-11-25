@@ -1441,14 +1441,20 @@ function applyUserSnapshot(freshUsers){
     users = users.filter(u => freshUsers.find(fu => fu.id === u.id));
   }
 
-  // ── Sync wstate a partir do Supabase (history = fonte única de verdade) ──
+  // ── Sync wstate a partir do Supabase (history de HOJE = fonte única de verdade) ──
+  const todayDkSync = new Date().toDateString().replace(/ /g, '_');
+  const todayStartSync = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
   users.forEach(fu => {
     if (fu._stale) return; // Ignora o snapshot antigo para não corromper o wstate local
     const s = getS(fu.id);
-    const activeHistory = history.find(h => h.uid === fu.id && (h.status === 'running' || h.status === 'aguardando'));
+    // Só considera automaticamente registros 'running'/'aguardando' iniciados HOJE (evita ressuscitar órfãos de dias anteriores).
+    // Para COMPLEXA (máquinas de vários dias), aceita dia anterior apenas se o próprio operador ainda estiver com esse _selb em operadores.
+    const activeHistory = history.find(h =>
+      h.uid === fu.id &&
+      (h.status === 'running' || h.status === 'aguardando') &&
+      (h._dateKey === todayDkSync || (fu.sector === 'COMPLEXA' && fu._selb === h.selb && (fu._status === 'running' || fu._status === 'paused' || fu._status === 'aguardando')))
+    );
 
-    // Fonte primária: se existe registro 'running'/'aguardando' em history (Consulta), o SELB está ativo.
-    // Mesmo que operadores.raw (_status/_selb) tenha falhado ou vindo 'idle', nunca esconde o SELB.
     let status = null;
     let activeSelb = null;
 
@@ -1474,17 +1480,32 @@ function applyUserSnapshot(freshUsers){
         }).catch(() => {});
       }
     } else if ((fu._status === 'running' || fu._status === 'paused' || fu._status === 'aguardando') && fu._selb) {
-      // Fallback caso o snapshot de /users chegue alguns ms antes do /history ou seja SELB de dia anterior:
-      // preserva ativo, a menos que este SELB já conste como finalizado/cancelado hoje no history[].
-      const finishedToday = _historyReady && history.find(h =>
-        h.uid === fu.id &&
-        h.selb === fu._selb &&
-        ['ok','rep','scrap','cancelado','Máquina A'].includes(h.status) &&
-        (!fu._startEpoch || !h.startEpoch || h.startEpoch >= fu._startEpoch - 5000)
-      );
-      if (!finishedToday) {
-        status = fu._status;
-        activeSelb = fu._selb;
+      // Se o registro em operadores é de um dia anterior (_startEpoch < hoje 00:00) e não é COMPLEXA,
+      // é um órfão de dia anterior que não deve rodar hoje: limpa para idle.
+      const isStaleFromPrevDay = fu.sector !== 'COMPLEXA' && fu._startEpoch && fu._startEpoch < todayStartSync;
+      if (isStaleFromPrevDay) {
+        status = null;
+        activeSelb = null;
+        if (currentUser && (currentUser.isAdmin || currentUser.id === fu.id)) {
+          dbPatch('/users/' + fu.id, {
+            _selb: null,
+            _status: 'idle',
+            _startEpoch: null,
+            _activeFrom: null,
+            _frozenElapsed: 0
+          }).catch(() => {});
+        }
+      } else {
+        const finishedToday = _historyReady && history.find(h =>
+          h.uid === fu.id &&
+          h.selb === fu._selb &&
+          ['ok','rep','scrap','cancelado','Máquina A','closed_stale'].includes(h.status) &&
+          (!fu._startEpoch || !h.startEpoch || h.startEpoch >= fu._startEpoch - 5000)
+        );
+        if (!finishedToday) {
+          status = fu._status;
+          activeSelb = fu._selb;
+        }
       }
     } else if ((fu._status === 'running' || fu._status === 'paused' || fu._status === 'aguardando') && !fu._selb) {
       // Snapshot parcial sem _selb: se o wstate local já tem um SELB ativo válido, preserva
@@ -1671,26 +1692,17 @@ function startRealtimeSync(){
         }
         // ------------------------------------------------------------------
 
-        // Preserva registros de dias anteriores ainda relevantes:
-        // - 'running'/'paused': operador ainda não finalizou
-        // - 'ok' de dia anterior cujo endEpoch é de hoje (SELB que cruzou meia-noite)
-        const todayStart = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
+        // Preserva de dias anteriores APENAS:
+        // - 'ok' marcado manualmente pelo Admin com "Contar no Card" para hoje
+        // - 'running' de COMPLEXA que ainda esteja efetivamente ativo no operador
+        const todayDkNow = new Date().toDateString().replace(/ /g,'_');
         const prevRelevant = history.filter(h => {
           if(h._dateKey === dk) return false; // já vem no snapshot de hoje
-          if(h.status === 'running' || h.status === 'paused' || h.status === 'aguardando') return true;
-          // ok de dia anterior finalizado hoje (via endEpoch ou end < start)
-          if(h.status === 'ok'){
-            if(h.endEpoch && h.endEpoch >= todayStart) return true;
-            if(!h.endEpoch && h.end && h.start){
-              const eS = timeStrToSec(h.end);
-              const sS = timeStrToSec(h.start);
-              if(eS !== null && sS !== null && eS < sS) return true; // cruzou meia-noite
-              if(h.startEpoch && eS !== null){
-                const endDate = new Date(h.startEpoch);
-                endDate.setHours(Math.floor(eS/3600), Math.floor((eS%3600)/60), eS%60, 0);
-                if(endDate.getTime() <= h.startEpoch) endDate.setDate(endDate.getDate()+1);
-                if(endDate.getTime() >= todayStart) return true;
-              }
+          if(h.status === 'ok' && h.contarNoCard === true && h.contarNoCardDia === todayDkNow) return true;
+          if(h.status === 'running' || h.status === 'paused' || h.status === 'aguardando'){
+            const uRef = users.find(u => u.id === h.uid);
+            if(uRef && uRef.sector === 'COMPLEXA' && uRef._selb === h.selb && (uRef._status === 'running' || uRef._status === 'paused' || uRef._status === 'aguardando')){
+              return true;
             }
           }
           return false;
@@ -1710,7 +1722,9 @@ function startRealtimeSync(){
         }
       } else {
         const todayDk3 = new Date().toDateString().replace(/ /g,'_');
-        if(dk === todayDk3 && history.length === 0) history = [];
+        if(dk === todayDk3){
+          history = history.filter(h => h._dateKey !== dk && h.status === 'ok' && h.contarNoCard === true && h.contarNoCardDia === todayDk3);
+        }
       }
       _historyReady = true;
       // ── Pré-carrega o cache de 90 dias usado pelo "T. Médio Modelo" ──
@@ -1723,12 +1737,15 @@ function startRealtimeSync(){
         }).catch(err => console.warn('[T. Médio Modelo] Falha ao pré-carregar cache de 90 dias:', err));
       }
       if(currentUser){
-        // Sincroniza imediatamente o estado dos cards com o history recém-chegado
-        // (caso o evento de /history chegue alguns ms antes do patch de /users, o card
-        // já reflete início, aguardando peça ou conclusão sem atraso).
+        // Sincroniza imediatamente o estado dos cards com o history de HOJE recém-chegado
+        const todayDkCard = new Date().toDateString().replace(/ /g,'_');
         users.forEach(u => {
           const s = getS(u.id);
-          const hActive = history.find(h => h.uid === u.id && (h.status === 'running' || h.status === 'aguardando'));
+          const hActive = history.find(h =>
+            h.uid === u.id &&
+            (h.status === 'running' || h.status === 'aguardando') &&
+            (h._dateKey === todayDkCard || (u.sector === 'COMPLEXA' && u._selb === h.selb))
+          );
           if (hActive) {
             const targetSt = hActive.status === 'aguardando' ? 'aguardando' : (s.status === 'paused' ? 'paused' : 'running');
             if (s.status === 'idle' || s.selb !== hActive.selb || !s.selb) {
@@ -2075,21 +2092,14 @@ async function checkDayReset(){
           const todayStart2 = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
           const allPrevRecs = Object.entries(prevSnap)
             .map(([k,v]) => ({...v, _docId:k, _dateKey:prevDk}));
-          const prevRecs = allPrevRecs.filter(r => r.status === 'running');
+          const todayDk2 = new Date().toDateString().replace(/ /g,'_');
+          const prevRecs = allPrevRecs.filter(r => {
+            if(r.status !== 'running') return false;
+            const uRef = users.find(u => u.id === r.uid);
+            return !!(uRef && uRef.sector === 'COMPLEXA' && uRef._selb === r.selb && uRef._status === 'running');
+          });
           const prevOk   = allPrevRecs.filter(r => {
-            if(r.status !== 'ok') return false;
-            if(r.endEpoch && r.endEpoch >= todayStart2) return true;
-            if(r.end && r.start){
-              const eS = timeStrToSec(r.end), sS = timeStrToSec(r.start);
-              if(eS !== null && sS !== null && eS < sS) return true;
-              if(r.startEpoch && eS !== null){
-                const ed = new Date(r.startEpoch);
-                ed.setHours(Math.floor(eS/3600), Math.floor((eS%3600)/60), eS%60, 0);
-                if(ed.getTime() <= r.startEpoch) ed.setDate(ed.getDate()+1);
-                if(ed.getTime() >= todayStart2) return true;
-              }
-            }
-            return false;
+            return r.status === 'ok' && r.contarNoCard === true && r.contarNoCardDia === todayDk2;
           });
           [...prevRecs, ...prevOk].forEach(r => {
             if(!history.find(h => h._docId === r._docId)) history.push(r);
@@ -2180,22 +2190,15 @@ function bootApp(){
       const allPrev = Object.entries(prevSnap)
         .map(([k,v]) => ({...v, _docId:k, _dateKey:prevDk}));
 
-      // Mantém em memória: running ainda não finalizado + ok finalizados hoje (cruzaram meia-noite)
-      const prevRunning = allPrev.filter(r => r.status === 'running');
+      // Mantém de dia anterior APENAS: running de COMPLEXA ainda ativo no operador + ok marcado manualmente com "Contar no Card" hoje
+      const todayDkPrev = new Date().toDateString().replace(/ /g,'_');
+      const prevRunning = allPrev.filter(r => {
+        if(r.status !== 'running') return false;
+        const uRef = users.find(u => u.id === r.uid);
+        return !!(uRef && uRef.sector === 'COMPLEXA' && uRef._selb === r.selb && uRef._status === 'running');
+      });
       const prevOkToday = allPrev.filter(r => {
-        if(r.status !== 'ok') return false;
-        if(r.endEpoch && r.endEpoch >= todayStart) return true;
-        if(r.end && r.start){
-          const eS = timeStrToSec(r.end), sS = timeStrToSec(r.start);
-          if(eS !== null && sS !== null && eS < sS) return true;
-          if(r.startEpoch && eS !== null){
-            const ed = new Date(r.startEpoch);
-            ed.setHours(Math.floor(eS/3600), Math.floor((eS%3600)/60), eS%60, 0);
-            if(ed.getTime() <= r.startEpoch) ed.setDate(ed.getDate()+1);
-            if(ed.getTime() >= todayStart) return true;
-          }
-        }
-        return false;
+        return r.status === 'ok' && r.contarNoCard === true && r.contarNoCardDia === todayDkPrev;
       });
 
       [...prevRunning, ...prevOkToday].forEach(r => {
@@ -2224,6 +2227,32 @@ function bootApp(){
   if(_lastDk !== _yesterdayDk && _bootLastDay !== _bootToday){
     _fetchPrevDay(_lastDk);
   }
+  // Busca registros de dias anteriores concluídos ou marcados "Contar no Card" hoje (end_epoch >= hoje 00:00)
+  // Cobre máquinas iniciadas há 2+ dias (ex: sexta-feira concluída na segunda, ou aguardando peças)
+  try {
+    const _todayStartBoot = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
+    const _todayDkBoot = _bootToday.replace(/ /g,'_');
+    _supa.from('history')
+      .select('id,date_key,raw')
+      .neq('date_key', _todayDkBoot)
+      .gte('end_epoch', _todayStartBoot)
+      .eq('status', 'ok')
+      .limit(100)
+      .then(({ data: _multiDayRows }) => {
+        if(!Array.isArray(_multiDayRows) || !_multiDayRows.length) return;
+        let _added = false;
+        _multiDayRows.forEach(row => {
+          const raw = (row.raw && typeof row.raw === 'object') ? row.raw : {};
+          // Só inclui registros de dias anteriores se tiverem sido marcados manualmente com "Contar no Card" para hoje
+          if(raw.contarNoCard !== true || raw.contarNoCardDia !== _todayDkBoot) return;
+          const rec = { ...raw, _docId: row.id, _dateKey: row.date_key || raw._dateKey || '' };
+          const idx = history.findIndex(h => h._docId === rec._docId);
+          if(idx === -1){ history.push(rec); _added = true; }
+          else { history[idx] = { ...history[idx], ...rec }; _added = true; }
+        });
+        if(_added && currentUser){ buildCards(); updateSummary(); }
+      }).catch(()=>{});
+  } catch(_e){}
 
   // Processa login pendente (admin com sessão salva)
   if(_pendingAuthUser && !currentUser){
@@ -2411,21 +2440,22 @@ function secToH(sec){ return Math.round(sec/60)/60; }
 
 // ── Contadores derivados do history[] — fonte de verdade única ──────────────
 
-// Contagem de máquinas do dia:
-// Regra única — status 'ok' + campo 'end' preenchido (registro finalizado na Consulta)
-// + endDateKey === hoje (dia em que foi aprovado, gravado no momento da conclusão).
-// Sem reconstrução de datas, sem startEpoch, sem cruzamento de meia-noite.
-function getTotalDia(uid){
+// Define se um registro 'ok' deve contar no card do operador HOJE.
+// Regra: o card reseta todo dia e só conta SELBs iniciados HOJE (_dateKey === todayDk),
+// EXCETO quando o Admin marca manualmente a opção "Contar no Card" para hoje.
+function isRecordCountedOnCardToday(h){
+  if(!h || h.status !== 'ok') return false;
+  if(h.contarNoCard === false) return false;
   const todayDk = new Date().toDateString().replace(/ /g,'_');
-  const recs = history.filter(h => {
-    if(h.uid !== uid || h.status !== 'ok' || !h.end) return false;
-    // Fonte primária: endDateKey gravado no fechamento
-    if(h.endDateKey) return h.endDateKey === todayDk;
-    // Fallback para registros sem endDateKey: endEpoch
-    if(h.endEpoch) return new Date(h.endEpoch).toDateString().replace(/ /g,'_') === todayDk;
-    // Último fallback: _dateKey (dia de início) — apenas para registros muito antigos
-    return h._dateKey === todayDk;
-  });
+  if(h.contarNoCard === true && h.contarNoCardDia === todayDk) return true;
+  if(!h.end) return false;
+  return h._dateKey === todayDk;
+}
+
+// Contagem de máquinas do dia:
+// Regra única — isRecordCountedOnCardToday(h) + deduplicação por SELB dentro do mesmo setor.
+function getTotalDia(uid){
+  const recs = history.filter(h => h.uid === uid && isRecordCountedOnCardToday(h));
   // Deduplica por SELB dentro do mesmo setor. O setor é gravado no histórico
   // no momento da execução; assim, se o profissional for transferido (por
   // exemplo, de LIMPEZA para MONTAGEM) e executar o mesmo SELB na nova etapa,
@@ -2986,13 +3016,16 @@ async function opSyncFromSupabase(uid){
 
   try {
     // Fonte única de verdade: valida direto na tabela history do Supabase se este
-    // operador possui um SELB 'running' ou 'aguardando' (máx 1 linha, super leve),
+    // operador possui um SELB 'running' ou 'aguardando' DE HOJE (máx 1 linha, super leve),
     // em paralelo com a leitura de operadores (usada para metadados de pausa/timer).
+    const todayDk = new Date().toDateString().replace(/ /g, '_');
+    const todayStartMs = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
     const [opRes, histRes] = await Promise.all([
       _supa.from('operadores').select('raw').eq('id', uid).maybeSingle(),
       _supa.from('history')
         .select('id,date_key,raw,selb,status,start_epoch')
         .eq('uid', uid)
+        .eq('date_key', todayDk)
         .in('status', ['running', 'aguardando'])
         .order('start_epoch', { ascending: false })
         .limit(1)
@@ -3553,25 +3586,29 @@ function fmtCompactDuration(sec){
 
 // Lista das máquinas concluídas hoje por um usuário, em ordem de conclusão,
 // cada uma com sua duração líquida (segundos) e o equipamento correspondente.
+// Usa a mesma regra e deduplicação (SELB + setor) de getTotalDia(uid).
 function getTodayCompletedList(uid){
-  const todayDk = new Date().toDateString().replace(/ /g,'_');
-  const recs = history.filter(h => {
-    if(h.uid !== uid || h.status !== 'ok' || !h.end) return false;
-    if(h.endDateKey) return h.endDateKey === todayDk;
-    if(h.endEpoch) return new Date(h.endEpoch).toDateString().replace(/ /g,'_') === todayDk;
-    return h._dateKey === todayDk;
-  });
+  const recs = history.filter(h => h.uid === uid && isRecordCountedOnCardToday(h));
   const seen = new Set();
   const out = [];
   recs
     .slice()
-    .sort((a,b) => (a.endEpoch||0) - (b.endEpoch||0))
+    .sort((a,b) => {
+      // Se houver duplicata do mesmo SELB, prioriza o registro marcado manualmente com contarNoCard===true
+      if((b.contarNoCard === true ? 1 : 0) !== (a.contarNoCard === true ? 1 : 0)){
+        return (b.contarNoCard === true ? 1 : 0) - (a.contarNoCard === true ? 1 : 0);
+      }
+      return (a.endEpoch || a.startEpoch || 0) - (b.endEpoch || b.startEpoch || 0);
+    })
     .forEach(h => {
-      const key = h.selb || ('_' + h._docId);
+      const selbNorm = String(h.selb || '').trim().toUpperCase();
+      const sectorNorm = String(h.sector || '').trim().toUpperCase();
+      const key = selbNorm ? (selbNorm + '||' + sectorNorm) : ('_' + h._docId);
       if(seen.has(key)) return;
       seen.add(key);
-      out.push({ selb: h.selb, equipamento: h.equipamento, sec: calcDuracaoLiquida(h) });
+      out.push({ selb: h.selb, equipamento: h.equipamento, sec: calcDuracaoLiquida(h), _orderTs: h.endEpoch || h.startEpoch || 0 });
     });
+  out.sort((a,b) => (a._orderTs || 0) - (b._orderTs || 0));
   return out;
 }
 
@@ -4779,15 +4816,16 @@ async function confirmarInicio(){
   // navegador está desatualizada e o usuário clica duas vezes.
   // ════════════════════════════════════════════════════════════════
   // VERIFICAÇÃO SUPABASE-FIRST (Fonte única: tabela history):
-  // Consulta apenas os registros recentes DESTE operador no Supabase
-  // (máx. 20 linhas, em vez de baixar o histórico do dia da fábrica inteira).
+  // Consulta apenas os registros DE HOJE deste operador no Supabase.
   // ════════════════════════════════════════════════════════════════
   if(dest !== 'scrap'){
     try {
+      const todayDkStart = new Date().toDateString().replace(/ /g,'_');
       const { data: opRows, error: opErr } = await _supa
         .from('history')
         .select('id,date_key,raw,selb,status,start_epoch')
         .eq('uid', actionUid)
+        .eq('date_key', todayDkStart)
         .order('start_epoch', { ascending: false })
         .limit(20);
 
@@ -4797,7 +4835,7 @@ async function confirmarInicio(){
           const recObj = {
             ...raw,
             _docId: row.id,
-            _dateKey: row.date_key || raw._dateKey || new Date().toDateString().replace(/ /g,'_'),
+            _dateKey: row.date_key || raw._dateKey || todayDkStart,
             uid: actionUid,
             selb: raw.selb || row.selb,
             status: raw.status || row.status,
@@ -4880,35 +4918,18 @@ async function confirmarInicio(){
       return;
     }
 
-    // LOG DE AUDITORIA OBRIGATÓRIO: registra toda finalização automática de orphan
-    // para rastrear o bug de SELBs sendo concluídos sem motivo aparente.
-    console.warn('[AUTO-CLOSE-ORPHAN] Fechando SELB em andamento automaticamente ao iniciar novo (confirmado órfão):', {
+    // LOG DE AUDITORIA OBRIGATÓRIO: fecha registro fantasma como 'closed_stale' (NUNCA como 'ok')
+    // para que registros abandonados não somem falsamente na meta diária do card do operador.
+    console.warn('[AUTO-CLOSE-ORPHAN] Descartando SELB fantasma automaticamente (closed_stale):', {
       uid: actionUid, selbFechado: orphan.selb, docId: orphan._docId,
       selbNovo: selb, acaoDeQuem: currentUser ? currentUser.name : '?',
       ts: new Date().toISOString()
     });
-    const orphanEnd  = now.toLocaleTimeString('pt-BR');
-    const orphanStart = orphan.startEpoch || 0;
-    // Calcula duração via sanidade: usa diff de relógio se epoch parece errado
-    let orphanElapsed = orphanStart ? Math.max(0, Math.floor((Date.now() - orphanStart) / 1000)) : 0;
-    if(orphan.start){
-      const oStartSec = timeStrToSec(orphan.start);
-      const oEndSec   = timeStrToSec(orphanEnd);
-      if(oStartSec !== null && oEndSec !== null){
-        let oDiff = oEndSec - oStartSec;
-        if(oDiff < 0) oDiff += 86400;
-        if(oDiff >= 0 && oDiff < 86400 && Math.abs(orphanElapsed - oDiff) > 60){
-          orphanElapsed = oDiff;
-        }
-      }
-    }
-    orphan.status = 'ok';
-    const _orphanEndEpoch = Date.now();
-    const _orphanEndDateKey = new Date(_orphanEndEpoch).toDateString().replace(/ /g,'_');
-    orphan.endEpoch = _orphanEndEpoch; orphan.endDateKey = _orphanEndDateKey;
+    orphan.status = 'closed_stale';
+    orphan.contarNoCard = false;
     await dbUpdateHistory(orphan._docId, orphan._dateKey, {
-      end: orphanEnd, duracao: fmt(orphanElapsed), status: 'ok', endEpoch: _orphanEndEpoch, endDateKey: _orphanEndDateKey
-    });
+      status: 'closed_stale', contarNoCard: false
+    }).catch(()=>{});
   }
 
   // ── Puxar duração anterior se o SELB estava 'aguardando peças' ──
@@ -5178,11 +5199,13 @@ async function confirmarFin(){
        || history.find(x => x.uid === actionUid && x.status === 'running');
 
   let dbActiveRows = [];
+  const todayDkFin = new Date().toDateString().replace(/ /g, '_');
   try {
     const { data: _actRows, error: _actErr } = await _supa
       .from('history')
       .select('id,date_key,raw,selb,status,start_epoch')
       .eq('uid', actionUid)
+      .eq('date_key', todayDkFin)
       .in('status', ['running', 'paused'])
       .order('start_epoch', { ascending: false })
       .limit(5);
@@ -5224,13 +5247,12 @@ async function confirmarFin(){
     });
   }
 
-  // Garante que qualquer outro registro 'running' residual deste operador no banco também seja fechado
+  // Descarta qualquer outro registro 'running' residual deste operador no dia como 'closed_stale' (sem duplicar aprovação)
   for (const extraRow of dbActiveRows) {
     if (h && extraRow.id === h._docId) continue;
     const extraDk = extraRow.date_key || (extraRow.raw && extraRow.raw._dateKey) || endDateKey;
     await dbUpdateHistory(extraRow.id, extraDk, {
-      end: endTime, duracao, status: res, motivo: motivo || '', endEpoch, endDateKey,
-      ...(comentario ? { comentario } : {})
+      status: 'closed_stale', contarNoCard: false
     }).catch(() => {});
   }
 
@@ -5530,13 +5552,13 @@ function updateSummary(){
   }
 
   // Contadores do topo: contam pelo DIA DE CONCLUSÃO (não pelo dia de início)
-  const srcOk    = history.filter(h => h.status === 'ok'    && concludedOnDay(h) === todayDk);
+  const srcOk    = history.filter(h => isRecordCountedOnCardToday(h));
   const srcRep   = history.filter(h => h.status === 'rep'   && concludedOnDay(h) === todayDk);
   const srcScrap = history.filter(h => h.status === 'scrap' && concludedOnDay(h) === todayDk);
 
-  const uniqueDone  = new Set(srcOk.filter(h => h.selb).map(h => h.selb)).size    + srcOk.filter(h => !h.selb).length;
-  const uniqueRep   = new Set(srcRep.filter(h => h.selb).map(h => h.selb)).size   + srcRep.filter(h => !h.selb).length;
-  const uniqueScrap = new Set(srcScrap.filter(h => h.selb).map(h => h.selb)).size + srcScrap.filter(h => !h.selb).length;
+  const uniqueDone  = new Set(srcOk.filter(h => h.selb).map(h => String(h.selb).trim().toUpperCase())).size    + srcOk.filter(h => !h.selb).length;
+  const uniqueRep   = new Set(srcRep.filter(h => h.selb).map(h => String(h.selb).trim().toUpperCase())).size   + srcRep.filter(h => !h.selb).length;
+  const uniqueScrap = new Set(srcScrap.filter(h => h.selb).map(h => String(h.selb).trim().toUpperCase())).size + srcScrap.filter(h => !h.selb).length;
 
   const pecasCount  = history.filter(h => h.status === 'aguardando').length;
   
@@ -5553,17 +5575,13 @@ function updateSummary(){
   if(elPeça)  elPeça.textContent  = pecasCount;
 
   // ── Aprovadas por equipe ──
-  const okToday = history.filter(h => {
-    if(h.status !== 'ok' || !h.end) return false;
-    const dk = h.endDateKey || (h.endEpoch ? new Date(h.endEpoch).toDateString().replace(/ /g,'_') : h._dateKey);
-    return dk === todayDk;
-  });
+  const okToday = srcOk;
 
   const getSector = h => h.sector || users.find(x => x.id === h.uid)?.sector || '';
 
   function countUniqueSector(sectorName) {
     const recs = okToday.filter(h => getSector(h) === sectorName);
-    const selbs = new Set(recs.map(h => h.selb).filter(Boolean));
+    const selbs = new Set(recs.map(h => String(h.selb || '').trim().toUpperCase()).filter(Boolean));
     const semSelb = recs.filter(h => !h.selb).length;
     return selbs.size + semSelb;
   }
@@ -5573,7 +5591,7 @@ function updateSummary(){
   const tComp = countUniqueSector('COMPLEXA');
   
   // Total Geral: Únicos em toda a empresa
-  const selbsGlobal = new Set(okToday.map(h => h.selb).filter(Boolean));
+  const selbsGlobal = new Set(okToday.map(h => String(h.selb || '').trim().toUpperCase()).filter(Boolean));
   const semSelbGlobal = okToday.filter(h => !h.selb).length;
   const tTot = selbsGlobal.size + semSelbGlobal;
 
@@ -9108,9 +9126,10 @@ function abrirEdicaoStatus(docId, dateKey){
   _editDocId   = docId;
   _editDateKey = dateKey;
 
-  // Busca o registro nos caches disponíveis
+  // Busca o registro nos caches disponíveis (incluindo busca global por SELB)
   const rec = _consultaRecords.find(r => r._docId === docId)
-           || history.find(r => r._docId === docId);
+           || history.find(r => r._docId === docId)
+           || (Array.isArray(_consultaSelbSearchRecs) ? _consultaSelbSearchRecs.find(r => r._docId === docId) : null);
 
   _editStatus = rec ? rec.status : 'ok';
 
@@ -9121,7 +9140,8 @@ function abrirEdicaoStatus(docId, dateKey){
   // Preenche todos os campos
   document.getElementById('medit-selb').value      = rec?.selb      || '';
   document.getElementById('medit-equip').value     = rec?.equipamento|| '';
-  document.getElementById('medit-local').value     = rec?.local      || '';
+  const localEl = document.getElementById('medit-local');
+  if(localEl) localEl.value                        = rec?.local     || '';
   document.getElementById('medit-os').value        = rec?.osNum      || '';
   document.getElementById('medit-start').value     = rec?.start      || '';
   document.getElementById('medit-end').value       = rec?.end        || '';
@@ -9130,19 +9150,38 @@ function abrirEdicaoStatus(docId, dateKey){
   document.getElementById('medit-comentario').value= rec?.comentario || '';
 
   const sel = document.getElementById('medit-status');
-  sel.value = _editStatus || 'ok';
+  sel.value = (_editStatus && ['ok','rep','scrap','cancelado','aguardando','maquina_a'].includes(_editStatus)) ? _editStatus : 'ok';
+
+  const contarCardEl = document.getElementById('medit-contar-card');
+  if(contarCardEl){
+    const jaContaHoje = rec ? isRecordCountedOnCardToday(rec) : true;
+    // Se o registro estava 'running' e o modal abre com 'ok' selecionado, sugere 'sim' por padrão
+    contarCardEl.value = (jaContaHoje || _editStatus === 'running') ? 'sim' : 'nao';
+    contarCardEl.disabled = (sel.value !== 'ok');
+  }
 
   document.getElementById('medit-err').textContent = '';
-  toggleEditMotivo();
+  toggleEditMotivo(true);
   document.getElementById('modal-edit-status').classList.remove('hidden');
 }
 
-function toggleEditMotivo(){
+function toggleEditMotivo(isInit){
   const status = document.getElementById('medit-status').value;
   const wrap   = document.getElementById('medit-motivo-wrap');
   wrap.style.display = 'block';
   document.querySelector('#medit-motivo-wrap .flbl').textContent =
     status === 'rep' ? 'Motivo da reprovação *' : 'Motivo / Observação (opcional)';
+
+  const contarCardEl = document.getElementById('medit-contar-card');
+  if(contarCardEl){
+    if(status === 'ok'){
+      contarCardEl.disabled = false;
+      if(!isInit) contarCardEl.value = 'sim';
+    } else {
+      contarCardEl.value = 'nao';
+      contarCardEl.disabled = true;
+    }
+  }
 }
 
 async function confirmarEdicaoStatus(){
@@ -9151,7 +9190,10 @@ async function confirmarEdicaoStatus(){
   const novoStatus  = document.getElementById('medit-status').value;
   const novoSelb    = document.getElementById('medit-selb').value.trim().toUpperCase();
   const novoEquip   = document.getElementById('medit-equip').value.trim();
-  const novoLocal   = document.getElementById('medit-local').value.trim();
+  const localEl     = document.getElementById('medit-local');
+  const novoLocal   = localEl ? localEl.value.trim() : '';
+  const contarCardEl= document.getElementById('medit-contar-card');
+  const querContarNoCard = (novoStatus === 'ok') && (!contarCardEl || contarCardEl.value === 'sim');
   const novoOs      = document.getElementById('medit-os').value.trim();
   const novoStart   = document.getElementById('medit-start').value.trim();
   const novoEnd     = document.getElementById('medit-end').value.trim();
@@ -9169,14 +9211,32 @@ async function confirmarEdicaoStatus(){
   btn.textContent = 'Salvando…'; btn.disabled = true;
   errEl.textContent = '';
 
+  const originalRec = _consultaRecords.find(r => r._docId === _editDocId)
+                   || history.find(r => r._docId === _editDocId)
+                   || (Array.isArray(_consultaSelbSearchRecs) ? _consultaSelbSearchRecs.find(r => r._docId === _editDocId) : null);
+  const setorRec = originalRec ? originalRec.sector : '—';
+  const todayDk  = new Date().toDateString().replace(/ /g,'_');
+
+  let finalEnd = novoEnd || (querContarNoCard ? (originalRec?.end || new Date().toLocaleTimeString('pt-BR')) : null);
+  let finalDuracao = novoDuracao || null;
+  if(!finalDuracao && novoStatus === 'ok' && (novoStart || originalRec?.start) && finalEnd){
+    const calcD = calcDuracaoExibir({
+      ...(originalRec || {}),
+      start: novoStart || originalRec?.start,
+      end: finalEnd,
+      status: 'ok'
+    });
+    if(calcD && calcD !== '—') finalDuracao = calcD;
+  }
+
   const patch = {
     selb:       novoSelb,
     equipamento:novoEquip,
-    local:      novoLocal,
+    local:      novoLocal || (originalRec?.local || ''),
     osNum:      novoOs,
     start:      novoStart,
-    end:        novoEnd || null,
-    duracao:    novoDuracao || null,
+    end:        finalEnd,
+    duracao:    finalDuracao,
     status:     novoStatus,
     motivo:     motivo  || '',
     comentario: comentario || '',
@@ -9184,9 +9244,19 @@ async function confirmarEdicaoStatus(){
     _editadoEm: new Date().toLocaleTimeString('pt-BR')
   };
 
+  if(querContarNoCard){
+    patch.contarNoCard    = true;
+    patch.contarNoCardDia = todayDk;
+    patch.endDateKey      = todayDk;
+    patch.endEpoch        = (originalRec && originalRec.endEpoch && new Date(originalRec.endEpoch).toDateString().replace(/ /g,'_') === todayDk)
+      ? originalRec.endEpoch
+      : Date.now();
+  } else {
+    patch.contarNoCard    = false;
+    patch.contarNoCardDia = null;
+  }
+
   let logMovimentacao = null;
-  const originalRec = _consultaRecords.find(r => r._docId === _editDocId) || history.find(r => r._docId === _editDocId);
-  const setorRec = originalRec ? originalRec.sector : '—';
 
   if (novoStatus === 'maquina_a') {
     patch.status = 'Máquina A'; // Não conta como ok para as métricas
@@ -9220,20 +9290,36 @@ async function confirmarEdicaoStatus(){
 
   try {
     await dbUpdateHistory(_editDocId, _editDateKey, patch);
+    // Espelha status e end_epoch na linha do Supabase para que registros de dias anteriores
+    // marcados "Contar no Card" hoje sejam recarregados automaticamente em qualquer F5
+    if (querContarNoCard && patch.endEpoch) {
+      _supa.from('history').update({ status: patch.status, end_epoch: patch.endEpoch, selb: novoSelb }).eq('id', _editDocId).catch(() => {});
+    }
 
     // Atualiza _consultaRecords
     const recIdx = _consultaRecords.findIndex(r => r._docId === _editDocId);
     if(recIdx !== -1){
       _consultaRecords[recIdx] = { ..._consultaRecords[recIdx], ...patch };
     }
-    // Atualiza history[]
-    const hIdx = history.findIndex(r => r._docId === _editDocId);
+    // Atualiza _consultaSelbSearchRecs (se busca global ativa)
+    if(Array.isArray(_consultaSelbSearchRecs)){
+      const sIdx = _consultaSelbSearchRecs.findIndex(r => r._docId === _editDocId);
+      if(sIdx !== -1){
+        _consultaSelbSearchRecs[sIdx] = { ..._consultaSelbSearchRecs[sIdx], ...patch };
+      }
+    }
+    // Atualiza history[] (ou insere se veio de dia anterior e foi marcado para contar no card hoje)
+    let hIdx = history.findIndex(r => r._docId === _editDocId);
     if(hIdx !== -1){
       history[hIdx] = { ...history[hIdx], ...patch };
+    } else if(originalRec && (querContarNoCard || _editDateKey === todayDk)){
+      const inserted = { ...originalRec, ...patch, _docId: _editDocId, _dateKey: _editDateKey || originalRec._dateKey || todayDk };
+      history.unshift(inserted);
+      hIdx = 0;
     }
 
     // Ajusta repDia se mudou de/para rep/scrap e sincroniza sessão do operador quando status 'running' muda
-    const rec = _consultaRecords[recIdx] || history[hIdx];
+    const rec = _consultaRecords[recIdx] || (hIdx !== -1 ? history[hIdx] : null) || (originalRec ? { ...originalRec, ...patch } : null);
     if(rec){
       const profUser = users.find(u => u.id === rec.uid);
       if(profUser){
@@ -9292,6 +9378,8 @@ async function confirmarEdicaoStatus(){
     }
 
     closeModal('modal-edit-status');
+    if (rec && rec.uid && typeof renderCard === 'function') renderCard(rec.uid);
+    if (typeof buildCards === 'function' && document.getElementById('cards-grid')) buildCards();
     renderConsulta();
     updateSummary();
 
