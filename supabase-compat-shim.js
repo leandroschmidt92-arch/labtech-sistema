@@ -316,6 +316,14 @@ function createSupabaseCompatShim(supa) {
       p_patch: merged,
       p_date_key: dateKey || null,
     });
+    const syncMirrorCols = () => {
+      if (cfg.table !== 'history' || !merged || typeof merged !== 'object') return;
+      const mCols = mirrorCols('history', merged);
+      if (!Object.keys(mCols).length) return;
+      let mq = supa.from('history').update(mCols).eq('id', id);
+      if (dateKey) mq = mq.eq('date_key', dateKey);
+      mq.then(() => {}).catch(() => {});
+    };
     const scheduleRetryOnce = (reason) => {
       if (isRetry) {
         console.warn('[shim] rowsUpdate falhou após retry:', cfg.table, id, reason);
@@ -330,7 +338,10 @@ function createSupabaseCompatShim(supa) {
         }
         sendRpc().then(({ error: err2 }) => {
           if (err2) console.warn('[shim] rowsUpdate retry falhou:', cfg.table, id, err2.message || err2);
-          else pubRow(cfg.table, id, dateKey, 'patch', { patch: merged });
+          else {
+            syncMirrorCols();
+            pubRow(cfg.table, id, dateKey, 'patch', { patch: merged });
+          }
         }).catch(() => {});
       }, 1500);
     };
@@ -339,6 +350,7 @@ function createSupabaseCompatShim(supa) {
         pubRow(cfg.table, id, dateKey, 'patch', { patch: merged });
         scheduleRetryOnce(error.message || error);
       } else {
+        syncMirrorCols();
         pubRow(cfg.table, id, dateKey, 'patch', { patch: merged });
       }
       resolvers.forEach(r => r());
@@ -432,7 +444,15 @@ function createSupabaseCompatShim(supa) {
   const _busHandlers = new Set();
 
   function _busEnsure() {
-    if (_bus) return _bus;
+    if (_bus && (_bus.state === 'joined' || _bus.state === 'joining')) return _bus;
+    if (_bus) {
+      try { supa.removeChannel(_bus); } catch (e) {}
+      _bus = null;
+    }
+    if (_busReconnectTimer) {
+      clearTimeout(_busReconnectTimer);
+      _busReconnectTimer = null;
+    }
     _busJoined = false;
     const ch = supa.channel(BUS_TOPIC, { config: { broadcast: { self: false, ack: false } } })
       .on('broadcast', { event: 'mut' }, (msg) => _busDispatch(msg && msg.payload))
@@ -451,15 +471,15 @@ function createSupabaseCompatShim(supa) {
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
           _busJoined = false;
           _busHadDisconnect = true;
+          if (_bus === ch) {
+            try { supa.removeChannel(ch); } catch (e) {}
+            _bus = null;
+          }
           if (!_paused && _busHandlers.size > 0 && !_busReconnectTimer) {
             _busReconnectTimer = setTimeout(() => {
               _busReconnectTimer = null;
-              if (_bus === ch) {
-                try { supa.removeChannel(ch); } catch (e) {}
-                _bus = null;
-              }
               if (!_paused && _busHandlers.size > 0) _busEnsure();
-            }, 2000);
+            }, 1500);
           }
         }
       });
@@ -792,6 +812,15 @@ function createSupabaseCompatShim(supa) {
       (dateKey ? ev.dk === dateKey : true) &&
       (isCollection ? true : ev.id === id);
 
+    let missingRowResyncTimer = null;
+    const scheduleMissingRowResync = () => {
+      if (missingRowResyncTimer) return;
+      missingRowResyncTimer = setTimeout(() => {
+        missingRowResyncTimer = null;
+        resync();
+      }, 250);
+    };
+
     const onBus = (ev) => {
       try {
         if (ev.k === 'rows-reload') {
@@ -815,8 +844,12 @@ function createSupabaseCompatShim(supa) {
             }
             return;
           }
-          // Evita criar registro incompleto (sem nome/setor/_selb) se um patch chegar para linha ausente no cache
-          if (ev.op === 'patch' && !cache[ev.id]) return;
+          // Se um patch chegar para uma linha cujo 'set' inicial foi perdido (ex: aba oculta/reconexão),
+          // dispara um resync leve da coleção em vez de descartar silenciosamente a finalização do SELB.
+          if (ev.op === 'patch' && !cache[ev.id]) {
+            scheduleMissingRowResync();
+            return;
+          }
           const raw = ev.op === 'patch'
             ? Object.assign({}, cache[ev.id] || {}, ev.patch)
             : ev.raw;

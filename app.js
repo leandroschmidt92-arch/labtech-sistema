@@ -1582,12 +1582,52 @@ function applyUserSnapshot(freshUsers){
       s._pauseAccum = 0; s._pausedAt = null;
 
     } else {
+      const prevWasActive = (s.status === 'running' || s.status === 'paused' || s.status === 'aguardando') && s.selb;
+      const prevSelb = s.selb;
       s.status         = 'idle';
       s.selb           = null;
       s.startEpoch     = null;
       s.elapsed        = 0;
       s.pausedElapsed  = 0;
       s._pausedAt      = null;
+
+      // Se o operador acabou de transicionar de ativo para idle no /users, mas o registro concluído
+      // ainda não chegou no history[] local (ex: broadcast de /users chegou antes do /history),
+      // faz um refresh leve e único de /history/<hoje> para atualizar a contagem do card na hora.
+      if (prevWasActive && _historyReady) {
+        const hasFinishedRec = history.some(h =>
+          h.uid === fu.id &&
+          h.selb === prevSelb &&
+          ['ok','rep','scrap','cancelado','Máquina A'].includes(h.status) &&
+          (h._dateKey === todayDkSync || h.endDateKey === todayDkSync)
+        );
+        if (!hasFinishedRec && !window._pendingTodayHistRefreshTimer) {
+          window._pendingTodayHistRefreshTimer = setTimeout(() => {
+            window._pendingTodayHistRefreshTimer = null;
+            const dkNow = new Date().toDateString().replace(/ /g, '_');
+            dbGet('/history/' + dkNow).then(data => {
+              if (!data) return;
+              const freshToday = Object.entries(data).map(([k, v]) => {
+                const rec = { ...v, _docId: k, _dateKey: dkNow };
+                if (typeof healFalseClosedStaleRecord === 'function') healFalseClosedStaleRecord(rec, dkNow);
+                return rec;
+              }).sort((a, b) => (b.startEpoch || 0) - (a.startEpoch || 0));
+              const others = history.filter(h => h._dateKey !== dkNow);
+              history = [...others, ...freshToday];
+              if (_consultaDateKey === dkNow || (_consultaRecords && _consultaRecords.some(r => r._dateKey === dkNow))) {
+                _consultaRecords = [
+                  ...(_consultaRecords || []).filter(r => r._dateKey !== dkNow),
+                  ...freshToday
+                ].sort((a, b) => (b.startEpoch || 0) - (a.startEpoch || 0));
+              }
+              if (currentUser) {
+                rebuildOrUpdateCards();
+                if (document.getElementById('view-consulta')?.classList.contains('active')) renderConsulta();
+              }
+            }).catch(() => {});
+          }, 450);
+        }
+      }
     }
   });
 
@@ -1668,8 +1708,14 @@ function startRealtimeSync(){
     _historyListener = ref.on('value', snap => {
       window._lastDashRtEventTs = Date.now();
       if(snap.exists()){
+        const todayDkNow = new Date().toDateString().replace(/ /g,'_');
+        const todayStartNow = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
         const allRecs = Object.entries(snap.val())
-          .map(([k,v]) => ({...v, _docId:k, _dateKey:dk}))
+          .map(([k,v]) => {
+            const rec = {...v, _docId:k, _dateKey:dk};
+            if(typeof healFalseClosedStaleRecord === 'function') healFalseClosedStaleRecord(rec, todayDkNow);
+            return rec;
+          })
           .sort((a,b) => (b.startEpoch||0) - (a.startEpoch||0));
 
         // --- INJEÇÃO: DETECÇÃO DE STATUS E MOVIMENTAÇÃO PARA IMPRESSÃO ---
@@ -1692,16 +1738,20 @@ function startRealtimeSync(){
         }
         // ------------------------------------------------------------------
 
-        // Preserva de dias anteriores APENAS:
+        // Preserva de dias anteriores:
         // - 'ok' marcado manualmente pelo Admin com "Contar no Card" para hoje
-        // - 'running' de COMPLEXA que ainda esteja efetivamente ativo no operador
-        const todayDkNow = new Date().toDateString().replace(/ /g,'_');
-        const prevRelevant = history.filter(h => {
-          if(h._dateKey === dk) return false; // já vem no snapshot de hoje
-          if(h.status === 'ok' && h.contarNoCard === true && h.contarNoCardDia === todayDkNow) return true;
+        // - 'ok' overnight legítimo (último SELB iniciado ontem pelo operador e finalizado hoje)
+        // - 'running' de COMPLEXA (ou ativo no operador)
+        const prevPool = history.filter(h => h._dateKey !== dk);
+        const prevRelevant = prevPool.filter(h => {
+          if(h.status === 'ok'){
+            if(h.contarNoCard === true && h.contarNoCardDia === todayDkNow) return true;
+            if(typeof isGenuineOvernightRecord === 'function' && isGenuineOvernightRecord(h, prevPool, todayDkNow, todayStartNow)) return true;
+            return false;
+          }
           if(h.status === 'running' || h.status === 'paused' || h.status === 'aguardando'){
             const uRef = users.find(u => u.id === h.uid);
-            if(uRef && uRef.sector === 'COMPLEXA' && uRef._selb === h.selb && (uRef._status === 'running' || uRef._status === 'paused' || uRef._status === 'aguardando')){
+            if(uRef && uRef._selb === h.selb && (uRef._status === 'running' || uRef._status === 'paused' || uRef._status === 'aguardando')){
               return true;
             }
           }
@@ -2096,10 +2146,15 @@ async function checkDayReset(){
           const prevRecs = allPrevRecs.filter(r => {
             if(r.status !== 'running') return false;
             const uRef = users.find(u => u.id === r.uid);
-            return !!(uRef && uRef.sector === 'COMPLEXA' && uRef._selb === r.selb && uRef._status === 'running');
+            return !!(uRef && uRef._selb === r.selb && (uRef._status === 'running' || uRef._status === 'paused' || uRef._status === 'aguardando'));
           });
-          const prevOk   = allPrevRecs.filter(r => {
-            return r.status === 'ok' && r.contarNoCard === true && r.contarNoCardDia === todayDk2;
+          const prevOk = allPrevRecs.filter(r => {
+            return typeof isGenuineOvernightRecord === 'function'
+              ? isGenuineOvernightRecord(r, allPrevRecs, todayDk2, todayStart2)
+              : (r.status === 'ok' && r.contarNoCard === true && r.contarNoCardDia === todayDk2);
+          });
+          allPrevRecs.forEach(r => {
+            if (r.status === 'ok' && !prevOk.includes(r)) r._overnightInvalid = true;
           });
           [...prevRecs, ...prevOk].forEach(r => {
             if(!history.find(h => h._docId === r._docId)) history.push(r);
@@ -2190,19 +2245,26 @@ function bootApp(){
       const allPrev = Object.entries(prevSnap)
         .map(([k,v]) => ({...v, _docId:k, _dateKey:prevDk}));
 
-      // Mantém de dia anterior APENAS: running de COMPLEXA ainda ativo no operador + ok marcado manualmente com "Contar no Card" hoje
+      // Mantém de dia anterior: running ativo no operador + ok overnight legítimo (último iniciado ontem e concluído hoje) ou marcado "Contar no Card"
       const todayDkPrev = new Date().toDateString().replace(/ /g,'_');
       const prevRunning = allPrev.filter(r => {
         if(r.status !== 'running') return false;
         const uRef = users.find(u => u.id === r.uid);
-        return !!(uRef && uRef.sector === 'COMPLEXA' && uRef._selb === r.selb && uRef._status === 'running');
+        return !!(uRef && uRef._selb === r.selb && (uRef._status === 'running' || uRef._status === 'paused' || uRef._status === 'aguardando'));
       });
       const prevOkToday = allPrev.filter(r => {
-        return r.status === 'ok' && r.contarNoCard === true && r.contarNoCardDia === todayDkPrev;
+        return typeof isGenuineOvernightRecord === 'function'
+          ? isGenuineOvernightRecord(r, allPrev, todayDkPrev, todayStart)
+          : (r.status === 'ok' && r.contarNoCard === true && r.contarNoCardDia === todayDkPrev);
+      });
+      allPrev.forEach(r => {
+        if (r.status === 'ok' && !prevOkToday.includes(r)) r._overnightInvalid = true;
       });
 
       [...prevRunning, ...prevOkToday].forEach(r => {
-        if(!history.find(h => h._docId === r._docId)) history.push(r);
+        const existingIdx = history.findIndex(h => h._docId === r._docId);
+        if(existingIdx === -1) history.push(r);
+        else history[existingIdx] = { ...history[existingIdx], ...r };
       });
 
       prevRunning.forEach(r => {
@@ -2440,16 +2502,76 @@ function secToH(sec){ return Math.round(sec/60)/60; }
 
 // ── Contadores derivados do history[] — fonte de verdade única ──────────────
 
+// Corrige registros de HOJE que foram finalizados legitimamente (têm end, duracao e endEpoch),
+// mas acabaram marcados por engano como 'closed_stale' / contarNoCard:false pela limpeza antiga
+// que consultava a coluna SQL 'status' defasada.
+function healFalseClosedStaleRecord(r, todayDk){
+  if(!r || r._dateKey !== todayDk) return r;
+  if(r.status === 'closed_stale' && r.end && r.duracao && r.endEpoch && !r.motivo){
+    r.status = 'ok';
+    if(!r._editadoPor){
+      r.contarNoCard = true;
+      r.contarNoCardDia = todayDk;
+    }
+    if(r._docId && r._dateKey){
+      window._healedStaleIds = window._healedStaleIds || new Set();
+      if(!window._healedStaleIds.has(r._docId)){
+        window._healedStaleIds.add(r._docId);
+        dbUpdateHistory(r._docId, r._dateKey, {
+          status: 'ok',
+          contarNoCard: true,
+          contarNoCardDia: todayDk
+        }).catch(() => {});
+      }
+    }
+  } else if(r.status === 'ok' && r.contarNoCard === false && !r._editadoPor){
+    r.contarNoCard = true;
+    r.contarNoCardDia = todayDk;
+  }
+  return r;
+}
+
+// Verifica se um registro 'ok' iniciado em dia anterior e concluído hoje é a máquina overnight
+// legítima do operador (o ÚLTIMO registro iniciado por ele naquele dia anterior), descartando
+// registros mais antigos do mesmo dia que tenham sido fechados em lote.
+function isGenuineOvernightRecord(r, poolForDay, todayDk, todayStart){
+  if(!r || r.status !== 'ok' || !r.end) return false;
+  if(r.contarNoCard === false && r._editadoPor) return false;
+  if(r.contarNoCard === true && r.contarNoCardDia === todayDk) return true;
+  if(r._overnightInvalid === true) return false;
+  const endedToday = r.endDateKey === todayDk || (r.endEpoch && r.endEpoch >= todayStart);
+  if(!endedToday) return false;
+  const rStart = r.startEpoch || 0;
+  if(!rStart) return false;
+  const pool = Array.isArray(poolForDay) ? poolForDay : [];
+  const hasNewerFromSameDay = pool.some(other =>
+    other &&
+    other._docId !== r._docId &&
+    other.uid === r.uid &&
+    !other._reprovadoDe &&
+    (other.startEpoch || 0) > rStart &&
+    (other._dateKey === r._dateKey || (other.end === r.end && other.duracao === r.duracao))
+  );
+  if(hasNewerFromSameDay) return false;
+  return true;
+}
+
 // Define se um registro 'ok' deve contar no card do operador HOJE.
-// Regra: o card reseta todo dia e só conta SELBs iniciados HOJE (_dateKey === todayDk),
-// EXCETO quando o Admin marca manualmente a opção "Contar no Card" para hoje.
+// Conta automaticamente:
+// 1. SELBs iniciados e aprovados HOJE (_dateKey === todayDk ou startEpoch >= hoje 00:00)
+// 2. O SELB overnight legítimo (último iniciado ontem pelo operador e finalizado hoje)
+// 3. Qualquer SELB marcado manualmente pelo Admin com "Contar no Card: Sim" para hoje
 function isRecordCountedOnCardToday(h){
-  if(!h || h.status !== 'ok') return false;
-  if(h.contarNoCard === false) return false;
+  if(!h) return false;
   const todayDk = new Date().toDateString().replace(/ /g,'_');
+  healFalseClosedStaleRecord(h, todayDk);
+  if(h.status !== 'ok') return false;
+  if(h.contarNoCard === false && h._editadoPor) return false;
   if(h.contarNoCard === true && h.contarNoCardDia === todayDk) return true;
   if(!h.end) return false;
-  return h._dateKey === todayDk;
+  const todayStart = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
+  if(h._dateKey === todayDk || (h.startEpoch && h.startEpoch >= todayStart)) return true;
+  return isGenuineOvernightRecord(h, history, todayDk, todayStart);
 }
 
 // Contagem de máquinas do dia:
@@ -3015,26 +3137,59 @@ async function opSyncFromSupabase(uid){
   }, 5000);
 
   try {
-    // Fonte única de verdade: valida direto na tabela history do Supabase se este
-    // operador possui um SELB 'running' ou 'aguardando' DE HOJE (máx 1 linha, super leve),
-    // em paralelo com a leitura de operadores (usada para metadados de pausa/timer).
+    // Fonte única de verdade: valida direto na tabela history do Supabase os registros
+    // deste operador (filtrando pelo status real dentro do JSONB `raw`, pois a coluna SQL
+    // `status` pode permanecer 'running' em registros antigos).
     const todayDk = new Date().toDateString().replace(/ /g, '_');
-    const todayStartMs = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
+    const yestDate = new Date(); yestDate.setDate(yestDate.getDate() - 1);
+    const yesterdayDk = yestDate.toDateString().replace(/ /g, '_');
     const [opRes, histRes] = await Promise.all([
       _supa.from('operadores').select('raw').eq('id', uid).maybeSingle(),
       _supa.from('history')
         .select('id,date_key,raw,selb,status,start_epoch')
         .eq('uid', uid)
-        .eq('date_key', todayDk)
-        .in('status', ['running', 'aguardando'])
+        .in('date_key', [todayDk, yesterdayDk])
         .order('start_epoch', { ascending: false })
-        .limit(1)
+        .limit(20)
     ]);
     _syncDone = true;
     clearTimeout(_syncTimeout);
 
     const fbUser = (opRes && !opRes.error && opRes.data && opRes.data.raw) ? opRes.data.raw : null;
-    const activeRow = (histRes && !histRes.error && Array.isArray(histRes.data) && histRes.data[0]) ? histRes.data[0] : null;
+    const rows = (histRes && !histRes.error && Array.isArray(histRes.data)) ? histRes.data : [];
+
+    // Sincroniza registros de hoje do operador no history[] local com o status real do JSONB raw
+    rows.forEach(r => {
+      const rRaw = (r.raw && typeof r.raw === 'object') ? r.raw : {};
+      const rDk = r.date_key || rRaw._dateKey || todayDk;
+      if (rDk !== todayDk) return;
+      const recObj = {
+        ...rRaw,
+        _docId: r.id,
+        _dateKey: rDk,
+        uid: uid,
+        selb: rRaw.selb || r.selb,
+        status: rRaw.status || r.status,
+        startEpoch: rRaw.startEpoch || r.start_epoch
+      };
+      if (typeof healFalseClosedStaleRecord === 'function') healFalseClosedStaleRecord(recObj, todayDk);
+      const idx = history.findIndex(x => x._docId === recObj._docId);
+      if (idx === -1) history.unshift(recObj);
+      else history[idx] = { ...history[idx], ...recObj };
+    });
+
+    // Localiza apenas registro cujo JSONB raw.status seja realmente ativo e sem horário de fim
+    const activeRow = rows.find(r => {
+      const rRaw = (r.raw && typeof r.raw === 'object') ? r.raw : {};
+      const rDk = r.date_key || rRaw._dateKey || '';
+      const rawSt = rRaw.status || r.status;
+      const isReallyActive = (rawSt === 'running' || rawSt === 'paused' || rawSt === 'aguardando') && !rRaw.end;
+      if (!isReallyActive) return false;
+      if (rDk === todayDk) return true;
+      // De ontem: só considera ativo se o próprio operador ainda estiver com esse _selb em operadores
+      const rSelb = rRaw.selb || r.selb;
+      return !!(fbUser && fbUser._selb === rSelb && ['running','paused','aguardando'].includes(fbUser._status));
+    }) || null;
     const s = getS(uid);
 
     if (activeRow) {
@@ -4841,6 +4996,7 @@ async function confirmarInicio(){
             status: raw.status || row.status,
             startEpoch: raw.startEpoch || row.start_epoch
           };
+          if(typeof healFalseClosedStaleRecord === 'function') healFalseClosedStaleRecord(recObj, todayDkStart);
           const idx = history.findIndex(h => h._docId === recObj._docId);
           if(idx === -1) history.unshift(recObj);
           else history[idx] = { ...history[idx], ...recObj };
@@ -4874,8 +5030,9 @@ async function confirmarInicio(){
     fluxolabFinalizarSelb(selb, u.sector, 'scrap').catch(e => console.warn('[FluxoLAB] Erro ao remover SCRAP dos bolsões:', e));
     closeModal('modal-selb'); updateSummary(); renderConsulta(); return;
   }
-  // ── Verifica na fonte única (history) se já existe SELB 'running' deste operador ──
-  const orphans = history.filter(x => x.uid === actionUid && x.status === 'running');
+  // ── Verifica na fonte única (history) se já existe SELB 'running' (sem fim) deste operador ──
+  const todayDkOrph = new Date().toDateString().replace(/ /g,'_');
+  const orphans = history.filter(x => x.uid === actionUid && x.status === 'running' && !x.end && !x.duracao);
   const _latestOkEndEpochLocal = history
     .filter(x => x.uid === actionUid && x.status === 'ok' && x.endEpoch)
     .reduce((max, x) => Math.max(max, x.endEpoch), 0);
@@ -4885,7 +5042,7 @@ async function confirmarInicio(){
     const ageHours2      = orphStart2 ? (Date.now() - orphStart2) / 3600000 : Infinity;
     const hasNoStart2    = !orphStart2 && !orphan.start;
     const hasNoSelb2     = !orphan.selb;
-    const tooOld2        = ageHours2 > 18;
+    const tooOld2        = ageHours2 > 18 || (orphan._dateKey && orphan._dateKey !== todayDkOrph && u && u.sector !== 'COMPLEXA' && u._selb !== orphan.selb);
     const beforeLastOk2  = _latestOkEndEpochLocal > 0 && orphStart2 > 0 && orphStart2 < _latestOkEndEpochLocal;
     const isPhantom2     = hasNoStart2 || hasNoSelb2 || tooOld2 || beforeLastOk2;
 
@@ -5195,21 +5352,35 @@ async function confirmarFin(){
   // Antes, se o array local history[] ainda não tivesse carregado o registro (ou se estivesse
   // como 'paused'), `h` vinha undefined: o sistema limpava /users para 'idle' mas deixava o
   // registro 'Em andamento' na Consulta (history), travando o próximo início do operador.
-  let h = history.find(x => x.selb === selbAtualSnapshot && x.uid === actionUid && (x.status === 'running' || x.status === 'paused'))
-       || history.find(x => x.uid === actionUid && x.status === 'running');
+  let h = history.find(x => x.selb === selbAtualSnapshot && x.uid === actionUid && (x.status === 'running' || x.status === 'paused') && !x.end)
+       || history.find(x => x.uid === actionUid && x.status === 'running' && !x.end);
 
   let dbActiveRows = [];
   const todayDkFin = new Date().toDateString().replace(/ /g, '_');
+  const yestFin = new Date(); yestFin.setDate(yestFin.getDate() - 1);
+  const yesterdayDkFin = yestFin.toDateString().replace(/ /g, '_');
   try {
+    // IMPORTANTE: não filtrar pela coluna SQL `status` sem checar `raw.status`, pois `jsonb_patch_row`
+    // atualiza apenas o JSONB `raw` e registros já aprovados podiam manter SQL `status = 'running'`.
     const { data: _actRows, error: _actErr } = await _supa
       .from('history')
       .select('id,date_key,raw,selb,status,start_epoch')
       .eq('uid', actionUid)
-      .eq('date_key', todayDkFin)
-      .in('status', ['running', 'paused'])
+      .in('date_key', [todayDkFin, yesterdayDkFin])
       .order('start_epoch', { ascending: false })
-      .limit(5);
-    if (!_actErr && Array.isArray(_actRows)) dbActiveRows = _actRows;
+      .limit(20);
+    if (!_actErr && Array.isArray(_actRows)) {
+      dbActiveRows = _actRows.filter(r => {
+        const rawRec = (r.raw && typeof r.raw === 'object') ? r.raw : {};
+        const rawSt = rawRec.status || r.status;
+        const rDk = r.date_key || rawRec._dateKey || '';
+        const rSelb = rawRec.selb || r.selb;
+        if (rawRec.end || rawRec.duracao) return false;
+        if (rawSt !== 'running' && rawSt !== 'paused' && rawSt !== 'aguardando') return false;
+        if (rDk === todayDkFin) return true;
+        return rSelb === selbAtualSnapshot;
+      });
+    }
   } catch (_e) {}
 
   if (!h && dbActiveRows.length > 0) {
@@ -5247,10 +5418,14 @@ async function confirmarFin(){
     });
   }
 
-  // Descarta qualquer outro registro 'running' residual deste operador no dia como 'closed_stale' (sem duplicar aprovação)
+  // Descarta apenas outros registros que estejam REALMENTE 'running'/'paused' (sem horário de fim) hoje
   for (const extraRow of dbActiveRows) {
     if (h && extraRow.id === h._docId) continue;
-    const extraDk = extraRow.date_key || (extraRow.raw && extraRow.raw._dateKey) || endDateKey;
+    const extraRaw = (extraRow.raw && typeof extraRow.raw === 'object') ? extraRow.raw : {};
+    const extraSt = extraRaw.status || extraRow.status;
+    if (extraRaw.end || extraRaw.duracao || (extraSt !== 'running' && extraSt !== 'paused')) continue;
+    const extraDk = extraRow.date_key || extraRaw._dateKey || endDateKey;
+    if (extraDk !== todayDkFin) continue;
     await dbUpdateHistory(extraRow.id, extraDk, {
       status: 'closed_stale', contarNoCard: false
     }).catch(() => {});
@@ -6198,17 +6373,37 @@ async function loadConsultaRange(){
   document.getElementById('consulta-loading').style.display = 'block';
   document.getElementById('consulta-body').innerHTML = '';
 
+  const todayStartCons = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
   let allRecords = [];
+  let syncedHistory = false;
   for(const dk of dateKeys){
-    if(dk === todayDk && _consultaRecords.some(r => r._dateKey === dk)){
-      // já temos os de hoje no cache
-      allRecords.push(..._consultaRecords.filter(r => r._dateKey === dk));
-      continue;
-    }
     try {
       const data = await dbGet('/history/'+dk);
       if(data){
-        allRecords.push(...Object.entries(data).map(([k,v])=>({...v,_docId:k,_dateKey:dk})));
+        const dayRecs = Object.entries(data).map(([k,v]) => {
+          const rec = {...v, _docId:k, _dateKey:dk};
+          if(typeof healFalseClosedStaleRecord === 'function') healFalseClosedStaleRecord(rec, todayDk);
+          return rec;
+        });
+        allRecords.push(...dayRecs);
+        // Sincroniza registros de hoje (e overnight válidos de dias anteriores) com o history[] do Dashboard
+        if(dk === todayDk){
+          const otherDays = history.filter(h => h._dateKey !== todayDk);
+          history = [...otherDays, ...dayRecs];
+          syncedHistory = true;
+        } else {
+          dayRecs.forEach(r => {
+            if(r.status === 'ok' && typeof isGenuineOvernightRecord === 'function' && isGenuineOvernightRecord(r, dayRecs, todayDk, todayStartCons)){
+              const idx = history.findIndex(h => h._docId === r._docId);
+              if(idx === -1){ history.push(r); syncedHistory = true; }
+              else { history[idx] = { ...history[idx], ...r }; syncedHistory = true; }
+            } else if(r.status === 'ok'){
+              r._overnightInvalid = true;
+              const idx = history.findIndex(h => h._docId === r._docId);
+              if(idx !== -1){ history[idx]._overnightInvalid = true; syncedHistory = true; }
+            }
+          });
+        }
       }
     } catch(e){}
   }
@@ -6216,6 +6411,11 @@ async function loadConsultaRange(){
   allRecords.sort((a,b)=>(b.startEpoch||0)-(a.startEpoch||0));
   _consultaDateKey = dateKeys[dateKeys.length-1] || todayDk;
   _consultaRecords = allRecords;
+
+  if(syncedHistory && currentUser){
+    buildCards();
+    updateSummary();
+  }
 
   document.getElementById('consulta-loading').style.display = 'none';
   renderConsulta();
@@ -29046,8 +29246,227 @@ let _fluxolabChecklistsListener = null;
 const _CL_CACHE_KEY    = 'sb_checklists_cache_v1';
 const _CL_CACHE_TS_KEY = 'sb_checklists_cache_ts_v1';
 
+// ── Memória diária do "Caindo Hoje" por Número do Pedido ──────────────────
+// Mantém todos os pedidos que caíram hoje (<= 0 dias úteis) mesmo após novas
+// importações da planilha ao longo do dia. Pedidos que saírem nas importações
+// seguintes permanecem contabilizados no total do dia com a observação (SAIU DA LISTA),
+// sem nunca duplicar números de pedido.
+const _CAINDO_HOJE_LS_KEY  = 'sb_caindo_hoje_diario_v1';
+const _CAINDO_HOJE_CFG_KEY = 'caindo_hoje_diario';
+let _fluxolabCaindoHojeState = null; // { dateKey, updatedAt, pedidos: { [pedKey]: { pedido, row, firstSeenAt, lastSeenAt, saiuDaLista } } }
+let _fluxolabCaindoHojeRemoteLoaded = false;
+let _fluxolabCaindoHojeLoadingPromise = null;
+
+function _fluxolabGetTodayDk() {
+  return new Date().toDateString().replace(/ /g, '_');
+}
+
+function _fluxolabDetectChecklistKeys(sample) {
+  if (!sample || typeof sample !== 'object') return {};
+  const k = {
+    modelo:    _fluxolabFindKey(sample,'Descrição Equipamento') || _fluxolabFindKey(sample,'Descricao Equipamento'),
+    pedido:    _fluxolabFindKey(sample,'Pedido'),
+    cliente:   _fluxolabFindKey(sample,'Razão Social') || _fluxolabFindKey(sample,'Cliente'),
+    customer:  _fluxolabFindKey(sample,'Customer') || _fluxolabFindKey(sample,'Contato') || _fluxolabFindKey(sample,'Nome Contato'),
+    telefone:  _fluxolabFindKey(sample,'Telefone') || _fluxolabFindKey(sample,'Tel') || _fluxolabFindKey(sample,'Fone') || _fluxolabFindKey(sample,'Celular'),
+    tipo:      _fluxolabFindKey(sample,'Tipo'),
+    andamento: _fluxolabFindKey(sample,'Andamento'),
+    diasUteis: _fluxolabFindKey(sample,'Dias Úteis Andamento') || _fluxolabFindKey(sample,'Dias Uteis Andamento') || _fluxolabFindKey(sample,'Dias Úteis') || _fluxolabFindKey(sample,'Dias Uteis'),
+    diasAb:    _fluxolabFindKey(sample,'Dias Aberto'),
+    status:    _fluxolabFindKey(sample,'Status Checklist') || _fluxolabFindKey(sample,'Status'),
+    obs:       _fluxolabFindKey(sample,'Observação Comercial') || _fluxolabFindKey(sample,'Observação') || _fluxolabFindKey(sample,'Observacao') || _fluxolabFindKey(sample,'OBS') || _fluxolabFindKey(sample,'Obs'),
+  };
+  if (!k.tipo) {
+    const kSt = Object.keys(sample).find(x => x.trim().toLowerCase() === 'status');
+    if (kSt && kSt !== k.status) k.tipo = kSt;
+  }
+  return k;
+}
+
+function _fluxolabGetRowPedidoKey(r, k) {
+  if (!r || typeof r !== 'object') return '';
+  const keys = k || _fluxolabDetectChecklistKeys(r);
+  const rawPed = keys.pedido ? r[keys.pedido] : (r.Pedido || r.PEDIDO || r.pedido || '');
+  const ped = String(rawPed == null ? '' : rawPed).trim();
+  if (ped) return ped;
+  const mod = String((keys.modelo ? r[keys.modelo] : '') || '').trim();
+  const cli = String((keys.cliente ? r[keys.cliente] : '') || '').trim();
+  return (mod || cli) ? ('SEM_PED__' + mod + '__' + cli) : '';
+}
+
+function _fluxolabEnsureCaindoHojeState() {
+  const todayDk = _fluxolabGetTodayDk();
+  if (!_fluxolabCaindoHojeState || _fluxolabCaindoHojeState.dateKey !== todayDk) {
+    let loaded = null;
+    try {
+      const raw = localStorage.getItem(_CAINDO_HOJE_LS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.dateKey === todayDk && parsed.pedidos && typeof parsed.pedidos === 'object') {
+          loaded = parsed;
+        }
+      }
+    } catch (e) {}
+    _fluxolabCaindoHojeState = loaded || { dateKey: todayDk, updatedAt: 0, pedidos: {} };
+    _fluxolabCaindoHojeRemoteLoaded = false;
+  }
+
+  if (!_fluxolabCaindoHojeRemoteLoaded && !_fluxolabCaindoHojeLoadingPromise && typeof _supa !== 'undefined' && _supa) {
+    _fluxolabCaindoHojeLoadingPromise = _supa
+      .from('app_config')
+      .select('value')
+      .eq('key', _CAINDO_HOJE_CFG_KEY)
+      .maybeSingle()
+      .then(({ data }) => {
+        _fluxolabCaindoHojeRemoteLoaded = true;
+        _fluxolabCaindoHojeLoadingPromise = null;
+        const remote = data && data.value;
+        const curDk = _fluxolabGetTodayDk();
+        if (remote && remote.dateKey === curDk && remote.pedidos && typeof remote.pedidos === 'object') {
+          _fluxolabMergeRemoteCaindoHoje(remote);
+        } else if (_fluxolabCaindoHojeState && Object.keys(_fluxolabCaindoHojeState.pedidos || {}).length > 0) {
+          _supa.from('app_config').upsert({ key: _CAINDO_HOJE_CFG_KEY, value: _fluxolabCaindoHojeState }, { onConflict: 'key' }).catch(() => {});
+        }
+      })
+      .catch(() => {
+        _fluxolabCaindoHojeLoadingPromise = null;
+      });
+  }
+  return _fluxolabCaindoHojeState;
+}
+
+function _fluxolabMergeRemoteCaindoHoje(remoteState) {
+  const todayDk = _fluxolabGetTodayDk();
+  if (!remoteState || remoteState.dateKey !== todayDk || !remoteState.pedidos) return;
+  const state = _fluxolabEnsureCaindoHojeState();
+  for (const [pedKey, rEntry] of Object.entries(remoteState.pedidos)) {
+    if (!pedKey || !rEntry || typeof rEntry !== 'object') continue;
+    const localEntry = state.pedidos[pedKey];
+    if (!localEntry) {
+      state.pedidos[pedKey] = rEntry;
+    } else {
+      const rTs = Number(rEntry.lastSeenAt) || 0;
+      const lTs = Number(localEntry.lastSeenAt) || 0;
+      if (rTs >= lTs) {
+        state.pedidos[pedKey] = {
+          ...localEntry,
+          ...rEntry,
+          firstSeenAt: Math.min(localEntry.firstSeenAt || rTs || Date.now(), rEntry.firstSeenAt || lTs || Date.now())
+        };
+      }
+    }
+  }
+  _fluxolabReconcileCaindoHoje(false);
+  _fluxolabAtualizarBadgeCaindo();
+  if (typeof _fluxolabActiveTab !== 'undefined' && _fluxolabActiveTab === 'caindo') {
+    fluxolabRenderCaindoHoje();
+  }
+}
+
+try {
+  if (typeof _appConfigOn === 'function') {
+    _appConfigOn(_CAINDO_HOJE_CFG_KEY, (payload) => {
+      const val = payload && payload.new && payload.new.value;
+      if (val && typeof val === 'object') {
+        _fluxolabMergeRemoteCaindoHoje(val);
+      }
+    });
+  }
+} catch (e) {}
+
+function _fluxolabReconcileCaindoHoje(forcePersist = false) {
+  const state = _fluxolabEnsureCaindoHojeState();
+  const rows = Array.isArray(_fluxolabChecklistsImported) ? _fluxolabChecklistsImported : [];
+  let changed = false;
+  const now = Date.now();
+
+  if (rows.length > 0) {
+    const k = _fluxolabDetectChecklistKeys(rows[0]);
+    const diasKey = k.diasUteis || k.diasAb;
+    const activeCaindoPedKeys = new Set();
+
+    if (diasKey) {
+      rows.forEach(r => {
+        const v = parseFloat(String(r[diasKey] == null ? '' : r[diasKey]).replace(',', '.'));
+        if (isNaN(v) || v > 0) return;
+        const pedKey = _fluxolabGetRowPedidoKey(r, k);
+        if (!pedKey || activeCaindoPedKeys.has(pedKey)) return;
+        activeCaindoPedKeys.add(pedKey);
+
+        const cleanRow = { ...r };
+        delete cleanRow._rowKey;
+        delete cleanRow._saiuDaLista;
+        delete cleanRow._pedidoKey;
+
+        const existing = state.pedidos[pedKey];
+        if (!existing) {
+          state.pedidos[pedKey] = {
+            pedido: pedKey,
+            row: cleanRow,
+            firstSeenAt: now,
+            lastSeenAt: now,
+            saiuDaLista: false
+          };
+          changed = true;
+        } else {
+          if (existing.saiuDaLista !== false || forcePersist) changed = true;
+          existing.row = cleanRow;
+          existing.lastSeenAt = now;
+          existing.saiuDaLista = false;
+        }
+      });
+    }
+
+    // Qualquer pedido que já caiu hoje mas não está mais na lista ativa atual recebe (SAIU DA LISTA)
+    for (const [pedKey, entry] of Object.entries(state.pedidos)) {
+      if (!entry || typeof entry !== 'object') continue;
+      if (!activeCaindoPedKeys.has(pedKey)) {
+        if (!entry.saiuDaLista) {
+          entry.saiuDaLista = true;
+          entry.saiuAt = now;
+          changed = true;
+        }
+      }
+    }
+  } else if (forcePersist) {
+    // Se a planilha foi limpa manualmente, mantém todos os pedidos de hoje marcados como (SAIU DA LISTA)
+    for (const [, entry] of Object.entries(state.pedidos)) {
+      if (entry && !entry.saiuDaLista) {
+        entry.saiuDaLista = true;
+        entry.saiuAt = now;
+        changed = true;
+      }
+    }
+  }
+
+  if (changed || forcePersist) {
+    state.updatedAt = now;
+    try {
+      localStorage.setItem(_CAINDO_HOJE_LS_KEY, JSON.stringify(state));
+    } catch (e) {}
+    if (typeof _supa !== 'undefined' && _supa) {
+      _supa.from('app_config').upsert({ key: _CAINDO_HOJE_CFG_KEY, value: state }, { onConflict: 'key' }).catch(() => {});
+    }
+  }
+  return state;
+}
+
+function _fluxolabGetCaindoHojeList() {
+  const state = _fluxolabReconcileCaindoHoje(false);
+  const entries = Object.values((state && state.pedidos) || {});
+  return entries
+    .filter(e => e && e.row && typeof e.row === 'object')
+    .map(e => ({
+      ...e.row,
+      _pedidoKey: e.pedido || '',
+      _saiuDaLista: !!e.saiuDaLista,
+      _firstSeenAt: e.firstSeenAt || 0
+    }));
+}
+
 function _fluxolabApplyChecklistsLoaded() {
   window._fluxolabChecklistsVer = (window._fluxolabChecklistsVer || 0) + 1;
+  _fluxolabReconcileCaindoHoje(false);
   if (_fluxolabActiveTab === 'checklists') fluxolabRenderChecklistsImported();
   if (_fluxolabActiveTab === 'modelos')    fluxolabRenderModelos();
   _fluxolabAtualizarBadgeCaindo();
@@ -29187,15 +29606,8 @@ function fluxolabStartChecklistsListener(){
 function _fluxolabAtualizarBadgeCaindo() {
   const badge = document.getElementById('fluxolab-caindo-badge');
   if (!badge) return;
-  const rows = _fluxolabChecklistsImported;
-  if (!rows || !rows.length) { badge.style.display = 'none'; return; }
-  const sample  = rows[0];
-  const kDias   = _fluxolabFindKey(sample, 'Dias Úteis Andamento') || _fluxolabFindKey(sample, 'Dias Uteis Andamento') || _fluxolabFindKey(sample, 'Dias Úteis') || _fluxolabFindKey(sample, 'Dias Uteis') || _fluxolabFindKey(sample, 'Dias Aberto');
-  if (!kDias) { badge.style.display = 'none'; return; }
-  const count = rows.filter(r => {
-    const v = parseFloat(String(r[kDias] || '').replace(',', '.'));
-    return !isNaN(v) && v <= 0;
-  }).length;
+  const hoje = _fluxolabGetCaindoHojeList();
+  const count = hoje.length;
   if (count > 0) {
     badge.textContent  = count;
     badge.style.display = 'inline-block';
@@ -29233,6 +29645,7 @@ async function fluxolabImportChecklists(ev){
       localStorage.setItem(_CL_CACHE_KEY, JSON.stringify({ importedAt: _importedMeta, rows: _fluxolabChecklistsImported }));
       localStorage.setItem(_CL_CACHE_TS_KEY, String(_importedMeta.ts));
     } catch(e) {}
+    _fluxolabReconcileCaindoHoje(true);
     _fluxolabApplyChecklistsLoaded();
 
     // Salva também no app_config para acesso instantâneo pelo Dashboard sem carregar a planilha
@@ -29264,6 +29677,7 @@ async function fluxolabClearChecklists(){
     localStorage.removeItem(_CL_CACHE_KEY);
     localStorage.removeItem(_CL_CACHE_TS_KEY);
   } catch(e) {}
+  _fluxolabReconcileCaindoHoje(true);
   _fluxolabApplyChecklistsLoaded();
   try {
     await _supa.from('app_config').upsert({ key: 'checklists_import_at', value: { ts: Date.now(), count: 0 } }, { onConflict: 'key' });
@@ -29572,54 +29986,38 @@ function fluxolabRenderCaindoHoje() {
     </div>`;
   }
 
-  const rows = _fluxolabChecklistsImported;
+  const rows = _fluxolabChecklistsImported || [];
+  const hoje = _fluxolabGetCaindoHojeList();
 
-  if (!rows || !rows.length) {
+  if (!rows.length && !hoje.length) {
     if (stats) stats.innerHTML = statCard('Caindo Hoje', 0, '#ef4444');
     if (badge) { badge.style.display = 'none'; }
     grid.innerHTML = '<div style="text-align:center;padding:60px;color:var(--muted);font-size:14px">Nenhuma planilha importada.<br>Importe uma planilha na aba <b style="color:var(--text)">Checklists Importados</b>.</div>';
     return;
   }
 
-  const sample = rows[0];
-  const k = {
-    modelo:    _fluxolabFindKey(sample,'Descrição Equipamento') || _fluxolabFindKey(sample,'Descricao Equipamento'),
-    pedido:    _fluxolabFindKey(sample,'Pedido'),
-    cliente:   _fluxolabFindKey(sample,'Razão Social') || _fluxolabFindKey(sample,'Cliente'),
-    customer:  _fluxolabFindKey(sample,'Customer') || _fluxolabFindKey(sample,'Contato') || _fluxolabFindKey(sample,'Nome Contato'),
-    telefone:  _fluxolabFindKey(sample,'Telefone') || _fluxolabFindKey(sample,'Tel') || _fluxolabFindKey(sample,'Fone') || _fluxolabFindKey(sample,'Celular'),
-    tipo:      _fluxolabFindKey(sample,'Tipo'),
-    andamento: _fluxolabFindKey(sample,'Andamento'),
-    diasUteis: _fluxolabFindKey(sample,'Dias Úteis Andamento') || _fluxolabFindKey(sample,'Dias Uteis Andamento') || _fluxolabFindKey(sample,'Dias Úteis') || _fluxolabFindKey(sample,'Dias Uteis'),
-    diasAb:    _fluxolabFindKey(sample,'Dias Aberto'),
-    status:    _fluxolabFindKey(sample,'Status Checklist') || _fluxolabFindKey(sample,'Status'),
-    obs:       _fluxolabFindKey(sample,'Observação Comercial') || _fluxolabFindKey(sample,'Observação') || _fluxolabFindKey(sample,'Observacao') || _fluxolabFindKey(sample,'OBS') || _fluxolabFindKey(sample,'Obs'),
-  };
-  if (!k.tipo) {
-    const kSt = Object.keys(sample).find(x => x.trim().toLowerCase() === 'status');
-    if (kSt && kSt !== k.status) k.tipo = kSt;
-  }
-
-  const diasKey = k.diasUteis || k.diasAb;
-
-  // Filtra apenas os que têm 0 dias úteis (ou <= 0)
-  const hoje = rows.filter(r => {
-    if (!diasKey) return false;
-    const v = parseFloat(String(r[diasKey] || '').replace(',', '.'));
-    return !isNaN(v) && v <= 0;
-  });
+  const sample = (rows && rows[0]) || (hoje && hoje[0]) || {};
+  const k = _fluxolabDetectChecklistKeys(sample);
 
   if (badge) {
     if (hoje.length > 0) { badge.textContent = hoje.length; badge.style.display = 'inline-block'; }
     else badge.style.display = 'none';
   }
 
-  // Agrupa por modelo
+  // Agrupa por modelo (ordenando pedidos ativos na lista antes dos que saíram da lista)
   const grupos = {};
   hoje.forEach(r => {
     const modelo = String((k.modelo ? r[k.modelo] : null) || '(Sem modelo)').trim();
     if (!grupos[modelo]) grupos[modelo] = [];
     grupos[modelo].push(r);
+  });
+  Object.values(grupos).forEach(arr => {
+    arr.sort((a, b) => {
+      const sa = a._saiuDaLista ? 1 : 0;
+      const sb = b._saiuDaLista ? 1 : 0;
+      if (sa !== sb) return sa - sb;
+      return String(a._pedidoKey || '').localeCompare(String(b._pedidoKey || ''), undefined, { numeric: true });
+    });
   });
 
   // Quantos SELBs deste modelo estão no LAB (mesma regra da aba Agrupamento por Modelo)
@@ -29640,9 +30038,14 @@ function fluxolabRenderCaindoHoje() {
 
   const totalModelos = Object.keys(grupos).length;
   const totalUrg = hoje.filter(_fluxolabRowUrgente).length;
+  const totalSaiu = hoje.filter(r => r._saiuDaLista).length;
+  const totalAtivos = hoje.length - totalSaiu;
+  const subCaindo = totalSaiu > 0
+    ? `${totalAtivos} na lista · ${totalSaiu} saiu da lista`
+    : 'pedidos únicos com 0 dias';
 
   if (stats) stats.innerHTML =
-    statCard('Caindo Hoje', hoje.length, '#ef4444', 'checklists com 0 dias') +
+    statCard('Caindo Hoje', hoje.length, '#ef4444', subCaindo) +
     statCard('Modelos Afetados', totalModelos, '#fbbf24', 'equipamentos distintos') +
     statCard('Urgência LAB', totalUrg, totalUrg ? '#ef4444' : 'var(--text)', 'pedidos urgentes') +
     statCard('Total na Planilha', rows.length, 'var(--text)', 'checklists importados');
@@ -29671,15 +30074,26 @@ function fluxolabRenderCaindoHoje() {
       ['Dias Aberto', k.diasAb],
       ['Dias Úteis Andamento', k.diasUteis],
       ['Status Checklist', k.status],
-      ['Obs',        k.obs],
+      ['Obs',        '__OBS__'],
     ];
     const ths = headers.map(([h]) =>
       `<th style="padding:8px 12px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-bottom:1px solid var(--border2);white-space:nowrap">${h}</th>`
     ).join('');
     const trs = items.map(r => {
-      const tds = headers.map(([, key]) => {
+      const tds = headers.map(([hName, key]) => {
         let val = '—';
-        if (key && key === (k.customer || k.telefone)) {
+        if (key === '__OBS__' || hName === 'Obs') {
+          const rawObs = (k.obs && r[k.obs] != null && String(r[k.obs]).trim() !== '') ? String(r[k.obs]).trim() : '';
+          const cleanObs = rawObs.replace(/\(SAIU DA LISTA\)/gi, '').trim();
+          const obsHtml = cleanObs ? esc(cleanObs) : '';
+          const saiuBadge = r._saiuDaLista
+            ? `<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(245,158,11,.18);border:1px solid rgba(245,158,11,.55);border-radius:6px;padding:2px 8px;font-size:11px;font-weight:800;color:#fbbf24;white-space:nowrap">(SAIU DA LISTA)</span>`
+            : '';
+          if (obsHtml && saiuBadge) val = `${obsHtml} ${saiuBadge}`;
+          else if (saiuBadge) val = saiuBadge;
+          else if (obsHtml) val = obsHtml;
+          else val = '—';
+        } else if (key && key === (k.customer || k.telefone)) {
           const nome = k.customer ? r[k.customer] : '';
           const tel  = k.telefone ? r[k.telefone] : '';
           val = [nome, tel].filter(Boolean).map(esc).join('<br><span style="color:var(--muted);font-size:11px">') + (tel ? '</span>' : '');
@@ -29697,7 +30111,9 @@ function fluxolabRenderCaindoHoje() {
         ? (_isTroca
             ? ' style="background:rgba(245,158,11,.20);box-shadow:inset 5px 0 0 #f59e0b"'
             : ' style="background:rgba(239,68,68,.18);box-shadow:inset 5px 0 0 #ef4444"')
-        : '';
+        : (r._saiuDaLista
+            ? ' style="background:rgba(245,158,11,.07);box-shadow:inset 3px 0 0 rgba(245,158,11,.65)"'
+            : '');
       return `<tr${_rowStyle}>${tds}</tr>`;
     }).join('');
     return `<div style="background:var(--bg1);overflow-x:auto">
@@ -29729,6 +30145,10 @@ function fluxolabRenderCaindoHoje() {
     const faltantes = Math.max(0, items.length - labQtd);
     const _urgQtd = items.filter(_fluxolabRowUrgente).length;
     const _urgBadge = _fluxolabRowsBadgesHtml(items, k.tipo);
+    const _saiuQtd = items.filter(r => r._saiuDaLista).length;
+    const _saiuModelBadge = _saiuQtd > 0
+      ? `<span title="${_saiuQtd} pedido(s) deste modelo já saíram nas importações seguintes" style="display:inline-flex;align-items:center;gap:4px;background:rgba(245,158,11,.15);border:1px solid rgba(245,158,11,.45);border-radius:6px;padding:1px 7px;font-size:10px;font-weight:800;color:#fbbf24;white-space:nowrap">${_saiuQtd} SAIU DA LISTA</span>`
+      : '';
 
     const cellNum = (val, color) => val == null
       ? `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:12px">—</td>`
@@ -29743,7 +30163,7 @@ function fluxolabRenderCaindoHoje() {
         <div style="display:flex;align-items:center;gap:10px">
           <span class="caindo-arr" style="color:var(--muted);font-size:12px;transition:transform .2s;flex-shrink:0;${isOpen ? 'transform:rotate(180deg)' : ''}">▾</span>
           <span style="flex-shrink:0;display:inline-flex;align-items:center;gap:4px;background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.5);border-radius:7px;padding:2px 7px;font-size:10px;font-weight:800;color:#ef4444;white-space:nowrap">🔥 HOJE</span>
-          <div style="font-size:13px;font-weight:600;color:var(--text);line-height:1.3;word-break:break-word;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span>${esc(modelo)}</span>${_urgBadge}</div>
+          <div style="font-size:13px;font-weight:600;color:var(--text);line-height:1.3;word-break:break-word;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span>${esc(modelo)}</span>${_urgBadge}${_saiuModelBadge}</div>
         </div>
       </td>
       <td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">
@@ -29908,11 +30328,29 @@ function fluxolabRelatorioPorDia() {
     return;
   }
 
-  // Agrupa por quantidade de dias (inteiro, arredondado)
+  // Agrupa por quantidade de dias (inteiro, arredondado), deduplicando por número de pedido
+  // e incluindo em d<=0 os pedidos de hoje que já saíram da lista em importações posteriores
   const porDia = {}; // dia (int) -> { items: [], count: 0 }
+  const seenPedidos = new Set();
+  const caindoHojeAll = _fluxolabGetCaindoHojeList();
+  caindoHojeAll.forEach(r => {
+    const pedKey = r._pedidoKey || _fluxolabGetRowPedidoKey(r);
+    if (pedKey) {
+      if (seenPedidos.has(pedKey)) return;
+      seenPedidos.add(pedKey);
+    }
+    const v = parseFloat(String(r[diasKey] || '0').replace(',', '.'));
+    const d = isNaN(v) ? 0 : Math.min(0, Math.round(v));
+    if (!porDia[d]) porDia[d] = { count: 0, items: [] };
+    porDia[d].count++;
+    porDia[d].items.push(r);
+  });
   rows.forEach(r => {
+    const pedKey = _fluxolabGetRowPedidoKey(r);
+    if (pedKey && seenPedidos.has(pedKey)) return;
     const v = parseFloat(String(r[diasKey] || '').replace(',', '.'));
     if (isNaN(v)) return;
+    if (pedKey) seenPedidos.add(pedKey);
     const d = Math.round(v);
     if (!porDia[d]) porDia[d] = { count: 0, items: [] };
     porDia[d].count++;
@@ -30550,6 +30988,7 @@ async function fluxolabConsumirChecklistPorModelo(modeloTexto, meta){
       console.warn('[FluxoLAB] Falha ao registrar checklist liberado:', err);
     });
 
+    _fluxolabReconcileCaindoHoje(true);
     fluxolabRenderChecklistsImported();
     _fluxolabAtualizarBadgeCaindo();
     if (_fluxolabActiveTab === 'caindo') fluxolabRenderCaindoHoje();
@@ -30594,6 +31033,7 @@ async function fluxolabRemoverPedidoDaLista(numeroPedido) {
     localStorage.setItem(_CL_CACHE_KEY, JSON.stringify({ importedAt: window._fluxolabImportedAt, rows: _fluxolabChecklistsImported }));
     _supa.from('app_config').upsert({ key: 'checklists_import_at', value: { ts: Date.now(), count: _fluxolabChecklistsImported.length } }, { onConflict: 'key' }).catch(()=>{});
   } catch(e) {}
+  _fluxolabReconcileCaindoHoje(true);
   try { fluxolabRenderChecklistsImported(); } catch(e) {}
   try { if (typeof _fluxolabRenderGrid === 'function') _fluxolabRenderGrid(); } catch(e) {}
   try { _fluxolabAtualizarBadgeCaindo(); } catch(e) {}
