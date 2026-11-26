@@ -6,6 +6,28 @@
 // ════════════════════════════════════════════════════════════════════════
 function createSupabaseCompatShim(supa) {
 
+  // Garante que qualquer PostgrestBuilder / PostgrestFilterBuilder do Supabase aceite .catch(...)
+  // diretamente (no SDK v2 do PostgREST eles são Thenables apenas com .then, o que causava
+  // "TypeError: _supa.from(...).upsert(...).catch is not a function").
+  try {
+    const _probe = supa && typeof supa.from === 'function' ? supa.from('_') : null;
+    if (_probe) {
+      const _p1 = Object.getPrototypeOf(_probe);
+      if (_p1 && typeof _p1.catch !== 'function') {
+        _p1.catch = function(onReject) { return this.then(undefined, onReject); };
+      }
+      const _sel = typeof _probe.select === 'function' ? _probe.select('id') : null;
+      const _p2 = _sel ? Object.getPrototypeOf(_sel) : null;
+      if (_p2 && typeof _p2.catch !== 'function') {
+        _p2.catch = function(onReject) { return this.then(undefined, onReject); };
+      }
+      const _p3 = _p2 ? Object.getPrototypeOf(_p2) : null;
+      if (_p3 && typeof _p3.then === 'function' && typeof _p3.catch !== 'function') {
+        _p3.catch = function(onReject) { return this.then(undefined, onReject); };
+      }
+    }
+  } catch (e) {}
+
   // ── OTIMIZAÇÃO: cache compartilhado por blobKey ─────────────────────
   // Elimina rajadas de GET /fluxolab_state?key=eq.<blobKey>:
   //  • Uma única leitura (blobLoad) é reaproveitada por TODOS os listeners
@@ -380,9 +402,52 @@ function createSupabaseCompatShim(supa) {
       }
       return done;
     }
-    // multi-location update: cada chave do patch é um filho que é substituído por completo
-    for (const childId in patch) {
-      await rowsWriteOne(cfg, childId, dateKey, patch[childId]);
+    // multi-location update: agrupa em um ÚNICO bulk upsert (em vez de N requests sequenciais).
+    // Isso reduz a importação de ~412 checklists de ~60 segundos (413 POSTs sequenciais + 413 re-renders)
+    // para < 1 segundo (1 único POST em lote + 1 único disparo de listener).
+    const entries = Object.entries(patch || {});
+    if (!entries.length) return;
+    if (entries.length === 1) {
+      const [childId, val] = entries[0];
+      await rowsWriteOne(cfg, childId, dateKey, val);
+      return;
+    }
+    const toDelete = [];
+    const toUpsert = [];
+    for (const [childId, val] of entries) {
+      if (val === null || val === undefined) {
+        toDelete.push(childId);
+      } else {
+        const row = { id: childId, raw: val, ...mirrorCols(cfg.table, val) };
+        if (dateKey) row.date_key = dateKey;
+        toUpsert.push(row);
+      }
+    }
+    if (toDelete.length) {
+      let dq = supa.from(cfg.table).delete().in('id', toDelete);
+      if (dateKey) dq = dq.eq('date_key', dateKey);
+      const { error: delErr } = await dq;
+      if (delErr) throw delErr;
+    }
+    if (toUpsert.length) {
+      const CHUNK = 500;
+      for (let i = 0; i < toUpsert.length; i += CHUNK) {
+        const { error: upErr } = await supa.from(cfg.table).upsert(toUpsert.slice(i, i + CHUNK), { onConflict: 'id' });
+        if (upErr) throw upErr;
+      }
+    }
+    // Atualiza o cache local imediatamente e notifica outras abas/clientes via bus
+    _busDispatch({ k: 'rows-batch', t: cfg.table, dk: dateKey || null, patch: patch });
+    if (!USE_PG_CHANGES) {
+      try {
+        const ch = _busEnsure();
+        const reloadEv = { k: 'rows-reload', t: cfg.table, dk: dateKey || null };
+        if (_busJoined && ch) ch.send({ type: 'broadcast', event: 'mut', payload: reloadEv });
+        else {
+          if (_busOutbox.length > 100) _busOutbox.shift();
+          _busOutbox.push(reloadEv);
+        }
+      } catch (e) {}
     }
   }
 
@@ -799,8 +864,11 @@ function createSupabaseCompatShim(supa) {
       } catch(e) { console.warn('[shim] delta apply erro:', e); }
     };
 
+    let batchSeq = 0; // incrementa a cada lote local aplicado (protege contra resync "velho" sobrescrevendo o lote)
     const resync = () => {
+      const seqAtStart = batchSeq;
       rowsGet(cfg, p, filters).then(v => {
+        if (seqAtStart !== batchSeq) return; // um lote mais novo já foi aplicado; descarta a leitura antiga
         cache = isCollection ? (v || {}) : v;
         cb(makeSnapshot(cache));
       }).catch(() => {});
@@ -823,6 +891,21 @@ function createSupabaseCompatShim(supa) {
 
     const onBus = (ev) => {
       try {
+        if (ev.k === 'rows-batch') {
+          if (ev.t === cfg.table && (!dateKey || ev.dk === dateKey) && isCollection && ev.patch && typeof ev.patch === 'object') {
+            if (cache == null) cache = {};
+            batchSeq++;
+            for (const [cid, val] of Object.entries(ev.patch)) {
+              if (val === null || val === undefined) delete cache[cid];
+              else if (passesFilters(val)) cache[cid] = val;
+            }
+            if (cfg.table === 'fluxolab_checklists') {
+              try { localStorage.setItem(_CL_RAW_LS_KEY, JSON.stringify(cache)); } catch(e) {}
+            }
+            cb(makeSnapshot(cache));
+          }
+          return;
+        }
         if (ev.k === 'rows-reload') {
           if (ev.t === cfg.table && (!dateKey || ev.dk === dateKey)) resync();
           return;

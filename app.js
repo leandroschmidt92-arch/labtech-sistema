@@ -29663,7 +29663,7 @@ function _fluxolabEnsureCaindoHojeState() {
         if (remote && remote.dateKey === curDk && remote.pedidos && typeof remote.pedidos === 'object') {
           _fluxolabMergeRemoteCaindoHoje(remote);
         } else if (_fluxolabCaindoHojeState && Object.keys(_fluxolabCaindoHojeState.pedidos || {}).length > 0) {
-          _supa.from('app_config').upsert({ key: _CAINDO_HOJE_CFG_KEY, value: _fluxolabCaindoHojeState }, { onConflict: 'key' }).catch(() => {});
+          _supa.from('app_config').upsert({ key: _CAINDO_HOJE_CFG_KEY, value: _fluxolabCaindoHojeState }, { onConflict: 'key' }).then(() => {}, () => {});
         }
       })
       .catch(() => {
@@ -29783,7 +29783,7 @@ function _fluxolabReconcileCaindoHoje(forcePersist = false) {
       localStorage.setItem(_CAINDO_HOJE_LS_KEY, JSON.stringify(state));
     } catch (e) {}
     if (typeof _supa !== 'undefined' && _supa) {
-      _supa.from('app_config').upsert({ key: _CAINDO_HOJE_CFG_KEY, value: state }, { onConflict: 'key' }).catch(() => {});
+      _supa.from('app_config').upsert({ key: _CAINDO_HOJE_CFG_KEY, value: state }, { onConflict: 'key' }).then(() => {}, () => {});
     }
   }
   return state;
