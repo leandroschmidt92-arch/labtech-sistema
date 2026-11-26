@@ -421,7 +421,10 @@ function fluxolabApplyRemoteSync(remoteData) {
             }
             if (cellMedia) { cellMedia.innerText = val ? (statsChk.media || '-') : ''; cellMedia.style.color = statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'; }
             if (cellDoca) cellDoca.innerText = val ? (statsBol.doca || '-') : '';
-            if (cellLab) cellLab.innerText = val ? (statsBol.lab || '-') : '';
+            if (cellLab) {
+              cellLab.innerText = val ? (statsBol.lab || '-') : '';
+              cellLab.title = val ? fluxolabPlanGetLabTooltip(val) : FLUXOLAB_LAB_TOOLTIP_HEADER;
+            }
             if (cellQual) cellQual.innerText = val ? (statsBol.qual || '-') : '';
             if (cellBadge) cellBadge.innerHTML = planBadgeHtml(statsChk.count, !!val, statsChk.urgencias, statsChk.trocas, statsChk.urgenciasTT);
           }
@@ -506,7 +509,10 @@ function fluxolabUpdateRowElem(elem, tableName, field) {
     fluxolabSyncChkInputElem(inpChk, rowObj, statsChk);
     if (cellMedia) { cellMedia.innerText = value ? (statsChk.media || '-') : ''; cellMedia.style.color = statsChk.count > 0 ? 'var(--text)' : 'var(--muted)'; }
     if (cellDoca) cellDoca.innerText = value ? (statsBol.doca || '-') : '';
-    if (cellLab) cellLab.innerText = value ? (statsBol.lab || '-') : '';
+    if (cellLab) {
+      cellLab.innerText = value ? (statsBol.lab || '-') : '';
+      cellLab.title = value ? fluxolabPlanGetLabTooltip(value) : FLUXOLAB_LAB_TOOLTIP_HEADER;
+    }
     if (cellQual) cellQual.innerText = value ? (statsBol.qual || '-') : '';
     if (cellBadge) cellBadge.innerHTML = planBadgeHtml(statsChk.count, !!value, statsChk.urgencias, statsChk.trocas, statsChk.urgenciasTT);
     fluxolabUpdateTotalChk(tableName);
@@ -1141,7 +1147,8 @@ function _fluxolabGetBolsaoMasterIndex() {
       } else if (bolsao === 'QUALIDADE') {
         entry.qual++;
         entry.lab++;
-      } else if (bolsao !== 'RETORNO_ESTOQUE' && bolsao !== 'LIBERADAS' && bolsao !== 'SCRAP') {
+      } else if (bolsao !== 'RETORNO_ESTOQUE') {
+        // Inclui todos os bolsões do laboratório, além de Liberados Qualidade (LIBERADAS) e Scrap (SCRAP)
         entry.lab++;
       }
     }
@@ -1158,6 +1165,24 @@ function _fluxolabGetBolsaoMasterIndex() {
   _fluxolabBolsaoIdxCache = { dataRef: _fluxolabData, byModel };
   return _fluxolabBolsaoIdxCache;
 }
+
+const FLUXOLAB_LAB_TOOLTIP_HEADER = 'Conta no LAB: Limpeza, Bolsão Montagem, Montagem, Linhas 1 a 9, Complexa, AG. 3D, Eletrônica, Gaiola LAB, Gaiola Ag. peças, Bolsão Qualidade, Liberados Qualidade e Scrap (exclui apenas Doca 1 e Retorno Estoque).';
+
+function fluxolabPlanGetLabTooltip(modeloName) {
+  if (!modeloName) return FLUXOLAB_LAB_TOOLTIP_HEADER;
+  const master = _fluxolabGetBolsaoMasterIndex();
+  if (!master) return FLUXOLAB_LAB_TOOLTIP_HEADER;
+  const normAlvo = (typeof _fluxolabNormModel === 'function') ? _fluxolabNormModel(modeloName) : String(modeloName).toUpperCase().replace(/\s+/g, '');
+  const entry = master.byModel.get(normAlvo);
+  if (!entry || !entry.lab || !Array.isArray(entry.locais)) {
+    return `Nenhum equipamento deste modelo no LAB.\n${FLUXOLAB_LAB_TOOLTIP_HEADER}`;
+  }
+  const labLocais = entry.locais.filter(l => l.key !== 'DOCA_1' && l.key !== 'RETORNO_ESTOQUE');
+  const resumo = labLocais.map(l => `${l.label}: ${l.count}`).join(' · ');
+  return `LAB (${entry.lab}): ${resumo}\n${FLUXOLAB_LAB_TOOLTIP_HEADER}`;
+}
+window.fluxolabPlanGetLabTooltip = fluxolabPlanGetLabTooltip;
+window.FLUXOLAB_LAB_TOOLTIP_HEADER = FLUXOLAB_LAB_TOOLTIP_HEADER;
 
 function fluxolabPlanGetBolsaoStats(modeloName) {
   if (!modeloName || typeof _fluxolabData === 'undefined' || !_fluxolabData) return _EMPTY_BOLSAO_STATS;
@@ -1289,7 +1314,7 @@ function fluxolabBuildPlanRowHtml(tableName, row, idx, themeColor, savedSizes) {
         <td id="plan-${tableName}-r${idx}-doca" class="doca-cell" style="${tdStyle};background:rgba(34,211,238,0.05);color:#22d3ee;font-weight:900;font-size:18px;text-shadow:0 0 8px rgba(34,211,238,0.4)">
           ${isFilled ? (statsBol.doca || '-') : ''}
         </td>
-        <td id="plan-${tableName}-r${idx}-lab" class="lab-cell" style="${tdStyle};background:rgba(167,139,250,0.05);color:#a78bfa;font-weight:900;font-size:18px;text-shadow:0 0 8px rgba(167,139,250,0.4)">
+        <td id="plan-${tableName}-r${idx}-lab" class="lab-cell" title="${esc(isFilled ? fluxolabPlanGetLabTooltip(row.modelo) : FLUXOLAB_LAB_TOOLTIP_HEADER)}" style="${tdStyle};background:rgba(167,139,250,0.05);color:#a78bfa;font-weight:900;font-size:18px;text-shadow:0 0 8px rgba(167,139,250,0.4);cursor:help">
           ${isFilled ? (statsBol.lab || '-') : ''}
         </td>
         <td id="plan-${tableName}-r${idx}-qual" class="qual-cell" style="${tdStyle};background:rgba(245,166,35,0.05);color:#f5a623;font-weight:900;font-size:18px;text-shadow:0 0 8px rgba(245,166,35,0.4)">
@@ -1359,7 +1384,7 @@ function fluxolabRenderPlanTable(title, tableName, titleColor, themeColor) {
             <th style="${thStyle};width:72px;min-width:72px;max-width:72px"><div style="padding:12px 6px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.05em">Qtd WMS</div></th>
             <th style="${thStyle};width:72px;min-width:72px;max-width:72px"><div style="padding:12px 6px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:0.05em">Baixar estoque</div></th>
             <th style="${thStyle}">${resizableHeader('DOCA', `ph-${tableName}-doca`, '60px', '50px', '#22d3ee')}</th>
-            <th style="${thStyle}">${resizableHeader('LAB', `ph-${tableName}-lab`, '60px', '50px', '#a78bfa')}</th>
+            <th style="${thStyle}" title="${esc(FLUXOLAB_LAB_TOOLTIP_HEADER)}">${resizableHeader('<span style="cursor:help">LAB</span>', `ph-${tableName}-lab`, '60px', '50px', '#a78bfa')}</th>
             <th style="${thStyle}">${resizableHeader('QUAL.', `ph-${tableName}-qual`, '60px', '50px', '#f5a623')}</th>
             <th style="${thStyle}">${resizableHeader('Observação', `ph-${tableName}-obs`, '180px', '80px')}</th>
             <th style="${thStyle}">${resizableHeader('Peças', `ph-${tableName}-pecas`, '180px', '80px')}</th>

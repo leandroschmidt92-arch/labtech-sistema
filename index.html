@@ -4247,6 +4247,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
         <div style="font-size:12px;color:var(--muted)">Clique no modelo para ver os SELBs individuais · badges indicam bolsão e dias parado</div>
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <button onclick="fluxolabVerificarPedidosRegistrados(this)" title="Verifica se há pedidos do checklist já registrados na Qualidade e remove-os da lista" style="background:rgba(16,185,129,.12);border:1px solid var(--accent);border-radius:9px;color:var(--accent);font-family:var(--font);font-size:12px;font-weight:700;padding:7px 14px;outline:none;cursor:pointer">&#128260; Verificar Pedidos Registrados</button>
+          <button id="fluxolab-btn-expand-checklists" type="button" onclick="fluxolabToggleExpandAllChecklists()" title="Expande ou recolhe os checklists e pedidos de todos os modelos da lista" style="background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.45);border-radius:9px;color:#f59e0b;font-family:var(--font);font-size:12px;font-weight:700;padding:7px 14px;outline:none;cursor:pointer;white-space:nowrap">&#128203; &#9662; Expandir checklists</button>
           <select id="fluxolab-modelo-sort" onchange="fluxolabRenderModelos()" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--text);font-family:var(--font);font-size:12px;padding:7px 12px;outline:none;cursor:pointer">
             <option value="maxDias" selected>&#9650; Maior dia parado</option>
             <option value="diasUteisDesc">&#9201; Dias &Uacute;teis: Decrescente (maior)</option>
@@ -4261,6 +4262,7 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
             <option value="acima20">&#128308; Acima de 20 dias</option>
             <option value="puxar">&#9940; Só puxar estoque</option>
           </select>
+          <input id="fluxolab-cliente-search" oninput="fluxolabSetClienteSearch(this.value, 'toolbar')" placeholder="&#128269; Buscar cliente / pedido…" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--text);font-family:var(--font);font-size:12px;padding:7px 14px;outline:none;width:210px" />
           <input id="fluxolab-modelo-search" oninput="fluxolabRenderModelos()" placeholder="&#128269; Filtrar modelo…" style="background:var(--bg3);border:1px solid var(--border2);border-radius:9px;color:var(--text);font-family:var(--font);font-size:12px;padding:7px 14px;outline:none;width:200px" />
         </div>
       </div>

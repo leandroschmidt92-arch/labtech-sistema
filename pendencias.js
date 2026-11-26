@@ -1664,8 +1664,11 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
   const abertoSortArrow = activeSortCol === 'diasab' ? (abertoSortDir === 'desc' ? ' ↓' : (abertoSortDir === 'asc' ? ' ↑' : '')) : '';
   const abertoHeaderContent = `<span onclick="fluxolabSortPendByDiasAberto('${tableName}')" style="cursor:pointer;user-select:none;display:inline-flex;align-items:center;gap:2px" title="Ordenar por Dias em Aberto (maior → menor)">Dias em Aberto${abertoSortArrow}</span>`;
 
+  const labTooltipHdr = (typeof window.FLUXOLAB_LAB_TOOLTIP_HEADER === 'string')
+    ? window.FLUXOLAB_LAB_TOOLTIP_HEADER
+    : 'Conta no LAB: Limpeza, Bolsão Montagem, Montagem, Linhas 1 a 9, Complexa, AG. 3D, Eletrônica, Gaiola LAB, Gaiola Ag. peças, Bolsão Qualidade, Liberados Qualidade e Scrap (exclui apenas Doca 1 e Retorno Estoque).';
   const docaHeaderContent = `DOCA <span id="pnd-${tableName}-doca-total" style="font-weight:900">(${totalDoca})</span>`;
-  const labHeaderContent = `LAB <span id="pnd-${tableName}-lab-total" style="font-weight:900">(${totalLab})</span>`;
+  const labHeaderContent = `<span title="${esc(labTooltipHdr)}" style="cursor:help">LAB <span id="pnd-${tableName}-lab-total" style="font-weight:900">(${totalLab})</span></span>`;
 
   const headerContent = {
     ord: 'Ord', lote: 'Lote', modelo: 'MODELO', chk: 'Checklists',
@@ -1884,7 +1887,7 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
         <td id="pnd-${tableName}-r${idx}-doca" class="doca-cell" style="${tdStyle};background:rgba(34,211,238,0.05);color:#22d3ee;font-weight:900;font-size:18px;text-shadow:0 0 8px rgba(34,211,238,0.4)${hid('doca')}">
           ${isFilled && !isVirtual ? (statsBol.doca || '-') : (isFilled && isVirtual ? '—' : '')}
         </td>
-        <td id="pnd-${tableName}-r${idx}-lab" class="lab-cell" style="${tdStyle};background:rgba(167,139,250,0.05);color:#a78bfa;font-weight:900;font-size:18px;text-shadow:0 0 8px rgba(167,139,250,0.4)${hid('lab')}">
+        <td id="pnd-${tableName}-r${idx}-lab" class="lab-cell" title="${esc(isFilled && typeof fluxolabPlanGetLabTooltip === 'function' ? fluxolabPlanGetLabTooltip(row.modelo) : labTooltipHdr)}" style="${tdStyle};background:rgba(167,139,250,0.05);color:#a78bfa;font-weight:900;font-size:18px;text-shadow:0 0 8px rgba(167,139,250,0.4);cursor:help${hid('lab')}">
           ${isFilled && !isVirtual ? (statsBol.lab || '-') : (isFilled && isVirtual ? '—' : '')}
         </td>
 

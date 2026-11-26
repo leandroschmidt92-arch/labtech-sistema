@@ -28939,16 +28939,62 @@ function fluxolabToggleModeloSortCol(col) {
 }
 window.fluxolabToggleModeloSortCol = fluxolabToggleModeloSortCol;
 
+function fluxolabToggleExpandAllChecklists() {
+  window._fluxolabModelosExpanded = window._fluxolabModelosExpanded || new Set();
+  window._fluxolabExpandAllChecklists = !window._fluxolabExpandAllChecklists;
+  if (!window._fluxolabExpandAllChecklists) {
+    window._fluxolabModelosExpanded.clear();
+  }
+  fluxolabRenderModelos();
+}
+window.fluxolabToggleExpandAllChecklists = fluxolabToggleExpandAllChecklists;
+
+function fluxolabSetClienteSearch(val, source) {
+  window._fluxolabClienteSearch = String(val == null ? '' : val);
+  if (source !== 'toolbar') {
+    const inp = document.getElementById('fluxolab-cliente-search');
+    if (inp && inp.value !== window._fluxolabClienteSearch) inp.value = window._fluxolabClienteSearch;
+  }
+  fluxolabRenderModelos();
+}
+window.fluxolabSetClienteSearch = fluxolabSetClienteSearch;
+
+function _fluxolabNormSearchStr(s) {
+  return String(s == null ? '' : s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
 function fluxolabRenderModelos() {
   window._fluxolabModelosExpanded = window._fluxolabModelosExpanded || new Set();
   const grid = document.getElementById('fluxolab-modelos-grid');
   if (!grid) return;
+
+  // Preserva foco/cursor caso o usuário esteja digitando na busca inline dentro do cabeçalho CLIENTE
+  const activeEl = document.activeElement;
+  const wasInlineClienteFocused = !!(activeEl && activeEl.classList && activeEl.classList.contains('fxmod-cliente-inline-inp'));
+  const inlineSelStart = wasInlineClienteFocused ? activeEl.selectionStart : null;
+  const inlineSelEnd   = wasInlineClienteFocused ? activeEl.selectionEnd   : null;
 
   const scrollContainer = document.getElementById('fluxolab-modelos-scroll');
   const savedScrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
 
   const searchEl = document.getElementById('fluxolab-modelo-search');
   const filter = searchEl ? searchEl.value.trim().toLowerCase() : '';
+
+  const clienteSearchEl = document.getElementById('fluxolab-cliente-search');
+  if (clienteSearchEl && typeof window._fluxolabClienteSearch === 'string' && clienteSearchEl.value !== window._fluxolabClienteSearch) {
+    clienteSearchEl.value = window._fluxolabClienteSearch;
+  }
+  const clienteFilterRaw  = (clienteSearchEl ? clienteSearchEl.value : (window._fluxolabClienteSearch || '')).trim();
+  const clienteFilterNorm = _fluxolabNormSearchStr(clienteFilterRaw);
+
+  const expandBtn = document.getElementById('fluxolab-btn-expand-checklists');
+  if (expandBtn) {
+    const expOn = !!window._fluxolabExpandAllChecklists;
+    expandBtn.innerHTML = expOn ? '📋 ▴ Recolher checklists' : '📋 ▾ Expandir checklists';
+    expandBtn.style.background = expOn ? 'rgba(245,158,11,.24)' : 'rgba(245,158,11,.12)';
+    expandBtn.style.borderColor = expOn ? '#f59e0b' : 'rgba(245,158,11,.45)';
+    expandBtn.style.boxShadow = expOn ? '0 0 12px rgba(245,158,11,.28)' : 'none';
+  }
 
   // Índice de checklists importados (modelo normalizado -> count)
   const checklistIdx = _fluxolabBuildChecklistIndex();
@@ -28987,6 +29033,41 @@ function fluxolabRenderModelos() {
         checklistDetalhes.get(nk).rows.push(r);
       }
     }
+  }
+
+  // Helper: verifica se uma linha de checklist bate com a busca de Cliente / Customer / Pedido
+  function _matchClienteRow(r, k) {
+    if (!clienteFilterNorm) return true;
+    const vals = [
+      k.cliente  ? r[k.cliente]  : '',
+      k.customer ? r[k.customer] : '',
+      k.telefone ? r[k.telefone] : '',
+      k.pedido   ? r[k.pedido]   : '',
+    ];
+    return vals.some(v => v != null && _fluxolabNormSearchStr(v).includes(clienteFilterNorm));
+  }
+
+  // Helper: escapa HTML e destaca (em amarelo) o trecho buscado sem sensibilidade a acento/caixa
+  function _escAndHighlight(rawVal) {
+    const s = String(rawVal == null ? '' : rawVal);
+    if (!clienteFilterNorm) return _escDet(s);
+    const sNorm = _fluxolabNormSearchStr(s);
+    const idx = sNorm.indexOf(clienteFilterNorm);
+    if (idx === -1 || sNorm.length !== s.length) {
+      // Fallback simples caso tamanho NFD difira
+      return _escDet(s);
+    }
+    let out = '';
+    let pos = 0;
+    const qLen = clienteFilterNorm.length;
+    while (pos < s.length) {
+      const hit = sNorm.indexOf(clienteFilterNorm, pos);
+      if (hit === -1) { out += _escDet(s.slice(pos)); break; }
+      if (hit > pos) out += _escDet(s.slice(pos, hit));
+      out += `<mark style="background:rgba(250,204,21,.42);color:#fef08a;padding:0 2px;border-radius:3px;font-weight:800">${_escDet(s.slice(hit, hit + qLen))}</mark>`;
+      pos = hit + qLen;
+    }
+    return out;
   }
 
   function _renderDetalhesPedidos(normKey) {
@@ -29033,6 +29114,19 @@ function fluxolabRenderModelos() {
       }
     }
 
+    if (clienteFilterNorm) {
+      const cliRows = rowsToRender.filter(r => _matchClienteRow(r, k));
+      if (cliRows.length > 0) {
+        rowsToRender = cliRows;
+        if (cliRows.length < info.rows.length) {
+          badgeNote += `<div style="padding:6px 14px;background:rgba(250,204,21,.10);border-bottom:1px solid rgba(250,204,21,.32);color:#fef08a;font-size:11px;display:flex;align-items:center;justify-content:space-between">
+            <span>🔍 Exibindo <b>${cliRows.length}</b> de <b>${info.rows.length}</b> pedido(s) deste modelo para <b>"${_escDet(clienteFilterRaw)}"</b>.</span>
+            <button type="button" onclick="event.stopPropagation();fluxolabSetClienteSearch('', 'inline')" style="background:none;border:none;color:#facc15;font-weight:700;text-decoration:underline;cursor:pointer;font-size:11px">Limpar busca de cliente</button>
+          </div>`;
+        }
+      }
+    }
+
     const headers = [
       ['Andamento',  k.andamento],
       ['Pedido',     k.pedido],
@@ -29044,25 +29138,40 @@ function fluxolabRenderModelos() {
       ['Status Checklist', k.status],
       ['Obs',        k.obs],
     ];
-    const ths = headers.map(([h]) =>
-      `<th style="padding:8px 12px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-bottom:1px solid var(--border2);white-space:nowrap">${h}</th>`
-    ).join('');
+    const ths = headers.map(([h]) => {
+      if (h === 'Cliente') {
+        return `<th style="padding:6px 12px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-bottom:1px solid var(--border2);white-space:nowrap">
+          <div style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span>Cliente</span>
+            <span onclick="event.stopPropagation()" style="display:inline-flex;align-items:center;gap:4px;background:var(--bg2);border:1px solid ${clienteFilterRaw ? 'rgba(250,204,21,.65)' : 'var(--border2)'};border-radius:6px;padding:2px 7px">
+              <input type="text" class="fxmod-cliente-inline-inp" value="${_escDet(clienteFilterRaw)}"
+                oninput="fluxolabSetClienteSearch(this.value, 'inline')"
+                placeholder="🔍 Localizar cliente…"
+                style="background:transparent;border:none;outline:none;color:var(--text);font-family:var(--font);font-size:11px;font-weight:600;width:140px;text-transform:none;letter-spacing:normal" />
+              ${clienteFilterRaw ? `<button type="button" onclick="fluxolabSetClienteSearch('', 'inline')" title="Limpar busca" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:11px;padding:0;line-height:1">✕</button>` : ''}
+            </span>
+          </div>
+        </th>`;
+      }
+      return `<th style="padding:8px 12px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-bottom:1px solid var(--border2);white-space:nowrap">${h}</th>`;
+    }).join('');
     const trs = rowsToRender.map(r => {
       const _urgRow = _fluxolabRowUrgente(r);
       const _isTroca = _fluxolabIsTrocaTecnica(r, k.tipo);
       const tds = headers.map(([, key]) => {
         let val = '—';
+        const isHighlightCol = key && (key === k.cliente || key === k.pedido);
         if (key === k.customer || key === k.telefone || key === (k.customer || k.telefone)) {
           const nome = k.customer ? r[k.customer] : '';
           const tel  = k.telefone ? r[k.telefone] : '';
-          val = [nome, tel].filter(Boolean).map(_escDet).join('<br><span style="color:var(--muted);font-size:11px">') + (tel?'</span>':'');
+          val = [nome, tel].filter(Boolean).map(_escAndHighlight).join('<br><span style="color:var(--muted);font-size:11px">') + (tel?'</span>':'');
           if (!nome && !tel) val = '—';
         } else if (key && (key === k.diasAb || key === k.diasUteis)) {
           // números fiéis à planilha (127.0 → 127, 0 continua 0)
           const n = parseFloat(String(r[key]).replace(',', '.'));
           val = isNaN(n) ? '—' : String(Number.isInteger(n) ? n : n.toFixed(1).replace('.', ','));
         } else if (key && r[key] != null && String(r[key]).trim() !== '') {
-          val = _escDet(r[key]);
+          val = isHighlightCol ? _escAndHighlight(r[key]) : _escDet(r[key]);
         }
         let _cellBadge = '';
         if (key && key === k.tipo && _fluxolabRowEhTT(r, k.tipo)) _cellBadge = _fluxolabBadgeTT(1);
@@ -29101,8 +29210,8 @@ function fluxolabRenderModelos() {
         || 'DESCONHECIDO';
 
       if (!grupos[modelo]) grupos[modelo] = { total: 0, bolsoes: {}, maxDias: 0, somaDias: 0, countDias: 0 };
-      // Total operacional = apenas bolsões ativos. Exclui SCRAP, DOCA_1 e Gaiola Ag. peças.
-      if (b.key !== 'SCRAP' && b.key !== 'DOCA_1' && b.key !== 'GAIOLA_AG_PECAS') grupos[modelo].total++;
+      // Total = soma de todos os bolsões do modelo
+      grupos[modelo].total++;
       if (!grupos[modelo].bolsoes[b.key]) grupos[modelo].bolsoes[b.key] = { count: 0, maxTs: 0 };
       grupos[modelo].bolsoes[b.key].count++;
       if (v.ts && v.ts < (grupos[modelo].bolsoes[b.key].maxTs || Infinity || v.ts)) {
@@ -29210,12 +29319,17 @@ function fluxolabRenderModelos() {
       // Exibe apenas modelos que têm checklist importado na planilha
       if ((checklistIdx.get(_fluxolabNormModel(modelo)) || 0) === 0) return false;
       if (filter && !modelo.toLowerCase().includes(filter)) return false;
+      if (clienteFilterNorm) {
+        const det = checklistDetalhes.get(_fluxolabNormModel(modelo));
+        if (!det || !det.rows.length || !det.rows.some(r => _matchClienteRow(r, det.keys))) return false;
+      }
       if (sortFilter === 'acima4')  return d.maxAberto >= 4;
       if (sortFilter === 'acima10') return d.maxAberto >= 10;
       if (sortFilter === 'acima20') return d.maxAberto >= 20;
       if (sortFilter === 'puxar') {
         const cl = checklistIdx.get(_fluxolabNormModel(modelo)) || 0;
-        const falt = cl > 0 ? Math.max(0, cl - d.total) : 0;
+        const labQ = (typeof fluxolabPlanGetBolsaoStats === 'function') ? (fluxolabPlanGetBolsaoStats(modelo).lab || 0) : d.total;
+        const falt = cl > 0 ? Math.max(0, cl - labQ) : 0;
         const docaQ = (d.bolsoes['DOCA_1'] && d.bolsoes['DOCA_1'].count) || 0;
         return falt > 0 && docaQ > 0; // tem SELBs faltando E tem estoque na Doca 1 para puxar
       }
@@ -29245,10 +29359,12 @@ function fluxolabRenderModelos() {
       return clTotal > 0;
     }
     if (badgeFilter === 'nolab') {
-      return d.total > 0;
+      const labQ = (typeof fluxolabPlanGetBolsaoStats === 'function') ? (fluxolabPlanGetBolsaoStats(modelo).lab || 0) : d.total;
+      return labQ > 0;
     }
     if (badgeFilter === 'faltantes') {
-      const falt = Math.max(0, clTotal - d.total);
+      const labQ = (typeof fluxolabPlanGetBolsaoStats === 'function') ? (fluxolabPlanGetBolsaoStats(modelo).lab || 0) : d.total;
+      const falt = Math.max(0, clTotal - labQ);
       return falt > 0;
     }
     if (badgeFilter === 'foraplano') {
@@ -29324,7 +29440,13 @@ function fluxolabRenderModelos() {
   });
 
   // Descobrir quais bolsões têm ao menos 1 item (mantém colunas consistentes baseadas em allEntradas)
+  // Colunas ocultas na tabela de Agrupamento por Modelo: Limpeza, Montagem e Linha 1 a Linha 9
+  const _hiddenBolsaoCols = new Set([
+    'LIMPEZA', 'MONTAGEM',
+    'LINHA_1', 'LINHA_2', 'LINHA_3', 'LINHA_4', 'LINHA_5', 'LINHA_6', 'LINHA_7', 'LINHA_8', 'LINHA_9'
+  ]);
   const bolsoesAtivos = FLUXOLAB_BOLSOES.filter(b =>
+    !_hiddenBolsaoCols.has(b.key) &&
     allEntradas.some(([, d]) => d.bolsoes[b.key] && d.bolsoes[b.key].count > 0)
   );
 
@@ -29339,9 +29461,29 @@ function fluxolabRenderModelos() {
     return `<span style="display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:700;background:${bg};color:${cor};border:1px solid ${bd};border-radius:6px;padding:1px 6px;white-space:nowrap">▲ PARADO ${dias}d</span>`;
   }
 
+  // Helper para cabeçalho estreito com texto inclinado em 45° (evita colunas largas e não corta nomes)
+  function _rotTh(labelHtml, opts) {
+    const o = opts || {};
+    const color = o.color || 'var(--muted)';
+    const w = o.w || 52;
+    const padR = o.isLast ? 38 : 2;
+    const clickAttr = o.onclick ? `onclick="${o.onclick}"` : '';
+    const titleAttr = o.title ? `title="${o.title}"` : '';
+    const cursor = o.onclick ? 'cursor:pointer;user-select:none;' : '';
+    return `<th ${clickAttr} ${titleAttr} style="width:${w}px;min-width:${w}px;max-width:${w + 16}px;height:114px;padding:4px ${padR}px 8px 2px;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:${color};text-align:center;vertical-align:bottom;border-bottom:2px solid var(--border2);border-left:1px solid rgba(255,255,255,.04);background:var(--bg3);white-space:nowrap;overflow:visible;${cursor}">
+      <div style="display:flex;align-items:flex-end;justify-content:flex-start;height:104px;width:100%;overflow:visible;pointer-events:none">
+        <span style="display:inline-block;transform:rotate(-45deg);transform-origin:0% 100%;white-space:nowrap;margin-left:46%;line-height:1.1">${labelHtml}</span>
+      </div>
+    </th>`;
+  }
+
   // Monta tabela
-  const colHeaders = bolsoesAtivos.map(b =>
-    `<th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);white-space:nowrap;text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3)">${b.icon} ${b.label}</th>`
+  const colHeaders = bolsoesAtivos.map((b, bIdx) =>
+    _rotTh(`${b.icon} ${b.label}`, {
+      w: b.key === 'DOCA_1' ? 76 : 50,
+      isLast: bIdx === bolsoesAtivos.length - 1,
+      title: b.label,
+    })
   ).join('');
 
   // (modelosNoPlano já definido acima)
@@ -29350,12 +29492,12 @@ function fluxolabRenderModelos() {
 
   const rows = entradas.map(([modelo, dados], idx) => {
     const clTotal = checklistIdx.get(_fluxolabNormModel(modelo)) || 0;
-    // Total de SELBs do modelo (soma de todos os bolsões, incluindo SCRAP) para base proporcional
+    // Total de SELBs do modelo (soma de todos os bolsões)
     const selbTotal = Object.values(dados.bolsoes).reduce((s, b) => s + (b.count || 0), 0);
     // SELBs na Doca 1 para este modelo
     const docaCount = (dados.bolsoes['DOCA_1'] && dados.bolsoes['DOCA_1'].count) || 0;
-    // labTotal = dados.total (já exclui SCRAP e DOCA_1 — ver linha de agrupamento)
-    const labTotal = dados.total;
+    const statsBol = (typeof fluxolabPlanGetBolsaoStats === 'function') ? fluxolabPlanGetBolsaoStats(modelo) : { lab: dados.total };
+    const labTotal = statsBol.lab || 0;
 
     const faltCalc = clTotal > 0 ? Math.max(0, clTotal - labTotal) : 0;
 
@@ -29369,32 +29511,32 @@ function fluxolabRenderModelos() {
           if (count > 0) {
             const puxar = Math.min(count, faltCalc);
             const txt = puxar > 0
-              ? `<span style="font-size:12px;font-weight:800;color:#f59e0b;font-family:var(--mono);white-space:nowrap">📦 ${count} → puxar ${puxar}</span>`
-              : `<span style="font-size:14px;font-weight:900;color:#22d3ee;font-family:var(--mono);white-space:nowrap">📦 ${count}</span>`;
-            return `<td style="padding:9px 14px;text-align:center;border-bottom:1px solid var(--border)">
-              <div style="display:inline-flex;flex-direction:column;align-items:center;gap:3px">
+              ? `<span style="font-size:11px;font-weight:800;color:#f59e0b;font-family:var(--mono);white-space:nowrap">📦${count}→${puxar}</span>`
+              : `<span style="font-size:13px;font-weight:900;color:#22d3ee;font-family:var(--mono);white-space:nowrap">📦${count}</span>`;
+            return `<td style="padding:6px 5px;text-align:center;border-bottom:1px solid var(--border);border-left:1px solid rgba(255,255,255,.03)" title="${puxar > 0 ? `Doca 1: ${count} — puxar ${puxar}` : `Doca 1: ${count}`}">
+              <div style="display:inline-flex;flex-direction:column;align-items:center;gap:2px">
                 ${txt}
                 ${paradoBadge(info.maxTs)}
               </div>
             </td>`;
           }
           if (faltCalc > 0) {
-            return `<td style="padding:9px 14px;text-align:center;border-bottom:1px solid var(--border)">
-              <span title="Sem estoque no Lab nem na Doca 1 — faltam ${faltCalc} SELB(s)" style="display:inline-flex;align-items:center;gap:5px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.4);border-radius:8px;padding:3px 8px;font-size:10px;font-weight:800;color:#ef4444;white-space:nowrap">⛔ Puxar estoque <span style="font-family:var(--mono);font-size:12px;font-weight:900">${faltCalc}</span></span>
+            return `<td style="padding:6px 5px;text-align:center;border-bottom:1px solid var(--border);border-left:1px solid rgba(255,255,255,.03)">
+              <span title="Sem estoque no Lab nem na Doca 1 — faltam ${faltCalc} SELB(s)" style="display:inline-flex;align-items:center;gap:3px;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.4);border-radius:6px;padding:2px 6px;font-size:9.5px;font-weight:800;color:#ef4444;white-space:nowrap">⛔Puxar <span style="font-family:var(--mono);font-size:11px;font-weight:900">${faltCalc}</span></span>
             </td>`;
           }
-          return `<td style="padding:9px 14px;text-align:center;color:var(--muted);font-size:12px;border-bottom:1px solid var(--border)">—</td>`;
+          return `<td style="padding:6px 5px;text-align:center;color:var(--muted);font-size:11px;border-bottom:1px solid var(--border);border-left:1px solid rgba(255,255,255,.03)">—</td>`;
         }
 
         if (!info || info.count === 0) {
-          return `<td style="padding:9px 14px;text-align:center;color:var(--muted);font-size:12px;border-bottom:1px solid var(--border)">—</td>`;
+          return `<td style="padding:6px 5px;text-align:center;color:var(--muted);font-size:11px;border-bottom:1px solid var(--border);border-left:1px solid rgba(255,255,255,.03)">—</td>`;
         }
         const clBadge = clTotal > 0
-          ? `<span title="Checklists: ${info.count} SELB(s) deste modelo aqui" style="font-size:10px;font-weight:700;color:#f59e0b;font-family:var(--mono)">📋${info.count}</span>`
+          ? `<span title="Checklists: ${info.count} SELB(s) deste modelo aqui" style="font-size:9.5px;font-weight:700;color:#f59e0b;font-family:var(--mono)">📋${info.count}</span>`
           : '';
-        return `<td style="padding:9px 14px;text-align:center;border-bottom:1px solid var(--border)">
-        <div style="display:inline-flex;flex-direction:column;align-items:center;gap:3px">
-          <span style="font-size:18px;font-weight:900;color:var(--text);font-family:var(--mono);line-height:1">${info.count}</span>
+        return `<td style="padding:6px 5px;text-align:center;border-bottom:1px solid var(--border);border-left:1px solid rgba(255,255,255,.03)">
+        <div style="display:inline-flex;flex-direction:column;align-items:center;gap:2px">
+          <span style="font-size:15px;font-weight:900;color:var(--text);font-family:var(--mono);line-height:1">${info.count}</span>
           ${paradoBadge(info.maxTs)}
           ${clBadge}
         </div>
@@ -29407,10 +29549,10 @@ function fluxolabRenderModelos() {
     const totalColor = maxDias >= 20 ? 'var(--danger)' : maxDias >= 7 ? '#f5a623' : 'var(--accent)';
 
     const clCell = clTotal > 0
-      ? `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">
-           <span style="font-size:20px;font-weight:900;color:#f59e0b;font-family:var(--mono)">${clTotal}</span>
+      ? `<td style="padding:6px 5px;text-align:center;border-bottom:1px solid var(--border);border-left:1px solid rgba(255,255,255,.03)">
+           <span style="font-size:16px;font-weight:900;color:#f59e0b;font-family:var(--mono)">${clTotal}</span>
          </td>`
-      : `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:12px">—</td>`;
+      : `<td style="padding:6px 5px;text-align:center;border-bottom:1px solid var(--border);border-left:1px solid rgba(255,255,255,.03);color:var(--muted);font-size:11px">—</td>`;
 
     // Faltantes = checklists - SELBs nos bolsões de lab (exclui SCRAP e DOCA_1)
     const faltantes = clTotal > 0 ? Math.max(0, clTotal - labTotal) : 0;
@@ -29430,41 +29572,48 @@ function fluxolabRenderModelos() {
       ? 'Média de Dias Úteis Andamento entre os checklists deste modelo'
       : 'Maior valor de Dias Úteis Andamento entre os checklists deste modelo';
     const diasCell = clTotal === 0
-      ? `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:12px">—</td>`
+      ? `<td style="padding:6px 5px;text-align:center;border-bottom:1px solid var(--border);border-left:1px solid rgba(255,255,255,.03);color:var(--muted);font-size:11px">—</td>`
       : dados.temDadosDias
-        ? `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)" title="${_duTitle}">
-             <span style="font-size:18px;font-weight:900;color:${_duColor(_duBase)};font-family:var(--mono);line-height:1">${_duValor}d</span>
+        ? `<td style="padding:6px 5px;text-align:center;border-bottom:1px solid var(--border);border-left:1px solid rgba(255,255,255,.03)" title="${_duTitle}">
+             <span style="font-size:15px;font-weight:900;color:${_duColor(_duBase)};font-family:var(--mono);line-height:1">${_duValor}d</span>
            </td>`
-        : `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">
-             <span title="${(dados.motivoSemDadosDias || 'Sem dado de dias para este modelo').replace(/"/g,'&quot;')}" style="font-size:11px;font-weight:600;color:var(--muted);font-style:italic;white-space:nowrap;cursor:help">sem dado ⓘ</span>
+        : `<td style="padding:6px 5px;text-align:center;border-bottom:1px solid var(--border);border-left:1px solid rgba(255,255,255,.03)">
+             <span title="${(dados.motivoSemDadosDias || 'Sem dado de dias para este modelo').replace(/"/g,'&quot;')}" style="font-size:10px;font-weight:600;color:var(--muted);font-style:italic;white-space:nowrap;cursor:help">s/d ⓘ</span>
            </td>`;
 
     const faltantesCell = faltantes > 0
-      ? `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">
-           <span title="Precisam entrar mais ${faltantes} SELB(s) nos bolsões para usar todos os checklists" style="font-size:20px;font-weight:900;color:#ef4444;font-family:var(--mono);line-height:1">${faltantes}</span>
+      ? `<td style="padding:6px 5px;text-align:center;border-bottom:1px solid var(--border);border-left:1px solid rgba(255,255,255,.03)">
+           <span title="Precisam entrar mais ${faltantes} SELB(s) nos bolsões para usar todos os checklists" style="font-size:16px;font-weight:900;color:#ef4444;font-family:var(--mono);line-height:1">${faltantes}</span>
          </td>`
       : (clTotal > 0
-          ? `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">
-               <span style="color:var(--accent2);font-size:13px;font-weight:700">✓</span>
+          ? `<td style="padding:6px 5px;text-align:center;border-bottom:1px solid var(--border);border-left:1px solid rgba(255,255,255,.03)">
+               <span style="color:var(--accent2);font-size:12px;font-weight:700">✓</span>
              </td>`
-          : `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:12px">—</td>`);
+          : `<td style="padding:6px 5px;text-align:center;border-bottom:1px solid var(--border);border-left:1px solid rgba(255,255,255,.03);color:var(--muted);font-size:11px">—</td>`);
 
     // ── Coluna "Dias em Aberto" — via fluxolabPlanGetChecklistStats
     const _abMax = dados.maxAberto || 0;
     const _abColor = v => v >= 30 ? '#ef4444' : v >= 15 ? '#f59e0b' : v >= 7 ? '#facc15' : '#4ade80';
 
     const diasAbertoCell = clTotal === 0
-      ? `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:12px">—</td>`
+      ? `<td style="padding:6px 5px;text-align:center;border-bottom:1px solid var(--border);border-left:1px solid rgba(255,255,255,.03);color:var(--muted);font-size:11px">—</td>`
       : _abMax > 0
-        ? `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)" title="Maior tempo em aberto entre os checklists deste modelo">
-             <span style="font-size:18px;font-weight:900;color:${_abColor(_abMax)};font-family:var(--mono);line-height:1">${_abMax}d</span>
+        ? `<td style="padding:6px 5px;text-align:center;border-bottom:1px solid var(--border);border-left:1px solid rgba(255,255,255,.03)" title="Maior tempo em aberto entre os checklists deste modelo">
+             <span style="font-size:15px;font-weight:900;color:${_abColor(_abMax)};font-family:var(--mono);line-height:1">${_abMax}d</span>
            </td>`
-        : `<td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border);color:var(--muted);font-size:12px">—</td>`;
+        : `<td style="padding:6px 5px;text-align:center;border-bottom:1px solid var(--border);border-left:1px solid rgba(255,255,255,.03);color:var(--muted);font-size:11px">—</td>`;
 
     const detId = 'fxmod-det-' + idx;
     const normKey = _fluxolabNormModel(modelo);
-    const totalCols = 6 + bolsoesAtivos.length; // Modelo + Total + Checklists + Dias Úteis + Dias Aberto + Faltantes + bolsões
+    const totalCols = 7 + bolsoesAtivos.length; // Modelo + Total + Checklists + Dias Úteis + Dias Aberto + Faltantes + LAB + bolsões
+    const labTipRow = (typeof fluxolabPlanGetLabTooltip === 'function')
+      ? fluxolabPlanGetLabTooltip(modelo)
+      : 'Conta no LAB: todos os bolsões do laboratório + Liberados Qualidade + Scrap (exclui Doca 1 e Retorno Estoque).';
+    const labColCell = `<td style="padding:6px 5px;text-align:center;border-bottom:1px solid var(--border);border-left:1px solid rgba(255,255,255,.03);background:rgba(167,139,250,0.05);color:#a78bfa;font-weight:900;font-size:16px;font-family:var(--mono);text-shadow:0 0 8px rgba(167,139,250,0.4);cursor:help" title="${_escDet(labTipRow)}">${labTotal || '-'}</td>`;
     const hasDet = clTotal > 0;
+    if (hasDet && (window._fluxolabExpandAllChecklists || clienteFilterNorm)) {
+      window._fluxolabModelosExpanded.add(normKey);
+    }
     const isOpen = window._fluxolabModelosExpanded.has(normKey);
     const detalhesHtml = (hasDet && isOpen) ? _renderDetalhesPedidos(normKey) : '';
 
@@ -29490,19 +29639,20 @@ function fluxolabRenderModelos() {
       oncontextmenu="return fluxolabModeloCtxMenu(event, this.getAttribute('data-modelo-enc'))"
       ${hasDet ? `onclick="(function(el,id,nk){var t=document.getElementById(id);var open=t.style.display!=='none';if(!open){var td=t.querySelector('td');if(td&&!td.hasChildNodes()&&window._fluxolabRenderDetalhesPedidosLazy)td.innerHTML=window._fluxolabRenderDetalhesPedidosLazy(nk);}t.style.display=open?'none':'';var a=el.querySelector('.fxmod-arr');if(a)a.style.transform=open?'':'rotate(180deg)';if(open)window._fluxolabModelosExpanded.delete(nk);else window._fluxolabModelosExpanded.add(nk);})(this,'${detId}','${normKey}')"` : ''}
       onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background='${rowBgFinal}'">
-      <td style="padding:10px 16px;border-bottom:1px solid var(--border);min-width:220px;max-width:340px">
-        <div style="display:flex;align-items:center;gap:10px">
-          ${hasDet ? `<span class="fxmod-arr" style="color:var(--muted);font-size:12px;transition:transform .2s;flex-shrink:0;${isOpen ? 'transform:rotate(180deg)' : ''}">▾</span>` : `<span style="width:12px;flex-shrink:0"></span>`}
-          <div style="font-size:13px;font-weight:600;color:var(--text);line-height:1.3;word-break:break-word;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span>${modelo}</span>${_urgBadge}${_foraBadge}</div>
+      <td style="padding:7px 12px;border-bottom:1px solid var(--border);min-width:240px">
+        <div style="display:flex;align-items:center;gap:8px">
+          ${hasDet ? `<span class="fxmod-arr" style="color:var(--muted);font-size:11px;transition:transform .2s;flex-shrink:0;${isOpen ? 'transform:rotate(180deg)' : ''}">▾</span>` : `<span style="width:11px;flex-shrink:0"></span>`}
+          <div style="font-size:12.5px;font-weight:600;color:var(--text);line-height:1.25;word-break:break-word;display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span>${modelo}</span>${_urgBadge}${_foraBadge}</div>
         </div>
       </td>
-      <td style="padding:10px 14px;text-align:center;border-bottom:1px solid var(--border)">
-        <span style="font-size:20px;font-weight:900;color:${totalColor};font-family:var(--mono)">${dados.total}</span>
+      <td style="padding:6px 5px;text-align:center;border-bottom:1px solid var(--border);border-left:1px solid rgba(255,255,255,.03)">
+        <span style="font-size:16px;font-weight:900;color:${totalColor};font-family:var(--mono)">${dados.total}</span>
       </td>
       ${clCell}
       ${diasCell}
       ${diasAbertoCell}
       ${faltantesCell}
+      ${labColCell}
       ${cols}
     </tr>`;
 
@@ -29517,7 +29667,7 @@ function fluxolabRenderModelos() {
 
   // ── Cards de resumo global (calculados a partir de allEntradas para estabilidade) ──
   const _sumTotalCL  = Array.from(checklistIdx.values()).reduce((s, v) => s + v, 0);
-  const _sumTotalLAB = allEntradas.reduce((s, [, d]) => s + d.total, 0);
+  const _sumTotalLAB = allEntradas.reduce((s, [m, d]) => s + ((typeof fluxolabPlanGetBolsaoStats === 'function') ? (fluxolabPlanGetBolsaoStats(m).lab || 0) : d.total), 0);
   const _sumFaltantes = Math.max(0, _sumTotalCL - _sumTotalLAB);
   const _sumModelos  = allEntradas.length;
   const _sumForaPlano = allEntradas.reduce((s, [m]) => s + (_fluxolabNormModel(m) && !modelosNoPlano.has(_fluxolabNormModel(m)) ? 1 : 0), 0);
@@ -29559,8 +29709,8 @@ function fluxolabRenderModelos() {
       onmouseover="this.style.transform='translateY(-2px)';this.style.borderColor='${color}';this.style.boxShadow='0 4px 14px rgba(0,0,0,.4)'"
       onmouseout="this.style.transform='';this.style.borderColor='${isFiltered ? color : 'var(--border2)'}';this.style.boxShadow='${isFiltered ? `0 0 16px ${color}66` : 'none'}'">
       ${activePill}
-      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:${isFiltered ? color : 'var(--muted)'};white-space:nowrap">${icon} ${label}</div>
-      <div style="font-size:26px;font-weight:900;color:${color};font-family:var(--mono);line-height:1.1">${val}</div>
+      <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:${color};white-space:nowrap">${icon} ${label}</div>
+      <div style="font-size:26px;font-weight:900;color:#ffffff;font-family:var(--mono);line-height:1.1">${val}</div>
     </div>`;
   }
 
@@ -29602,12 +29752,13 @@ function fluxolabRenderModelos() {
       <table style="width:100%;border-collapse:collapse">
         <thead style="position:sticky;top:0;z-index:3">
           <tr>
-            <th style="padding:10px 16px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);text-align:left;border-bottom:2px solid var(--border2);background:var(--bg3)">Modelo</th>
-            <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text);text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3)">Total</th>
-            <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#f59e0b;text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap">📋 Checklists</th>
-            <th onclick="fluxolabToggleModeloSortCol('diasUteis')" title="Clique para ordenar por Dias Úteis Andamento (crescente / decrescente)" style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:${(sortFilter === 'diasUteisDesc' || sortFilter === 'diasUteisAsc') ? '#38bdf8' : 'var(--muted)'};text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap;cursor:pointer;user-select:none">⏱ Dias Úteis Andamento${sortFilter === 'mediaDias' ? ' (média)' : sortFilter === 'diasUteisDesc' ? ' ▼' : sortFilter === 'diasUteisAsc' ? ' ▲' : ' ⇅'}</th>
-            <th onclick="fluxolabToggleModeloSortCol('diasAberto')" title="Clique para ordenar por Dias em Aberto (crescente / decrescente)" style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:${(sortFilter === 'diasAbertoDesc' || sortFilter === 'diasAbertoAsc') ? '#fbbf24' : '#fbbf24'};text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap;cursor:pointer;user-select:none">📅 Dias em Aberto${sortFilter === 'diasAbertoDesc' ? ' ▼' : sortFilter === 'diasAbertoAsc' ? ' ▲' : ' ⇅'}</th>
-            <th style="padding:10px 14px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#ef4444;text-align:center;border-bottom:2px solid var(--border2);background:var(--bg3);white-space:nowrap">⚠ Faltantes</th>
+            <th style="padding:10px 12px;font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);text-align:left;vertical-align:bottom;border-bottom:2px solid var(--border2);background:var(--bg3)">Modelo</th>
+            ${_rotTh('Total', { color: 'var(--text)', w: 46 })}
+            ${_rotTh(`📋 Checklists ${window._fluxolabExpandAllChecklists ? '▴' : '▾'}`, { color: '#f59e0b', w: 50, onclick: 'fluxolabToggleExpandAllChecklists()', title: 'Clique para expandir ou recolher todos os checklists e pedidos' })}
+            ${_rotTh(`⏱ Dias Úteis${sortFilter === 'mediaDias' ? ' (méd)' : sortFilter === 'diasUteisDesc' ? ' ▼' : sortFilter === 'diasUteisAsc' ? ' ▲' : ' ⇅'}`, { color: (sortFilter === 'diasUteisDesc' || sortFilter === 'diasUteisAsc') ? '#38bdf8' : 'var(--muted)', w: 52, onclick: "fluxolabToggleModeloSortCol('diasUteis')", title: 'Clique para ordenar por Dias Úteis Andamento (crescente / decrescente)' })}
+            ${_rotTh(`📅 Dias Aberto${sortFilter === 'diasAbertoDesc' ? ' ▼' : sortFilter === 'diasAbertoAsc' ? ' ▲' : ' ⇅'}`, { color: '#fbbf24', w: 52, onclick: "fluxolabToggleModeloSortCol('diasAberto')", title: 'Clique para ordenar por Dias em Aberto (crescente / decrescente)' })}
+            ${_rotTh('⚠ Faltantes', { color: '#ef4444', w: 48 })}
+            ${_rotTh('🔬 LAB', { color: '#a78bfa', w: 48, isLast: bolsoesAtivos.length === 0, title: _escDet((typeof window.FLUXOLAB_LAB_TOOLTIP_HEADER === 'string') ? window.FLUXOLAB_LAB_TOOLTIP_HEADER : 'Conta no LAB: Limpeza, Bolsão Montagem, Montagem, Linhas 1 a 9, Complexa, AG. 3D, Eletrônica, Gaiola LAB, Gaiola Ag. peças, Bolsão Qualidade, Liberados Qualidade e Scrap (exclui apenas Doca 1 e Retorno Estoque).') })}
             ${colHeaders}
           </tr>
         </thead>
@@ -29634,6 +29785,16 @@ function fluxolabRenderModelos() {
     const newScrollContainer = document.getElementById('fluxolab-modelos-scroll');
     if (newScrollContainer) {
       newScrollContainer.scrollTop = savedScrollTop;
+    }
+  }
+  if (wasInlineClienteFocused) {
+    const firstInline = grid.querySelector('.fxmod-cliente-inline-inp');
+    if (firstInline) {
+      firstInline.focus();
+      try {
+        const len = firstInline.value.length;
+        firstInline.setSelectionRange(inlineSelStart != null ? inlineSelStart : len, inlineSelEnd != null ? inlineSelEnd : len);
+      } catch (e) {}
     }
   }
 }
