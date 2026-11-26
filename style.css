@@ -2921,6 +2921,8 @@ a, input, select, textarea, label,
 .tvg-bar-fill { height: 100%; border-radius: 99px; background: var(--tvg-c); transition: width .5s; }
 .tvg-bar-fill.warn { background: #f5a623; }
 .tvg-bar-fill.red { background: #f25757; }
+/* Complexa: barra de progresso na mesma cor padrão dos demais setores (verde); atrasos continuam laranja/vermelho */
+.tvg-col.s-comp .tvg-bar-fill:not(.warn):not(.red) { background: #10b981; }
 .tvg-bar-exp { position: absolute; top: -.25em; bottom: -.25em; width: 3px; margin-left: -1px; background: #fff; border-radius: 2px; opacity: .9; }
 .tvg-col-sub { display: flex; gap: 1.1em; flex-wrap: wrap; font-size: .78em; font-weight: 700; color: var(--muted); }
 .tvg-col-sub b { color: #fff; font-family: var(--mono); }
@@ -2953,7 +2955,7 @@ a, input, select, textarea, label,
 .tvg-steps { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: .3em; }
 .tvg-step { height: 1.75em; border-radius: .3em; background: #3dd68c; color: #04210f; font-family: var(--mono); font-weight: 800; font-size: .78em; display: flex; align-items: center; justify-content: center; gap: .3em; overflow: hidden; white-space: nowrap; }
 .tvg-step i { font-style: normal; font-size: .75em; opacity: .6; }
-.tvg-step.late { background: #f25757; color: #fff; }
+.tvg-step.late { background: #1b6e49; color: #e6fff2; }
 .tvg-step.pend { background: transparent; border: 1px dashed rgba(148,163,184,.35); color: #64748b; }
 .tvg-step.pend.due { border-color: rgba(245,166,35,.8); color: #f5a623; }
 
@@ -2964,13 +2966,65 @@ a, input, select, textarea, label,
 .tvg-timer.paused { color: #f5a623; }
 .tvg-avg { flex: 0 0 auto; font-family: var(--mono); font-size: .85em; color: #fff; opacity: .75; white-space: nowrap; }
 
-/* Tela cheia (TV): esconde topo, resumo e filtros — só o quadro de produção */
+/* Tela cheia (TV): esconde só a barra de navegação e a linha "Sistema ativo";
+   mantém os indicadores do topo (EXP., Checklists, Liberadas...), o seletor de Layout e o quadro de produção */
 body.tvg-clean .topbar,
-body.tvg-clean .status-bar,
+body.tvg-clean #status-bar-clock,
 body.tvg-clean #selb-alert-panel,
-body.tvg-clean #view-dashboard > .summary-row,
-body.tvg-clean #dash-toolbar-row { display: none !important; }
+body.tvg-clean #view-dashboard > .summary-row { display: none !important; }
+/* A barra de indicadores é "sticky" a 72px do topo (para ficar abaixo da navegação).
+   Sem a navegação, cola no topo da tela e remove o vão preto. */
+/* Indicadores do topo maiores na tela cheia (TV) */
+body.tvg-clean #team-totals-card { zoom: 1.5; }
+body.tvg-clean .status-bar { top: 0 !important; margin-top: 0 !important; background: transparent !important; border-bottom: none !important; padding-top: 8px !important; padding-bottom: 0 !important; }
+body.tvg-clean #dash-toolbar-row { margin-bottom: 12px !important; }
+body.tvg-clean #dash-toolbar-row #sector-tabs { display: none !important; }
+body.tvg-clean #dash-toolbar-row { justify-content: flex-end; }
 body.tvg-clean #view-dashboard { padding: .7vw; }
+
+/* ── Tela cheia (TV): nitidez e definição ─────────────────────────────── */
+body.tvg-clean .tvg-board,
+body.tvg-clean #team-totals-card {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: geometricPrecision;
+}
+/* Sem desfoque/brilhos que "embaçam" o texto em TV grande */
+body.tvg-clean .status-bar,
+body.tvg-clean #team-totals-card,
+body.tvg-clean .tvg-top,
+body.tvg-clean .tvg-col { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+body.tvg-clean .tvg-board *,
+body.tvg-clean #team-totals-card * { text-shadow: none !important; }
+body.tvg-clean .tvg-board { font-size: clamp(11px, .8vw, 44px); }
+body.tvg-clean .tvg-name, body.tvg-clean .tvg-col-name, body.tvg-clean .tvg-big,
+body.tvg-clean .tvg-count b, body.tvg-clean .tvg-clock { font-weight: 900; }
+body.tvg-clean .tvg-machine { color: #f1f5f9; }
+body.tvg-clean .tvg-col-sub, body.tvg-clean .tvg-avg { opacity: 1; }
+body.tvg-clean .tvg-col-sub { color: #aab4c3; }
+
+/* Full HD / telas médias: indicadores do topo em 1.5x (já definido acima) */
+/* TVs 2K/4K: bordas e traços proporcionais para não ficarem "finos" demais */
+@media (min-width: 2400px) {
+  body.tvg-clean #team-totals-card { zoom: 2.25; }
+  body.tvg-clean .tvg-col { border-width: 3px; }
+  body.tvg-clean .tvg-op { border-width: 2px; border-left-width: .4em; }
+  body.tvg-clean .tvg-top, body.tvg-clean .tvg-kpi { border-width: 2px; }
+  body.tvg-clean .tvg-pill { border-width: 2px; }
+  body.tvg-clean .tvg-step.pend { border-width: 2px; }
+  body.tvg-clean .tvg-bar-exp { width: 5px; margin-left: -2px; }
+  body.tvg-clean .tvg-col-head { border-bottom-width: 2px; }
+}
+@media (min-width: 3200px) {
+  body.tvg-clean #team-totals-card { zoom: 3; }
+  body.tvg-clean .tvg-col { border-width: 4px; }
+  body.tvg-clean .tvg-op { border-width: 3px; border-left-width: .4em; }
+  body.tvg-clean .tvg-top, body.tvg-clean .tvg-kpi { border-width: 3px; }
+  body.tvg-clean .tvg-pill { border-width: 3px; }
+  body.tvg-clean .tvg-step.pend { border-width: 3px; }
+  body.tvg-clean .tvg-bar-exp { width: 6px; margin-left: -3px; }
+  body.tvg-clean .tvg-col-head { border-bottom-width: 3px; }
+}
 
 [data-theme="light"] .tvg-name, [data-theme="light"] .tvg-title, [data-theme="light"] .tvg-big, [data-theme="light"] .tvg-count { color: #252d3d; }
 [data-theme="light"] .tvg-machine { color: #394258; }

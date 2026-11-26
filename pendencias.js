@@ -206,6 +206,45 @@ function pendGetDispPedido(disp) {
   return pendGetChecklistPedido(disp.stats, disp.chkIdx);
 }
 
+// ── Observação / Peças por checklist (linhas extras da lista detalhada / Maior dias) ──
+// A 1ª linha de cada modelo continua usando row.obs / row.pecas. As linhas extras
+// (checklist 2/3, 3/3...) guardam o próprio texto em row.chk_notes[chave].
+function pendChkNoteKey(stats, chkIdx) {
+  const ped = pendNormPedido(pendGetChecklistPedido(stats, chkIdx));
+  let ord = 0;
+  if (stats && stats.rows && ped) {
+    for (let i = 0; i < chkIdx; i++) {
+      if (pendNormPedido(pendGetChecklistPedido(stats, i)) === ped) ord++;
+    }
+  }
+  return ped ? (ord ? `${ped}_${ord}` : ped) : `i${chkIdx}`;
+}
+
+function pendGetChkNote(row, key, field) {
+  const n = row && row.chk_notes && row.chk_notes[key];
+  return (n && n[field]) || '';
+}
+
+function pendUpdateChkNote(elem, tableName, field) {
+  const tr = elem.closest('tr');
+  if (!tr) return;
+  const index = parseInt(tr.dataset.pndIdx, 10);
+  const key = elem.dataset.chkKey;
+  const list = _fluxolabPendenciasState[tableName];
+  if (isNaN(index) || !key || !list || !list[index]) return;
+  const row = list[index];
+  if (!row.chk_notes) row.chk_notes = {};
+  if (!row.chk_notes[key]) row.chk_notes[key] = { obs: '', pecas: '' };
+  row.chk_notes[key][field] = elem.value;
+  if (!String(row.chk_notes[key].obs || '').trim() && !String(row.chk_notes[key].pecas || '').trim()) {
+    delete row.chk_notes[key];
+    if (!Object.keys(row.chk_notes).length) delete row.chk_notes;
+  }
+  _pendMarkLocalDirty();
+  fluxolabSavePendenciasDebounced();
+}
+window.pendUpdateChkNote = pendUpdateChkNote;
+
 function pendComparePedido(a, b) {
   const sa = pendNormPedido(a);
   const sb = pendNormPedido(b);
@@ -931,6 +970,16 @@ function fluxolabApplyRemoteSyncPend(remoteData) {
           }
         }
       });
+
+      // Observação/Peças das linhas extras (por checklist) — sincroniza com outros usuários
+      try {
+        const rn = JSON.stringify(remoteRow.chk_notes || {});
+        const ln = JSON.stringify(localRow.chk_notes || {});
+        if (rn !== ln) {
+          if (remoteRow.chk_notes) localRow.chk_notes = remoteRow.chk_notes; else delete localRow.chk_notes;
+          needRender = true;
+        }
+      } catch (e) {}
     }
     pendUpdateHeaderTotals(t);
     if (cleanRemote[t].length !== _fluxolabPendenciasState[t].length) {
@@ -1765,9 +1814,20 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
                   style="${inpBase};min-width:0;box-sizing:border-box;color:var(--accent)" />
          </td>`;
 
+    const chkKeyV = (isVirtual && disp.chkIdx != null) ? pendChkNoteKey(disp.stats, disp.chkIdx) : '';
+    const chkKeyDom = chkKeyV.replace(/[^A-Za-z0-9_-]/g, '_');
+    const mkChkNote = (field, valid, tdSt, hid_) => {
+      const idN = `pnd-${tableName}-r${idx}-c${chkKeyDom}-${field}`;
+      const hN = savedSizes[idN] || '36px';
+      return `<td style="${tdSt};padding:4px${hid_}">
+            <textarea id="${idN}" class="pend-textarea" rows="1" placeholder="..." data-chk-key="${esc(chkKeyV)}"
+                  onfocus="${inpFocus}" onblur="${inpBlur}"
+                  onchange="pendUpdateChkNote(this, '${tableName}', '${field}')"
+                  style="${inpBase};height:${hN};padding-top:10px;font-weight:500;text-transform:uppercase;color:var(--text);resize:vertical;max-width:100%">${esc(pendGetChkNote(row, chkKeyV, field))}</textarea>
+         </td>`;
+    };
     const obsPecas = isVirtual
-      ? `<td style="${tdStyle};color:var(--muted);font-size:14px${hid('obs')}">—</td>
-         <td style="${tdLastStyle};color:var(--muted);font-size:14px${hid('pecas')}">—</td>`
+      ? mkChkNote('obs', true, tdStyle, hid('obs')) + mkChkNote('pecas', true, tdLastStyle, hid('pecas'))
       : `<td style="${tdStyle};padding:4px${hid('obs')}">
            <textarea id="pnd-${tableName}-r${idx}-obs" class="pend-textarea" rows="1" placeholder="..."
                   onfocus="${inpFocus}" onblur="${inpBlur}"
