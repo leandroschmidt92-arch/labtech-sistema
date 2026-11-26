@@ -3856,7 +3856,11 @@ function _applyCardLayoutUi(){
   if(tabs) tabs.style.display = (mode === 'geral') ? 'none' : '';
   // No layout Geral (TV) os cards de resumo do topo ficam ocultos (os totais já aparecem no quadro)
   document.body.classList.toggle('tvg-on', mode === 'geral');
-  if(mode !== 'geral' && document.body.classList.contains('tvg-clean')) _tvgExitClean();
+  if(mode !== 'geral'){
+    if(document.body.classList.contains('tvg-clean')) _tvgExitClean();
+    const tc = document.getElementById('team-totals-card');
+    if(tc) tc.style.zoom = '';
+  }
   document.querySelectorAll('#card-layout-toggle .lt-btn').forEach(b => {
     b.classList.toggle('on', b.dataset.layout === mode);
   });
@@ -3912,32 +3916,91 @@ function _tvgFitSoon(){
 function _tvgFitAll(){
   const board = document.getElementById('tvg-board');
   if(!board || !board.offsetParent) return;
+  const clean = document.body.classList.contains('tvg-clean');
+  // Barra de indicadores do topo: em tela cheia cresce com o monitor, mas nunca passa da largura
+  // disponível (mesmo dando zoom no navegador, dentro ou fora da tela cheia, encolhe para caber)
+  const card = document.getElementById('team-totals-card');
+  if(card){
+    const bar = document.getElementById('main-status-bar');
+    card.style.zoom = '1';
+    const w1 = card.offsetWidth || card.getBoundingClientRect().width;
+    const vw = Math.min(window.innerWidth, document.documentElement.clientWidth || window.innerWidth);
+    let padX = 24;
+    if(bar){
+      const cs = getComputedStyle(bar);
+      padX = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+    }
+    const avail = Math.max(200, vw - padX - 8);
+    const cap = clean ? Math.max(1.5, 1.5 * vw / 1920) : 1; // 1.5x Full HD / 3x 4K em tela cheia; 1x normal
+    let z = w1 > 0 ? Math.min(cap, avail / w1) : cap;
+    z = Math.max(0.25, Math.floor(z * 100) / 100);
+    card.style.zoom = String(z);
+  }
+  const topBar = board.querySelector('.tvg-top');
+  if(topBar){
+    topBar.style.setProperty('--tvg-top-sc', 1);
+    if(topBar.scrollWidth > topBar.clientWidth + 2 && topBar.clientWidth > 0){
+      const tsc = Math.max(0.4, Math.floor((topBar.clientWidth - 4) / topBar.scrollWidth * 100) / 100);
+      topBar.style.setProperty('--tvg-top-sc', tsc);
+    }
+  }
+  if(clean && window.scrollY) window.scrollTo(0, 0);
   const top = board.getBoundingClientRect().top + window.scrollY;
-  board.style.height = Math.max(320, window.innerHeight - top - 14) + 'px';
+  const view = board.closest('.view');
+  const padB = view ? (parseFloat(getComputedStyle(view).paddingBottom) || 0) : 0;
+  board.style.height = Math.max(200, window.innerHeight - top - padB - 6) + 'px';
   const cols = Array.from(board.querySelectorAll('.tvg-col'));
   let minSc = 1;
   cols.forEach(col => {
     const list = col.querySelector('.tvg-list');
+    const head = col.querySelector('.tvg-col-head');
     if(!list) return;
-    let sc = 1;
-    col.style.setProperty('--tvg-sc', sc);
-    let guard = 0;
-    while(list.scrollHeight > list.clientHeight + 1 && sc > 0.42 && guard++ < 30){
-      sc = Math.round((sc - 0.03) * 100) / 100;
+    // Cabe quando não há estouro vertical (lista) nem horizontal (lista/cabeçalho)
+    const fits = sc => {
       col.style.setProperty('--tvg-sc', sc);
+      return list.scrollHeight <= list.clientHeight + 1
+          && list.scrollWidth  <= list.clientWidth  + 3
+          && (!head || head.scrollWidth <= head.clientWidth + 3);
+    };
+    let sc = 1;
+    if(!fits(1)){
+      // busca binária: maior escala (até 1) em que tudo cabe, mínimo 0.2
+      let lo = 0.2, hi = 1;
+      for(let i = 0; i < 9; i++){
+        const mid = (lo + hi) / 2;
+        if(fits(mid)) lo = mid; else hi = mid;
+      }
+      sc = Math.floor(lo * 100) / 100;
+      // margem de segurança: garante o encaixe final
+      let guard = 0;
+      while(!fits(sc) && sc > 0.2 && guard++ < 20) sc = Math.round((sc - 0.01) * 100) / 100;
     }
     if(sc < minSc) minSc = sc;
   });
   // Escala uniforme: todas as colunas (nome, pílulas, cards) usam o mesmo tamanho
   cols.forEach(col => col.style.setProperty('--tvg-sc', minSc));
+
+  // Observa o cabeçalho de indicadores (muda de tamanho em tela cheia/zoom) para reajustar
+  if(!window._tvgRO && window.ResizeObserver){
+    window._tvgRO = new ResizeObserver(() => { if(document.getElementById('tvg-board')) _tvgFitSoon(); });
+    const sb = document.getElementById('main-status-bar');
+    if(sb) window._tvgRO.observe(sb);
+  }
 }
 window.addEventListener('resize', () => { if(document.getElementById('tvg-board')) _tvgFitSoon(); });
+if(window.visualViewport){
+  window.visualViewport.addEventListener('resize', () => { if(document.getElementById('tvg-board')) _tvgFitSoon(); });
+}
 
+function _tvgFitBurst(){
+  // A transição de tela cheia leva alguns instantes até o navegador informar o tamanho final
+  [0, 150, 400, 800, 1500].forEach(ms => setTimeout(_tvgFitSoon, ms));
+}
 function _tvgExitClean(){
   document.body.classList.remove('tvg-clean');
   try { if(document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(()=>{}); } catch(e){}
   _tvgUpdateFsBtn();
-  _tvgFitSoon();
+  _tvgFitBurst();
 }
 function tvgToggleFullscreen(){
   if(document.body.classList.contains('tvg-clean')){ _tvgExitClean(); return; }
@@ -3947,7 +4010,7 @@ function tvgToggleFullscreen(){
     if(el.requestFullscreen) el.requestFullscreen().catch(()=>{});
   } catch(e){}
   _tvgUpdateFsBtn();
-  setTimeout(_tvgFitSoon, 150);
+  _tvgFitBurst();
 }
 window.tvgToggleFullscreen = tvgToggleFullscreen;
 function _tvgUpdateFsBtn(){
@@ -3957,7 +4020,7 @@ function _tvgUpdateFsBtn(){
 document.addEventListener('fullscreenchange', () => {
   if(!document.fullscreenElement && document.body.classList.contains('tvg-clean')) document.body.classList.remove('tvg-clean');
   _tvgUpdateFsBtn();
-  setTimeout(_tvgFitSoon, 150);
+  _tvgFitBurst();
 });
 document.addEventListener('keydown', e => {
   if(e.key === 'Escape' && document.body.classList.contains('tvg-clean')) _tvgExitClean();

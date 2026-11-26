@@ -2884,7 +2884,7 @@ a, input, select, textarea, label,
 /* ════ Dashboard: layout GERAL (TV) — Montagem + Limpeza + Complexa ════ */
 .grid.grid-tvg { display: block; }
 .tvg-board { font-size: clamp(11px, .8vw, 32px); display: flex; flex-direction: column; gap: .9em; width: 100%; box-sizing: border-box; min-height: 320px; }
-.tvg-top { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 1.2em; background: rgba(15,19,26,.88); border: 1px solid var(--border2); border-radius: 1em; padding: .6em 1.1em; flex: 0 0 auto; }
+.tvg-top { font-size: calc(1em * var(--tvg-top-sc, 1)); display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 1.2em; background: rgba(15,19,26,.88); border: 1px solid var(--border2); border-radius: 1em; padding: .6em 1.1em; flex: 0 0 auto; overflow: hidden; }
 .tvg-top-left { display: flex; align-items: center; gap: 1.2em; justify-self: start; min-width: 0; }
 .tvg-title { font-weight: 800; letter-spacing: .14em; text-transform: uppercase; font-size: 1.1em; color: #f8fafc; white-space: nowrap; }
 .tvg-clock { font-family: var(--mono); font-weight: 800; font-size: 1.6em; color: var(--accent2); white-space: nowrap; }
@@ -2981,6 +2981,8 @@ body.tvg-clean #dash-toolbar-row { margin-bottom: 12px !important; }
 body.tvg-clean #dash-toolbar-row #sector-tabs { display: none !important; }
 body.tvg-clean #dash-toolbar-row { justify-content: flex-end; }
 body.tvg-clean #view-dashboard { padding: .7vw; }
+/* Em tela cheia a página nunca rola: o quadro se ajusta ao monitor */
+html:has(body.tvg-clean), body.tvg-clean { overflow: hidden !important; height: 100vh; }
 
 /* ── Tela cheia (TV): nitidez e definição ─────────────────────────────── */
 body.tvg-clean .tvg-board,
@@ -3032,3 +3034,8 @@ body.tvg-clean .tvg-col-sub { color: #aab4c3; }
 /* Layout Geral (TV): oculta os cards de resumo originais e aproxima o quadro do seletor de layout */
 body.tvg-on #view-dashboard > .summary-row { display: none !important; }
 body.tvg-on #dash-toolbar-row { margin-bottom: 12px !important; }
+/* Mantém a barra de indicadores em 1 linha única; a escala (zoom) é calculada via JS para nunca cortar */
+body.tvg-on #team-totals-card,
+body.tvg-clean #team-totals-card { width: max-content !important; max-width: none !important; }
+body.tvg-on #team-totals-card > div,
+body.tvg-clean #team-totals-card > div { flex-wrap: nowrap !important; }
