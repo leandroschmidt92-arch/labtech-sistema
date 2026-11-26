@@ -82,17 +82,52 @@ function pendNormModelo(modelo) {
 }
 
 function pendIsListaDetalhada(tableName) {
+  // "Maior dias" é uma extensão da lista detalhada: sempre implica detalhada.
+  if (pendIsMaiorDias(tableName)) return true;
   try {
     const o = JSON.parse(localStorage.getItem('fluxolabPendListaDetalhada') || '{}');
     return !!o[tableName];
   } catch (e) { return false; }
 }
 
+// ── Modo "Maior dias" ──────────────────────────────────────────────────────
+// Lista TODOS os checklists (um por linha, sem agrupar modelos repetidos),
+// ordenados apenas por Dias em Aberto (maior → menor).
+function pendIsMaiorDias(tableName) {
+  try {
+    const o = JSON.parse(localStorage.getItem('fluxolabPendMaiorDias') || '{}');
+    return !!o[tableName];
+  } catch (e) { return false; }
+}
+
+function pendToggleMaiorDias(tableName, checked) {
+  try {
+    const o = JSON.parse(localStorage.getItem('fluxolabPendMaiorDias') || '{}');
+    o[tableName] = !!checked;
+    localStorage.setItem('fluxolabPendMaiorDias', JSON.stringify(o));
+    if (checked) {
+      // Garante que a lista detalhada também fique marcada ao desligar o "Maior dias" depois.
+      const d = JSON.parse(localStorage.getItem('fluxolabPendListaDetalhada') || '{}');
+      d[tableName] = true;
+      localStorage.setItem('fluxolabPendListaDetalhada', JSON.stringify(d));
+    }
+  } catch (e) {}
+  _pendExpandedRows[tableName] = new Set();
+  fluxolabRenderPendencias();
+  pendSaveViewStateDebounced();
+}
+window.pendToggleMaiorDias = pendToggleMaiorDias;
+
 function pendToggleListaDetalhada(tableName, checked) {
   try {
     const o = JSON.parse(localStorage.getItem('fluxolabPendListaDetalhada') || '{}');
     o[tableName] = !!checked;
     localStorage.setItem('fluxolabPendListaDetalhada', JSON.stringify(o));
+    if (!checked) {
+      // Desmarcar a lista detalhada também desliga o "Maior dias".
+      const m = JSON.parse(localStorage.getItem('fluxolabPendMaiorDias') || '{}');
+      if (m[tableName]) { m[tableName] = false; localStorage.setItem('fluxolabPendMaiorDias', JSON.stringify(m)); }
+    }
   } catch (e) {}
   _pendExpandedRows[tableName] = new Set();
   fluxolabRenderPendencias();
@@ -251,6 +286,23 @@ function pendAcessorioBadgeHtml() {
 }
 
 function pendSortFilledByPedido(filled, tableName) {
+  // ── Modo "Maior dias": ordem estrita por Dias em Aberto (maior → menor) ──
+  // Cada checklist é uma linha independente; urgência e Pedido não interferem.
+  if (pendIsMaiorDias(tableName)) {
+    const abertoOf = d => d.itemStats ? d.itemStats.diasAberto : (d.stats ? (d.stats.maxAberto || 0) : 0);
+    const uteisOf  = d => d.itemStats ? d.itemStats.diasUteis  : (d.stats ? (d.stats.maxDiasUteis || d.stats.media || 0) : 0);
+    filled.sort((a, b) => {
+      const diff = abertoOf(b) - abertoOf(a);
+      if (diff !== 0) return diff;
+      const uDiff = uteisOf(b) - uteisOf(a);
+      if (uDiff !== 0) return uDiff;
+      const pedCmp = pendComparePedido(pendGetDispPedido(a), pendGetDispPedido(b));
+      if (pedCmp !== 0) return pedCmp;
+      return (a.stateIdx - b.stateIdx) || ((a.chkSeq || 0) - (b.chkSeq || 0));
+    });
+    return;
+  }
+
   const activeCol = _pendActiveSortCol[tableName] || 'media';
   const hasMetricSort = activeCol === 'diasab'
     ? !!_pendAbertoSortDir[tableName]
@@ -331,10 +383,11 @@ function pendGetSortedChecklistIndicesByAberto(stats, dir) {
 }
 
 function pendPushDetailedChecklists(display, row, idx, stats, tableName) {
-  const activeCol = _pendActiveSortCol[tableName] || 'media';
-  const sortDir = activeCol === 'diasab'
+  const maiorDias = pendIsMaiorDias(tableName);
+  const activeCol = maiorDias ? 'diasab' : (_pendActiveSortCol[tableName] || 'media');
+  const sortDir = maiorDias ? 'desc' : (activeCol === 'diasab'
     ? ((_pendAbertoSortDir[tableName] === 'asc') ? 'asc' : 'desc')
-    : ((_pendMediaSortDir[tableName] === 'asc') ? 'asc' : 'desc');
+    : ((_pendMediaSortDir[tableName] === 'asc') ? 'asc' : 'desc'));
   const sortedIdx = activeCol === 'diasab'
     ? pendGetSortedChecklistIndicesByAberto(stats, sortDir)
     : pendGetSortedChecklistIndices(stats, sortDir);
@@ -451,10 +504,13 @@ function pendTrimRows(tableName, keepIndex) {
 /** Retorna o estado atual de UI (ordenação, colunas, lista detalhada) */
 function pendGetViewState() {
   let listaDetalhada = {};
+  let maiorDias = {};
   try { listaDetalhada = JSON.parse(localStorage.getItem('fluxolabPendListaDetalhada') || '{}'); } catch(e) {}
+  try { maiorDias = JSON.parse(localStorage.getItem('fluxolabPendMaiorDias') || '{}'); } catch(e) {}
   return {
     hiddenCols: pendGetHiddenCols(),
     listaDetalhada: listaDetalhada,
+    maiorDias: maiorDias,
     colSizes: pendGetSavedSizes(),
     sortState: {
       mistas: {
@@ -506,6 +562,19 @@ function pendApplyViewState(state, opts) {
       if (JSON.stringify(cur) !== next) {
         localStorage.setItem('fluxolabPendListaDetalhada', next);
         // Limpa expansões abertas para evitar estado inconsistente
+        Object.keys(PEND_ROW_MIN).forEach(t => { _pendExpandedRows[t] = new Set(); });
+        changed = true;
+      }
+    } catch(e) {}
+  }
+
+  if (state.maiorDias) {
+    try {
+      let cur = {};
+      try { cur = JSON.parse(localStorage.getItem('fluxolabPendMaiorDias') || '{}'); } catch(e2) {}
+      const next = JSON.stringify(state.maiorDias);
+      if (JSON.stringify(cur) !== next) {
+        localStorage.setItem('fluxolabPendMaiorDias', next);
         Object.keys(PEND_ROW_MIN).forEach(t => { _pendExpandedRows[t] = new Set(); });
         changed = true;
       }
@@ -1578,6 +1647,7 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
 
   const displayList = pendBuildDisplayRows(tableName, rows);
   const listaDetalhada = pendIsListaDetalhada(tableName);
+  const maiorDias = pendIsMaiorDias(tableName);
   const regCount = displayList.filter(d => d.row.modelo).length;
 
   let html = `
@@ -1591,6 +1661,10 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
               ${title}
               <span style="font-size:10px;color:var(--muted);font-weight:700;margin-left:8px;text-transform:none;letter-spacing:normal">(${regCount} ${listaDetalhada ? 'linhas' : 'registros'})</span>
               <span id="pnd-${tableName}-chk-total" style="position:absolute;left:14px;top:50%;transform:translateY(-50%);background:rgba(74,222,128,0.12);color:#4ade80;border:1px solid rgba(74,222,128,0.35);border-radius:6px;padding:5px 12px;font-size:11px;font-weight:800;letter-spacing:0.04em;text-transform:none;text-shadow:none">Total Checklists: ${totalChk}</span>
+              <label title="Mostra todos os checklists, um por linha (sem agrupar modelos iguais), ordenados por Dias em Aberto do maior para o menor" style="position:absolute;right:330px;top:10px;z-index:55;display:inline-flex;align-items:center;gap:6px;background:var(--bg3);border:1px solid ${maiorDias ? 'rgba(248,113,113,.55)' : 'var(--border2)'};border-radius:6px;padding:4px 10px;font-size:10px;font-weight:800;color:${maiorDias ? '#f87171' : 'var(--muted)'};cursor:pointer;text-transform:uppercase;letter-spacing:0.04em;user-select:none">
+                <input type="checkbox" ${maiorDias ? 'checked' : ''} onchange="pendToggleMaiorDias('${tableName}', this.checked)" style="width:13px;height:13px;accent-color:#f87171;cursor:pointer" />
+                Maior dias
+              </label>
               <label style="position:absolute;right:168px;top:10px;z-index:55;display:inline-flex;align-items:center;gap:6px;background:var(--bg3);border:1px solid ${listaDetalhada ? 'rgba(79,142,247,.5)' : 'var(--border2)'};border-radius:6px;padding:4px 10px;font-size:10px;font-weight:800;color:${listaDetalhada ? 'var(--accent)' : 'var(--muted)'};cursor:pointer;text-transform:uppercase;letter-spacing:0.04em;user-select:none">
                 <input type="checkbox" ${listaDetalhada ? 'checked' : ''} onchange="pendToggleListaDetalhada('${tableName}', this.checked)" style="width:13px;height:13px;accent-color:var(--accent);cursor:pointer" />
                 Ver lista detalhada
@@ -1630,7 +1704,7 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
     const pedAtual = isFilled ? (pendGetDispPedido(disp) || pendGetRowPedido(row)) : '';
     const pedAnterior = lastFilledPedido;
     if (isFilled) lastFilledPedido = pedAtual;
-    const pedGroupBorder = (pedAtual && pedAnterior && pendNormPedido(pedAtual) !== pendNormPedido(pedAnterior))
+    const pedGroupBorder = (!maiorDias && pedAtual && pedAnterior && pendNormPedido(pedAtual) !== pendNormPedido(pedAnterior))
       ? 'border-top:2px solid rgba(79,142,247,.45);' : '';
     const _urgTrocaPend = urgCor === 'laranja';
     const rowBg = dispIdx % 2 === 0 ? 'rgba(255,255,255,0.015)' : 'transparent';

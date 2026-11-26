@@ -1,4 +1,4 @@
-// ════════════════════════════════════════════════════════════════
+﻿// ════════════════════════════════════════════════════════════════
 // PENDÊNCIAS MISTAS — VISUALIZAÇÃO PARA OPERADOR
 // ────────────────────────────────────────────────────────────────
 // • Botão flutuante (ícone 🧩) na tela do operador — abre modal read-only
@@ -155,7 +155,7 @@
     });
     body.querySelectorAll('.pend-row-del-btn').forEach(function(b){ b.style.display = 'none'; });
     body.querySelectorAll('label').forEach(function(lbl) {
-      if ((lbl.textContent || '').toLowerCase().includes('lista detalhada')) lbl.style.display = 'none';
+      if ((lbl.textContent || '').toLowerCase().includes('lista detalhada') || (lbl.textContent || '').toLowerCase().includes('maior dias')) lbl.style.display = 'none';
     });
   }
 
