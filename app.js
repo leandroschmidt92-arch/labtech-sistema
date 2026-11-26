@@ -3914,7 +3914,9 @@ function _tvgFitAll(){
   if(!board || !board.offsetParent) return;
   const top = board.getBoundingClientRect().top + window.scrollY;
   board.style.height = Math.max(320, window.innerHeight - top - 14) + 'px';
-  board.querySelectorAll('.tvg-col').forEach(col => {
+  const cols = Array.from(board.querySelectorAll('.tvg-col'));
+  let minSc = 1;
+  cols.forEach(col => {
     const list = col.querySelector('.tvg-list');
     if(!list) return;
     let sc = 1;
@@ -3924,7 +3926,10 @@ function _tvgFitAll(){
       sc = Math.round((sc - 0.03) * 100) / 100;
       col.style.setProperty('--tvg-sc', sc);
     }
+    if(sc < minSc) minSc = sc;
   });
+  // Escala uniforme: todas as colunas (nome, pílulas, cards) usam o mesmo tamanho
+  cols.forEach(col => col.style.setProperty('--tvg-sc', minSc));
 }
 window.addEventListener('resize', () => { if(document.getElementById('tvg-board')) _tvgFitSoon(); });
 
