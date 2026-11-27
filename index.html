@@ -1182,36 +1182,35 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
 
   <!-- ── DASHBOARD ── -->
   <div class="view active" id="view-dashboard">
-    <div class="summary-row">
-      <div class="sum-card c-run clickable" onclick="setView('consulta',document.getElementById('tab-consulta'))" title="Ver em andamento na Consulta">
-        <div class="slbl">Em andamento</div>
-        <div class="sval" id="s-run" style="color:var(--accent2)">0</div>
-      </div>
-      <div class="sum-card c-done clickable" style="display:none" onclick="setView('consulta',document.getElementById('tab-consulta'))" title="Ver finalizados na Consulta">
-        <div class="slbl">Finalizados hoje</div>
-        <div class="sval" id="s-done" style="color:var(--accent)">0</div>
-      </div>
-      <div class="sum-card c-rep clickable" onclick="setView('relatorios',document.getElementById('tab-relatorios'));setTimeout(()=>setRelSubTab('reprov'),120)" title="Ver reprovadas nos Relatórios">
-        <div class="slbl">Reprovadas hoje</div>
-        <div class="sval" id="s-rep" style="color:var(--danger)">0</div>
-      </div>
-      <div class="sum-card c-scrap clickable" onclick="setView('relatorios',document.getElementById('tab-relatorios'));setTimeout(()=>setRelSubTab('scrap'),120)" title="Ver SCRAP nos Relatórios">
-        <div class="slbl">SCRAP hoje</div>
-        <div class="sval" id="s-scrap" style="color:var(--purple)">0</div>
-      </div>
-      <div class="sum-card c-peça clickable" onclick="setView('pecas',document.getElementById('tab-pecas'))" title="Ver SELBs aguardando peça">
-        <div class="slbl">Aguard. Peça</div>
-        <div class="sval" id="s-peça" style="color:var(--warn)">0</div>
-      </div>
-    </div>
-
-    <!-- ── LINHA: ABAS DE SETOR ── -->
+    <!-- ── LINHA: ABAS DE SETOR + BADGES DE RESUMO + LAYOUT ── -->
     <div id="dash-toolbar-row" style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:24px;flex-wrap:wrap">
       <div class="stabs" id="sector-tabs" style="margin:0;flex-shrink:0">
         <button class="stab a-mont" onclick="setSector('MONTAGEM',this)">Montagem</button>
         <button class="stab" onclick="setSector('LIMPEZA',this)">Limpeza</button>
         <button class="stab" onclick="setSector('COMPLEXA',this)">Complexa</button>
         <button class="stab" onclick="setSector('ELETRÔNICA',this)">Eletrônica</button>
+      </div>
+      <div class="summary-row">
+        <div class="sum-card c-run clickable" onclick="setView('consulta',document.getElementById('tab-consulta'))" title="Ver em andamento na Consulta">
+          <div class="slbl">Em andamento</div>
+          <div class="sval" id="s-run" style="color:var(--accent2)">0</div>
+        </div>
+        <div class="sum-card c-done clickable" style="display:none" onclick="setView('consulta',document.getElementById('tab-consulta'))" title="Ver finalizados na Consulta">
+          <div class="slbl">Finalizados hoje</div>
+          <div class="sval" id="s-done" style="color:var(--accent)">0</div>
+        </div>
+        <div class="sum-card c-rep clickable" onclick="setView('relatorios',document.getElementById('tab-relatorios'));setTimeout(()=>setRelSubTab('reprov'),120)" title="Ver reprovadas nos Relatórios">
+          <div class="slbl">Reprovadas hoje</div>
+          <div class="sval" id="s-rep" style="color:var(--danger)">0</div>
+        </div>
+        <div class="sum-card c-scrap clickable" onclick="setView('relatorios',document.getElementById('tab-relatorios'));setTimeout(()=>setRelSubTab('scrap'),120)" title="Ver SCRAP nos Relatórios">
+          <div class="slbl">SCRAP hoje</div>
+          <div class="sval" id="s-scrap" style="color:var(--purple)">0</div>
+        </div>
+        <div class="sum-card c-peça clickable" onclick="setView('pecas',document.getElementById('tab-pecas'))" title="Ver SELBs aguardando peça">
+          <div class="slbl">Aguard. Peça</div>
+          <div class="sval" id="s-peça" style="color:var(--warn)">0</div>
+        </div>
       </div>
       <div class="layout-toggle" id="card-layout-toggle" title="Alternar o layout dos cards">
         <span class="layout-toggle-lbl">Layout</span>

@@ -2971,7 +2971,7 @@ a, input, select, textarea, label,
 body.tvg-clean .topbar,
 body.tvg-clean #status-bar-clock,
 body.tvg-clean #selb-alert-panel,
-body.tvg-clean #view-dashboard > .summary-row { display: none !important; }
+body.tvg-clean #view-dashboard .summary-row { display: none !important; }
 /* A barra de indicadores é "sticky" a 72px do topo (para ficar abaixo da navegação).
    Sem a navegação, cola no topo da tela e remove o vão preto. */
 /* Indicadores do topo maiores na tela cheia (TV) */
@@ -3032,10 +3032,47 @@ body.tvg-clean .tvg-col-sub { color: #aab4c3; }
 [data-theme="light"] .tvg-machine { color: #394258; }
 
 /* Layout Geral (TV): oculta os cards de resumo originais e aproxima o quadro do seletor de layout */
-body.tvg-on #view-dashboard > .summary-row { display: none !important; }
+body.tvg-on #view-dashboard .summary-row { display: none !important; }
 body.tvg-on #dash-toolbar-row { margin-bottom: 12px !important; }
 /* Mantém a barra de indicadores em 1 linha única; a escala (zoom) é calculada via JS para nunca cortar */
 body.tvg-on #team-totals-card,
 body.tvg-clean #team-totals-card { width: max-content !important; max-width: none !important; }
 body.tvg-on #team-totals-card > div,
 body.tvg-clean #team-totals-card > div { flex-wrap: nowrap !important; }
+
+/* ── Badges de resumo compactos entre Eletrônica (#sector-tabs) e Layout (#card-layout-toggle) ── */
+#dash-toolbar-row .summary-row {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 10px !important;
+  margin: 0 auto;
+  flex-wrap: wrap;
+}
+#dash-toolbar-row .sum-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px 6px 16px !important;
+  border-radius: 12px;
+  min-height: 36px;
+}
+#dash-toolbar-row .sum-card:hover {
+  transform: translateY(-2px);
+}
+#dash-toolbar-row .sum-card::before {
+  width: 3.5px;
+}
+#dash-toolbar-row .sum-card .slbl {
+  font-size: 10px !important;
+  margin-bottom: 0;
+  white-space: nowrap;
+  letter-spacing: 0.08em;
+}
+#dash-toolbar-row .sum-card .sval {
+  font-size: 17px !important;
+  line-height: 1;
+}
+#dash-toolbar-row .layout-toggle {
+  margin-left: 0;
+}
