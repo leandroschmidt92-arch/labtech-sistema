@@ -2996,8 +2996,12 @@ input[type=checkbox].sol-check:checked::after{content:'✓';position:absolute;in
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button class="btn-add" onclick="openNewEquip()">+ Novo SELB</button>
         <label id="equip-import-label" onclick="window._equipTargetSlot=null" style="background:var(--bg3);color:var(--text);border:1px solid var(--border2);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer">
-          <span id="equip-import-btn-text">📂 Importar planilha</span>
+          <span id="equip-import-btn-text">📂 Substituir planilha</span>
           <input type="file" id="equip-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importEquipFile(this)">
+        </label>
+        <label style="background:rgba(79,142,247,.12);color:var(--accent);border:1px solid rgba(79,142,247,.35);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 16px;cursor:pointer" title="Importa planilha do BI (colunas: Selb, Produto, Serie, Código Produto). O Unitizador é preenchido automaticamente com o próprio SELB.">
+          🔗 Importar do BI
+          <input type="file" id="equip-bi-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importEquipBI(this)">
         </label>
         <button onclick="clearEquipamentos()" style="background:rgba(242,87,87,.12);border:1px solid rgba(242,87,87,.3);border-radius:9px;font-family:var(--font);font-size:12px;font-weight:600;padding:8px 14px;cursor:pointer;color:var(--danger)">🗑️ Limpar tudo</button>
       </div>

@@ -17265,6 +17265,223 @@ async function importEquipFile(input){
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// IMPORTAR DO BI — Planilha com colunas: Selb, Produto, Serie,
+// Código Produto (SKU). Como NÃO tem coluna Unitizador, o campo
+// unitizador é preenchido automaticamente com o próprio SELB.
+// ═══════════════════════════════════════════════════════════════
+async function importEquipBI(input){
+  if(!currentUser || (!currentUser.isAdmin && currentUser.sector !== 'PCP')){
+    alert('Apenas o administrador ou o setor PCP podem importar a planilha do BI.');
+    input.value = '';
+    return;
+  }
+  const file = input.files[0];
+  if(!file){ return; }
+
+  await loadEquipamentos();
+  const currentSlots = _equipGetSlotsMeta();
+
+  // Escolha do slot — mesma lógica do importEquipFile
+  let targetSlot = null;
+  if(!currentSlots[1]) targetSlot = 1;
+  else if(!currentSlots[2]) targetSlot = 2;
+  else if(!currentSlots[3]) targetSlot = 3;
+  else {
+    const desc = [1,2,3].map(s => {
+      const m = currentSlots[s];
+      const d = (m && m.ts) ? (new Date(m.ts).toLocaleDateString('pt-BR') + ' às ' + new Date(m.ts).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})) : '';
+      const fn = (m && m.fileName) ? ` (${m.fileName})` : '';
+      return `[${s}] Planilha ${s}${fn} — ${m ? m.count : 0} equip. (${d})`;
+    }).join('\n');
+    const resp = prompt(
+      'As 3 posições de planilha já estão ocupadas:\n\n' + desc +
+      '\n\nDigite o número da planilha que deseja SUBSTITUIR (1, 2 ou 3):',
+      '1'
+    );
+    if(!resp){ input.value = ''; return; }
+    const chosen = parseInt(resp.trim(), 10);
+    if(![1,2,3].includes(chosen)){
+      alert('Opção inválida. Digite 1, 2 ou 3.');
+      input.value = ''; return;
+    }
+    targetSlot = chosen;
+  }
+
+  const ext = file.name.split('.').pop().toLowerCase();
+  showLoader(`Importando do BI — Planilha ${targetSlot} (${file.name})...`);
+  try {
+    let rows = [];
+    if(ext === 'csv') rows = await parseCSV(file);
+    else              rows = await parseXLSX(file);
+
+    if(!rows.length){
+      hideLoader(); input.value = '';
+      showError('Nenhum dado encontrado na planilha do BI.');
+      return;
+    }
+
+    const allHeaders = Object.keys(rows[0]);
+
+    // Detecta colunas: Selb, Produto, Serie, Código Produto
+    function findColBI(exactList, partials){
+      for(const p of exactList){
+        const f = allHeaders.find(h => h.trim().toLowerCase() === p.toLowerCase());
+        if(f) return f;
+      }
+      for(const p of partials){
+        const f = allHeaders.find(h => h.trim().toUpperCase().includes(p.toUpperCase()));
+        if(f) return f;
+      }
+      return null;
+    }
+
+    const selbCol  = findColBI(['Selb','SELB','selb'],                    ['SELB','COD']);
+    const nomeCol  = findColBI(['Produto','PRODUTO','produto','Modelo'],   ['PRODUTO','MODELO','EQUIP','NOME']);
+    const serieCol = findColBI(['Serie','SERIE','série','Série','Atributos'], ['SERIE','SERIAL','S/N','NSR','ATRIB']);
+    const skuCol   = findColBI(['Código Produto','Codigo Produto','CÓDIGO PRODUTO','CODIGO PRODUTO','SKU'], ['CODIGO','SKU','PART']);
+
+    if(!selbCol || !nomeCol){
+      hideLoader(); input.value = '';
+      alert(
+        'Colunas não encontradas na planilha do BI.\n\n' +
+        'Colunas detectadas: ' + allHeaders.join(', ') + '\n\n' +
+        'Necessário:\n' +
+        '  • Coluna SELB  → encontrado: ' + (selbCol  || 'NÃO ENCONTRADO') + '\n' +
+        '  • Coluna Produto → encontrado: ' + (nomeCol || 'NÃO ENCONTRADO')
+      );
+      return;
+    }
+
+    let count = 0;
+    const batch              = {};
+    const seriesBatch        = {};
+    const skusBatch          = {};
+    const unitizadoresBatch  = {};
+
+    rows.forEach(row => {
+      const selb  = String(row[selbCol]  || '').trim().toUpperCase();
+      const nome  = String(row[nomeCol]  || '').trim();
+      const serie = serieCol ? String(row[serieCol] || '').trim() : '';
+      const sku   = skuCol   ? String(row[skuCol]   || '').trim() : '';
+
+      if(selb && nome){
+        batch[selb] = nome;
+        // Unitizador = o próprio SELB (planilha do BI não tem essa coluna)
+        unitizadoresBatch[selb] = selb;
+        if(serie) seriesBatch[selb] = serie;
+        if(sku)   skusBatch[selb]   = sku;
+        count++;
+      }
+    });
+
+    if(!count){
+      hideLoader(); input.value = '';
+      alert('Nenhuma linha válida encontrada na planilha do BI.\nVerifique as colunas "' + selbCol + '" e "' + nomeCol + '".');
+      return;
+    }
+
+    // Remove equipamentos do slot alvo (preserva demais slots e manuais dentro da carência)
+    const _eqAntes = await _equipFetchAll('equipamentos', 'id, nome:raw->>nome, manual:raw->>manual, criadoEm:raw->>criadoEm, slot:raw->>slot');
+    const _idsApagar = [];
+    (_eqAntes || []).forEach(e => {
+      if(batch[e.id]) return;
+      const isManual = (e.manual === 'true' || e.manual === true);
+      if(isManual){
+        const cr = parseInt(e.criadoEm, 10);
+        if(!cr || (Date.now() - cr) >= EQUIP_MANUAL_GRACE_MS) _idsApagar.push(e.id);
+        return;
+      }
+      const rowSlot = (parseInt(e.slot, 10) >= 1 && parseInt(e.slot, 10) <= 3) ? parseInt(e.slot, 10) : 1;
+      if(rowSlot === targetSlot) _idsApagar.push(e.id);
+    });
+
+    if(_idsApagar.length > 0){
+      await Promise.all([
+        _equipDeleteIdsInChunks('equipamentos',           _idsApagar),
+        _equipDeleteIdsInChunks('equipamentos_series',    _idsApagar),
+        _equipDeleteIdsInChunks('equipamentos_skus',      _idsApagar),
+        _equipDeleteIdsInChunks('equipamentos_unitizadores', _idsApagar)
+      ]);
+      _idsApagar.forEach(id => {
+        delete equipamentos[id];
+        delete _equipSlots[id];
+        delete _equipManualInfo[id];
+        delete _equipSeries[id];
+        delete _equipSkus[id];
+        delete _equipUnitizadores[id];
+      });
+    }
+
+    // Upsert equipamentos principais
+    const eqRows = Object.entries(batch).map(([id, nome]) => ({
+      id,
+      nome: String(nome),
+      raw: { nome: String(nome), slot: targetSlot }
+    }));
+    await _supa.from('equipamentos').upsert(eqRows);
+    Object.entries(batch).forEach(([id, nome]) => {
+      equipamentos[id] = nome;
+      _equipSlots[id]  = targetSlot;
+      delete _equipManualInfo[id];
+    });
+
+    // Upsert séries
+    if(Object.keys(seriesBatch).length > 0){
+      const srRows = Object.entries(seriesBatch).map(([id, v]) => ({ id, raw: { serie: v } }));
+      await _supa.from('equipamentos_series').upsert(srRows);
+      Object.assign(_equipSeries, seriesBatch);
+    }
+
+    // Upsert SKUs (Código Produto)
+    if(Object.keys(skusBatch).length > 0){
+      const skRows = Object.entries(skusBatch).map(([id, v]) => ({ id, raw: { sku: v } }));
+      await _supa.from('equipamentos_skus').upsert(skRows);
+      Object.assign(_equipSkus, skusBatch);
+    }
+
+    // Upsert unitizadores (= SELB)
+    if(Object.keys(unitizadoresBatch).length > 0){
+      const unRows = Object.entries(unitizadoresBatch).map(([id, v]) => ({ id, raw: { unitizador: v } }));
+      await _supa.from('equipamentos_unitizadores').upsert(unRows);
+      Object.assign(_equipUnitizadores, unitizadoresBatch);
+    }
+
+    hideLoader();
+    input.value = '';
+
+    const nowTs = Date.now();
+    const userName = (currentUser && (currentUser.name || currentUser.email)) || 'admin';
+    const updatedSlots = _equipGetSlotsMeta();
+    updatedSlots[targetSlot] = {
+      ts: nowTs,
+      user: userName,
+      count: Object.keys(equipamentos).filter(k => !_equipManualInfo[k] && (_equipSlots[k] || 1) === targetSlot).length,
+      fileName: file.name || `BI Planilha ${targetSlot}`
+    };
+    const _equipImportAt = _equipBuildImportAtPayload(nowTs, updatedSlots);
+    await _supa.from('app_config').upsert({ key: 'equip_import_at', value: _equipImportAt }, { onConflict: 'key' });
+    _equipSaveToLocalCache(_equipImportAt.ts, _equipImportAt);
+    _equipUpdateImportBadge();
+    renderEquipTable();
+
+    const serieMsg = serieCol ? '\nColuna Série: "' + serieCol + '" — ' + Object.keys(seriesBatch).length + ' séries importadas' : '\n⚠️ Coluna de série não encontrada';
+    const skuMsg   = skuCol   ? '\nCódigo Produto (SKU): "' + skuCol + '" — ' + Object.keys(skusBatch).length + ' códigos importados' : '\n⚠️ Coluna de código de produto não encontrada';
+    alert(
+      `✅ Planilha ${targetSlot} do BI ("${file.name}") importada com ${count} equipamentos!\n` +
+      `📊 Total acumulado no sistema: ${Object.keys(equipamentos).length} equipamentos.\n\n` +
+      'Coluna SELB: "' + selbCol + '"\nColuna Produto: "' + nomeCol + '"' +
+      serieMsg + skuMsg +
+      '\n🔗 Unitizador: preenchido automaticamente com o SELB'
+    );
+    if(typeof _fluxolabRenderGrid === 'function') try { _fluxolabRenderGrid(); } catch(e) {}
+  } catch(e){
+    hideLoader();
+    input.value = '';
+    showError('Erro ao importar do BI: ' + e.message);
+  }
+}
+
 async function parseCSV(file){
   return new Promise((res, rej) => {
     const reader = new FileReader();
