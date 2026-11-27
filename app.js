@@ -5937,6 +5937,7 @@ async function confirmarFin(){
     fluxolabFinalizarSelb(selbParaMover, u.sector, res, destinoEscolhido || null, {
       motivo: motivo || comentario,
       solicitacaoPecas,
+      user: u,
     }).catch(e => console.warn('[FluxoLAB] Erro ao mover SELB no FluxoLAB:', e));
   }
 
@@ -26605,7 +26606,12 @@ const FLUXOLAB_ORDEM_PADRAO = [
 // Usado como fallback quando não há escolha explícita do usuário (ver fluxolabOpcoesDestino).
 // Retorna null se o SELB é removido do FluxoLAB.
 // Retorna '__MANTER__' se o SELB deve permanecer no bolsão atual (sem mover).
-function _fluxolabDestinoFinal(sector, res){
+function _fluxolabIsLinha6Ou7(u){
+  const l = String((u && u.linha) || '').trim().toUpperCase();
+  return l === 'LINHA_6' || l === 'LINHA_7' || l === 'LINHA 6' || l === 'LINHA 7' || l === '6' || l === '7';
+}
+
+function _fluxolabDestinoFinal(sector, res, u){
   if(res === 'scrap'){
     // DESMEMBRAMENTO registra scrap direto — SELB sai de todos os bolsões sem entrar em nenhum
     if(sector === 'DESMEMBRAMENTO') return null;
@@ -26614,7 +26620,13 @@ function _fluxolabDestinoFinal(sector, res){
   if(res === 'aguardando') return 'GAIOLA_AG_PECAS'; // fallback — normalmente há escolha explícita (ver fluxolabOpcoesDestino)
   if(res !== 'ok')    return null; // rep, cancelado, etc — apenas remove
   if(sector === 'LIMPEZA')    return '__MANTER__'; // permanece na própria linha até a Montagem iniciar
-  if(sector === 'MONTAGEM')   return 'QUALIDADE';
+  if(sector === 'MONTAGEM'){
+    const usr = u
+      || (typeof actionUid !== 'undefined' && actionUid && typeof users !== 'undefined' ? users.find(x => x.id === actionUid) : null)
+      || (typeof currentUser !== 'undefined' ? currentUser : null);
+    if(_fluxolabIsLinha6Ou7(usr)) return 'GAIOLA_LAB';
+    return 'QUALIDADE';
+  }
   if(sector === 'COMPLEXA')   return 'QUALIDADE';
   if(sector === 'ELETRÔNICA') return 'QUALIDADE';
   if(sector === 'QUALIDADE')  return 'LIBERADAS';
@@ -26918,9 +26930,9 @@ function _fmovBuildDestList() {
   const container = document.getElementById('fmov-dest-list');
   if (!container || container.dataset.built === '1') return;
   container.dataset.built = '1';
-  // Liberadas e Scrap são destinos automáticos (definidos pela finalização),
-  // por isso não aparecem como opção manual de movimentação.
-  const _destinosManuais = FLUXOLAB_BOLSOES.filter(b => b.key !== 'LIBERADAS' && b.key !== 'SCRAP');
+  // Liberadas é destino automático (definido pela finalização na Qualidade);
+  // Scrap fica disponível para movimentação manual.
+  const _destinosManuais = FLUXOLAB_BOLSOES.filter(b => b.key !== 'LIBERADAS');
   container.innerHTML = _destinosManuais.map(b =>
     '<label class="fmov-dest-item" style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:9px;border:1px solid var(--border);cursor:pointer;transition:all .12s;background:var(--bg3)"' +
     ' onmouseover="if(!this.querySelector(\'input\').checked){this.style.borderColor=\'' + b.border + '\';this.style.background=\'' + b.bg + '\'}"' +
@@ -27997,7 +28009,8 @@ async function fluxolabFinalizarSelb(selbCode, sector, res, destinoOverride, det
       return;
     }
 
-    const dest = destinoOverride || _fluxolabDestinoFinal(sector, res);
+    const usrFin = (detalhesFinalizacao && detalhesFinalizacao.user) || (typeof currentUser !== 'undefined' ? currentUser : null);
+    const dest = destinoOverride || _fluxolabDestinoFinal(sector, res, usrFin);
     // Descobre bolsão atual para log
     const bolsaoAtual = _fmovGetBolsaoAtual ? _fmovGetBolsaoAtual(selbCode) : '—';
     const equipNome = (typeof getEquipName === 'function' ? getEquipName(selbCode) : '') || '';
@@ -28027,8 +28040,8 @@ async function fluxolabFinalizarSelb(selbCode, sector, res, destinoOverride, det
     }
     await fluxolabMoveSelbAtomic(selbCode, dest, {
       selb:        selbCode,
-      uid:         currentUser ? currentUser.id : '',
-      userName:    currentUser ? currentUser.name : '',
+      uid:         (usrFin && usrFin.id) || (currentUser ? currentUser.id : ''),
+      userName:    (usrFin && usrFin.name) || (currentUser ? currentUser.name : ''),
       sector:      sector || '',
       equipamento: equipNome,
       ts:          Date.now(),

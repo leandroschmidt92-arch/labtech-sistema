@@ -34,6 +34,7 @@ const PEND_FIELDS = ['modelo', 'qtd_wms', 'sugestao', 'obs', 'pecas'];
 
 // ─── Definição das colunas (largura, largura mínima e possibilidade de ocultar) ───
 const PEND_COL_DEFS = [
+  { k: 'del',      label: 'Excluir linha', rz: 'del', w: '44px', min: '40px' },
   { k: 'ord',      label: 'Ord',        rz: 'ord',    w: '50px',  min: '40px' },
   { k: 'lote',     label: 'Lote',       rz: 'lote',   w: '50px',  min: '40px' },
   { k: 'modelo',   label: 'Modelo',     rz: 'mod',    w: '340px', min: '120px' },
@@ -47,7 +48,6 @@ const PEND_COL_DEFS = [
   { k: 'bolsao',   label: 'Bolsão',     rz: 'bolsao', w: '160px', min: '60px' },
   { k: 'obs',      label: 'Observação', rz: 'obs',    w: '180px', min: '70px' },
   { k: 'pecas',    label: 'Peças',      rz: 'pecas',  w: '180px', min: '70px' },
-  { k: 'del',      label: 'Excluir linha', rz: 'del', w: '44px', min: '40px' },
 ];
 
 let _pendColMenuOpen = {};
@@ -1642,7 +1642,7 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
   // table-layout:fixed => a largura definida no cabeçalho MANDA na coluna
   // (o conteúdo do Bolsão quebra a linha em vez de esticar a tabela).
   const tableStyle = `width:${totalW}px;table-layout:fixed;border-collapse:separate;border-spacing:0;font-family:var(--font);font-size:14px;text-align:center;border-radius:12px;overflow:hidden;background:rgba(0,0,0,0.2);border:1px solid var(--border2);box-shadow:0 8px 32px rgba(0,0,0,0.3)`;
-  const thStyle = 'border-bottom:1px solid var(--border2);border-right:1px solid var(--border2);padding:0;font-weight:800;vertical-align:middle;background:rgba(0,0,0,0.4);overflow:visible';
+  const thStyle = 'border-bottom:1px solid var(--border2);border-right:1px solid var(--border2);padding:0;font-weight:800;vertical-align:middle;background:#0b0e16;overflow:visible';
   const tdStyle = 'border-bottom:1px solid var(--border2);border-right:1px solid var(--border2);padding:0;vertical-align:middle;overflow:hidden';
   const tdLastStyle = tdStyle;
 
@@ -1706,9 +1706,9 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
     <div style="margin-bottom:32px;overflow-x:auto;padding-bottom:14px">
       <table style="${tableStyle}">
         <colgroup>${colgroupHtml}</colgroup>
-        <thead>
+        <thead class="fx-sticky-thead" style="position:relative;z-index:45">
           <tr>
-            <th colspan="${PEND_COL_DEFS.length}" style="background:rgba(255,255,255,0.03);color:${titleColor};padding:14px;font-size:14px;font-weight:900;letter-spacing:0.08em;text-transform:uppercase;border-bottom:1px solid var(--border2);text-shadow:0 0 12px ${titleColor}50;position:relative;overflow:visible">
+            <th colspan="${PEND_COL_DEFS.length}" style="background:#111622;color:${titleColor};padding:14px;font-size:14px;font-weight:900;letter-spacing:0.08em;text-transform:uppercase;border-bottom:1px solid var(--border2);text-shadow:0 0 12px ${titleColor}50;position:relative;overflow:visible">
               <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${titleColor};margin-right:8px;box-shadow:0 0 8px ${titleColor}"></span>
               ${title}
               <span style="font-size:10px;color:var(--muted);font-weight:700;margin-left:8px;text-transform:none;letter-spacing:normal">(${regCount} ${listaDetalhada ? 'linhas' : 'registros'})</span>
@@ -1863,6 +1863,13 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
           onmouseover="this.style.background='rgba(255,255,255,0.04)'"
           onmouseout="this.style.background='${rowBg}'">
 
+        <td style="${tdStyle};padding:4px;text-align:center${hid('del')}">
+          ${isVirtual ? '' : `<button type="button" class="pend-row-del-btn" onclick="pendRemoveRow('${tableName}', ${idx})" title="Remover linha"
+            style="width:26px;height:26px;border-radius:6px;border:1px solid rgba(242,87,87,0.35);background:rgba(242,87,87,0.10);color:var(--danger);font-size:12px;font-weight:900;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:1;transition:all .15s"
+            onmouseover="this.style.background='var(--danger)';this.style.color='#fff'"
+            onmouseout="this.style.background='rgba(242,87,87,0.10)';this.style.color='var(--danger)'">✕</button>`}
+        </td>
+
         <td style="${tdStyle};color:var(--muted);font-weight:800;font-size:15px;${dragHandle}${hid('ord')}"
             title="${isVirtual ? '' : (pedAtual ? 'Pedido ' + esc(pedAtual) + ' — arraste para reordenar' : 'Arraste para reordenar')}"${dragTd}>
           ${isVirtual ? '' : '<span style="opacity:0.4;margin-right:4px">≡</span>'}${dispIdx + 1}º
@@ -1896,13 +1903,6 @@ function fluxolabRenderPendTable(title, tableName, titleColor, themeColor) {
         </td>
 
         ${obsPecas}
-
-        <td style="${tdLastStyle};padding:4px;text-align:center${hid('del')}">
-          ${isVirtual ? '' : `<button type="button" class="pend-row-del-btn" onclick="pendRemoveRow('${tableName}', ${idx})" title="Remover linha"
-            style="width:26px;height:26px;border-radius:6px;border:1px solid rgba(242,87,87,0.35);background:rgba(242,87,87,0.10);color:var(--danger);font-size:12px;font-weight:900;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:1;transition:all .15s"
-            onmouseover="this.style.background='var(--danger)';this.style.color='#fff'"
-            onmouseout="this.style.background='rgba(242,87,87,0.10)';this.style.color='var(--danger)'">✕</button>`}
-        </td>
 
       </tr>
     `;
@@ -1997,6 +1997,7 @@ function fluxolabRenderPendencias() {
   panel.innerHTML = html;
   pendInitResizeObserver();
   if (typeof updateActiveUsersInTables === 'function') updateActiveUsersInTables();
+  if (typeof fluxolabSyncStickyTheads === 'function') fluxolabSyncStickyTheads();
 }
 // OTIMIZAÇÃO EGRESS/REALTIME: Pendências carrega sob demanda ao abrir a aba ou o modal flutuante.
 
